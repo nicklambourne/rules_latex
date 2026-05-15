@@ -34,6 +34,10 @@ TECTONIC_RELEASES = {
         asset = "tectonic-{version}-aarch64-apple-darwin.tar.gz",
         sha256 = "edb67c61aba768289f6da441c9e6f523cfaff4f8b2a5708523ef29c543f8e88e",
     ),
+    ("windows", "x86_64"): struct(
+        asset = "tectonic-{version}-x86_64-pc-windows-msvc.zip",
+        sha256 = "131a24604785a9600989a3d91225f597df52ac06f00aeffe86fd529f99ee5cdd",
+    ),
 }
 
 def tectonic_download_url(asset, version = TECTONIC_VERSION):
