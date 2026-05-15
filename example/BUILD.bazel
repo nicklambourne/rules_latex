@@ -1,4 +1,4 @@
-load("@rules_latex//latex:defs.bzl", "latex_document", "latex_library", "latex_test")
+load("@rules_latex//latex:defs.bzl", "latex_cache_snapshot", "latex_document", "latex_library", "latex_test")
 
 # A tiny helper library with a shared preamble.
 latex_library(
@@ -24,11 +24,36 @@ latex_document(
     deps = [":preamble"],
 )
 
+# Same document, built fully offline against a small (~10 MB) cache
+# snapshot. The snapshot tarball is produced once by `bazel run
+# //:hello_snapshot` (requires internet) and checked into the repo;
+# every subsequent build is hermetic and skips the 3 GB upstream bundle.
+latex_document(
+    name = "hello_offline",
+    srcs = ["hello.tex"],
+    cache = "hello_cache.tar.gz",
+    main = "hello.tex",
+    deps = [":preamble"],
+)
+
+# Developer command: refresh the cache snapshot. Run with:
+#     bazel run //:hello_snapshot
+latex_cache_snapshot(
+    name = "hello_snapshot",
+    srcs = ["hello.tex"],
+    main = "hello.tex",
+    output = "hello_cache.tar.gz",
+    deps = [":preamble"],
+)
+
 # Regression test: compile hello.tex and make sure no LaTeX errors show
-# up in the log. Exercises the latex_test rule end-to-end.
+# up in the log. Uses the checked-in cache snapshot so the test runs
+# fully offline and finishes in ~3 seconds instead of pulling fresh
+# packages over the network.
 latex_test(
     name = "hello_compiles",
     srcs = ["hello.tex"],
+    cache = "hello_cache.tar.gz",
     main = "hello.tex",
     deps = [":preamble"],
 )

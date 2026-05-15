@@ -55,11 +55,22 @@ def _latex_test_impl(ctx):
     # The test driver runs tectonic and then checks the log. We embed the
     # tectonic invocation directly rather than depending on a separate
     # binary so the test stays self-contained.
+    #
+    # Three offline-mode variants share the action: a per-document cache
+    # snapshot (preferred when set), a toolchain-wide bundle, or pure
+    # online mode.
+    cache_setup = ""
     bundle_args = ""
-    bundle_runfile = ""
-    if toolchain.bundle:
-        bundle_args = '--bundle "$BUNDLE" --only-cached '
-        bundle_runfile = toolchain.bundle.short_path
+    cache_snapshot = ctx.file.cache
+    if cache_snapshot:
+        cache_setup = 'tar -xzf "$(pwd)/{}" -C "$WORK/cache"\n'.format(
+            cache_snapshot.short_path,
+        )
+        bundle_args = "--only-cached "
+    elif toolchain.bundle:
+        bundle_args = '--bundle "$(pwd)/{}" --only-cached '.format(
+            toolchain.bundle.short_path,
+        )
 
     script = """\
 #!/usr/bin/env bash
@@ -67,12 +78,12 @@ set -euo pipefail
 
 TECTONIC="$(pwd)/{tectonic}"
 MAIN="$(pwd)/{main}"
-{bundle_export}
 WORK="$(mktemp -d)"
+mkdir -p "$WORK/cache"
 trap 'rm -rf "$WORK"' EXIT
-
-TECTONIC_CACHE_DIR="$WORK/cache" \
-LC_ALL=C.UTF-8 \
+{cache_setup}
+TECTONIC_CACHE_DIR="$WORK/cache" \\
+LC_ALL=C.UTF-8 \\
 "$TECTONIC" -X compile --outfmt {outfmt} --outdir "$WORK" --keep-logs {bundle_args}"$MAIN"
 
 LOG="$WORK/{logname}"
@@ -90,9 +101,7 @@ exit $status
         main = main.short_path,
         outfmt = ctx.attr.outfmt,
         logname = main.basename[:-len(".tex")] + ".log",
-        bundle_export = (
-            'BUNDLE="$(pwd)/{}"'.format(bundle_runfile) if bundle_runfile else ""
-        ),
+        cache_setup = cache_setup,
         bundle_args = bundle_args,
         forbidden_checks = "\n".join([
             'if grep -F -e {pat} "$LOG" >/dev/null; then\n'.format(pat = repr(p)) +
@@ -110,7 +119,11 @@ exit $status
     ctx.actions.write(test_script, script, is_executable = True)
 
     runfiles = ctx.runfiles(
-        files = [main, tectonic] + ([toolchain.bundle] if toolchain.bundle else []),
+        files = (
+            [main, tectonic] +
+            ([toolchain.bundle] if toolchain.bundle and not cache_snapshot else []) +
+            ([cache_snapshot] if cache_snapshot else [])
+        ),
         transitive_files = all_srcs,
     )
     return [DefaultInfo(executable = test_script, runfiles = runfiles)]
@@ -140,6 +153,14 @@ latex_test = rule(
             doc = "Output format. Passed to tectonic's --outfmt.",
             default = "pdf",
             values = ["pdf", "html", "xdv", "aux"],
+        ),
+        "cache": attr.label(
+            doc = "Optional cache snapshot tarball (typically produced by " +
+                  "`latex_cache_snapshot`). When set, the test extracts the " +
+                  "snapshot and runs tectonic with `--only-cached`, giving " +
+                  "a fully offline test that doesn't need internet to run. " +
+                  "Takes precedence over the toolchain-level bundle.",
+            allow_single_file = [".tar.gz", ".tgz"],
         ),
         "forbidden_patterns": attr.string_list(
             doc = "Substrings whose presence in the tectonic log file " +

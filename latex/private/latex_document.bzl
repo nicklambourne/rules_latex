@@ -37,6 +37,11 @@ def _latex_document_impl(ctx):
     toolchain = ctx.toolchains["//latex/toolchain:toolchain_type"].latex_toolchain_info
     tectonic = toolchain.tectonic
 
+    # A per-document `cache` snapshot takes precedence over the
+    # toolchain-wide bundle, if both are set. It's a much smaller,
+    # focused alternative produced by `latex_cache_snapshot`.
+    cache_snapshot = ctx.file.cache
+
     args = ctx.actions.args()
     args.add(tectonic.path)
     args.add("-X")
@@ -44,9 +49,14 @@ def _latex_document_impl(ctx):
     args.add("--outfmt", outfmt)
     args.add("--outdir", work_subdir)
     args.add("--keep-logs")
-    if toolchain.bundle:
-        # Offline mode: tectonic reads packages from the pinned bundle and
-        # does not touch the network.
+    if cache_snapshot:
+        # Offline mode via a pre-populated cache: tectonic reads
+        # everything from the cache dir we extract below and refuses
+        # network access.
+        args.add("--only-cached")
+    elif toolchain.bundle:
+        # Offline mode via a full bundle: tectonic reads packages from
+        # the pinned bundle and does not touch the network.
         args.add("--bundle", toolchain.bundle.path)
         args.add("--only-cached")
     if ctx.attr.reproducible:
@@ -61,7 +71,11 @@ def _latex_document_impl(ctx):
     args.add(main.path)
 
     inputs = depset(
-        direct = [main, tectonic] + ([toolchain.bundle] if toolchain.bundle else []),
+        direct = (
+            [main, tectonic] +
+            ([toolchain.bundle] if toolchain.bundle and not cache_snapshot else []) +
+            ([cache_snapshot] if cache_snapshot else [])
+        ),
         transitive = [all_srcs],
     )
 
@@ -97,12 +111,24 @@ def _latex_document_impl(ctx):
         rename_cmd = ""
         rename_post = ""
 
+    # When a per-document cache snapshot is supplied we extract it into
+    # the scratch cache dir before invoking tectonic, so --only-cached
+    # finds everything it needs there. Tar extraction adds a few
+    # hundred milliseconds at most for typical (~10-100 MB) snapshots.
+    if cache_snapshot:
+        cache_setup = 'tar -xzf "{}" -C "$TECTONIC_CACHE_DIR"\n'.format(
+            cache_snapshot.path,
+        )
+    else:
+        cache_setup = ""
+
     ctx.actions.run_shell(
         command = (
             "set -eu\n" +
             'TECTONIC_CACHE_DIR="$(mktemp -d)"\n' +
             "export TECTONIC_CACHE_DIR\n" +
             'trap "rm -rf \\"$TECTONIC_CACHE_DIR\\"" EXIT\n' +
+            cache_setup +
             rename_cmd +
             '"$@"' + rename_post + "\n"
         ),
@@ -114,9 +140,9 @@ def _latex_document_impl(ctx):
         env = env,
         execution_requirements = {
             # Online mode needs network to fetch packages on first run.
-            # With a pinned offline bundle the action is fully hermetic
-            # and we drop the hint.
-            "requires-network": "" if toolchain.bundle else "1",
+            # With a pinned offline bundle or a per-document cache
+            # snapshot the action is fully hermetic and we drop the hint.
+            "requires-network": "" if (toolchain.bundle or cache_snapshot) else "1",
         },
     )
 
@@ -160,6 +186,16 @@ latex_document = rule(
                   "keep PDF metadata (creation date) reflecting the actual " +
                   "build time.",
             default = False,
+        ),
+        "cache": attr.label(
+            doc = "Optional cache snapshot tarball (typically produced by " +
+                  "`latex_cache_snapshot` and checked into the repository). " +
+                  "When set, the action extracts the snapshot into the " +
+                  "compile-time `TECTONIC_CACHE_DIR` and runs with " +
+                  "`--only-cached`, giving a fully offline, hermetic build " +
+                  "without pulling the full ~3 GB tectonic bundle. " +
+                  "Takes precedence over the toolchain-level `tectonic.bundle()`.",
+            allow_single_file = [".tar.gz", ".tgz"],
         ),
         "tectonic_args": attr.string_list(
             doc = "Extra command-line arguments passed to tectonic. Use " +
