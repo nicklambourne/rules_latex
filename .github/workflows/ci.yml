@@ -38,6 +38,26 @@ jobs:
           ls -lh bazel-bin/hello.pdf
           file bazel-bin/hello.pdf | grep -q "PDF document"
 
+      - name: Run latex_test target
+        working-directory: example
+        run: bazel test //:hello_compiles --config=ci
+
+      - name: Verify reproducible build is byte-identical
+        working-directory: example
+        run: |
+          bazel build //:hello_reproducible --config=ci
+          first_sha="$(sha256sum bazel-bin/hello_reproducible.pdf | cut -d' ' -f1)"
+          bazel clean --expunge
+          bazel build //:hello_reproducible --config=ci
+          second_sha="$(sha256sum bazel-bin/hello_reproducible.pdf | cut -d' ' -f1)"
+          if [[ "$first_sha" != "$second_sha" ]]; then
+            echo "FAIL: reproducible build is not byte-identical." >&2
+            echo "  first  = $first_sha" >&2
+            echo "  second = $second_sha" >&2
+            exit 1
+          fi
+          echo "OK: reproducible build is byte-identical (sha256=$first_sha)"
+
   lint:
     name: buildifier
     runs-on: ubuntu-22.04
