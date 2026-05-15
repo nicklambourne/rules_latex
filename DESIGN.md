@@ -25,11 +25,8 @@ known open questions for `rules_latex`. It is meant to be read alongside the
 - **Wrapping pdfTeX/XeTeX/LuaTeX directly.** Tectonic is the only backend.
   Multi-engine support is a possible future direction but multiplies the
   toolchain surface area.
-- **Windows support.** Easy enough to add later — the version pin and
-  toolchain extension are structured for it — but not in v0.1.
 - **Building Tectonic from source via `rules_rust`.** The official prebuilt
   binaries are sufficient for the 99% case.
-- **A `latex_test` rule.** Useful, but out of scope for the first release.
 - **Per-document package isolation.** Tectonic resolves packages from a single
   shared bundle; we don't try to virtualise that further.
 
@@ -50,9 +47,10 @@ known open questions for `rules_latex`. It is meant to be read alongside the
 
 Loaded from `@rules_latex//latex:defs.bzl`:
 
-- `latex_document(name, main, srcs, deps = [], format = "pdf", tectonic_args = [])`
+- `latex_document(name, main, srcs, deps = [], outfmt = "pdf", reproducible = False, tectonic_args = [])`
 - `latex_library(name, srcs, deps = [])`
 - `latex_pkg(name, srcs)`
+- `latex_test(name, main, srcs, deps = [], outfmt = "pdf", forbidden_patterns = [], forbidden_patterns_replace = False, required_patterns = [])`
 - `LatexInfo` provider (for users authoring their own rules)
 
 The toolchain type is exported at `@rules_latex//latex:toolchain_type` for
@@ -103,65 +101,81 @@ By default, Tectonic fetches its package bundle on first run from
 `relay.fullyjustified.net`. This is convenient but non-hermetic and a single
 point of failure.
 
-`rules_latex` plans two modes:
+`rules_latex` supports two modes:
 
-1. **Online mode (default in v0.1).** No `bundle` attribute on the
-   toolchain; Tectonic reaches out to fetch packages, caching them in
-   `XDG_CACHE_HOME`. Documented as "fine for local dev, not for CI".
-2. **Offline mode (preferred for CI / publishing).** A separate repository
-   rule (`tectonic_bundle`) http_archives a pinned bundle tarball and feeds
-   it to the toolchain's `bundle` attribute. The `TECTONIC_OFFLINE=1`
-   environment variable in the compile action enforces no-network behaviour.
+1. **Online mode (default).** No `tectonic.bundle()` tag in the consumer's
+   `MODULE.bazel`; Tectonic reaches out to fetch packages on first run,
+   caching them in a per-action scratch directory. Documented as "fine for
+   local dev, not for CI".
+2. **Offline mode.** When `tectonic.bundle()` is declared on the `tectonic`
+   module extension, a `tectonic_bundle_repository` http-fetches the pinned
+   bundle (`tlextras-2021.3r1.tar`, sha256 published alongside the
+   tectonic-typesetting/tectonic-texlive-bundles GitHub release) and feeds
+   it into every materialised `latex_toolchain`. Actions then run with
+   `--bundle <path>` and `--only-cached`, which refuses any network access.
 
-Wiring up the canonical pinned bundle URL + SHA in `versions.bzl` is tracked
-as a v0.1 release blocker.
+The bundle URL and SHA are pinned in
+[`latex/private/bundles.bzl`](./latex/private/bundles.bzl).
+
+### 4.5 Reproducibility
+
+By default Tectonic embeds the current wall-clock time as the PDF's
+creation/modification date, so identical inputs produce non-byte-identical
+PDFs. `latex_document(reproducible = True)` flips on both
+`SOURCE_DATE_EPOCH=0` and Tectonic's `-Z deterministic-mode`, which together
+produce byte-identical output across clean builds. SyncTeX output is broken
+by this flag (Tectonic warns about this); leave it off if you care about
+SyncTeX.
+
+### 4.6 Sandbox compatibility
+
+Tectonic by default derives its cache directory from `$XDG_CACHE_HOME` /
+`$HOME`, both of which are unset under Bazel's Linux sandbox. To avoid
+"Read-only file system (os error 30)" on first invocation, each
+`TectonicCompile` action runs through a tiny shell wrapper that allocates a
+per-action `mktemp -d` scratch dir and exports it as `TECTONIC_CACHE_DIR`.
+The wrapper also propagates `LC_ALL=C.UTF-8` (some downstream helpers like
+`biber` insist on a UTF-8 locale).
 
 ## 5. Open questions / future work
 
 These are deliberately out of scope for v0.1 but worth flagging.
 
-1. **Bundle pinning.** We need a stable, versioned bundle URL with a known
-   SHA256. The upstream Tectonic project moved bundle hosting around in
-   2022–2023; the current canonical entrypoint is
-   `relay.fullyjustified.net/default_bundle.tar`, which transparently
-   redirects to a versioned object. We should either:
-   - Mirror a known-good bundle into a `rules_latex_bundles` GitHub release
-     and pin from there, or
-   - Compute the SHA from a fetched copy and pin the redirect target URL
-     directly.
-   Decision needed before v0.1 ships.
-2. **Tectonic v2 workspace mode.** Tectonic v2 introduced a project format
+1. **Tectonic v2 workspace mode.** Tectonic v2 introduced a project format
    with `Tectonic.toml`. Worth supporting eventually, but the simpler
    `-X compile <main.tex>` invocation is enough for v0.1.
-3. **`biber` / `bibtex` / `makeindex` toolchain attrs.** Tectonic vendors
+2. **`biber` / `bibtex` / `makeindex` toolchain attrs.** Tectonic vendors
    these internally, but advanced workflows may want to swap them. Add as
    optional fields on `latex_toolchain` later if there's demand.
-4. **`latex_test`.** A rule that compiles a document and asserts on the
-   log/aux for warnings, missing references, overfull boxes, etc. Useful for
-   thesis-style documents.
-5. **`latex_lint`.** Wraps `chktex` / `lacheck`. Could ship as an optional
+3. **`latex_lint`.** Wraps `chktex` / `lacheck`. Could ship as an optional
    toolchain.
-6. **Windows support.** Add `windows_x86_64` to the platform list; arrange
-   for `tectonic.exe` extraction from the `.zip` artifact.
-7. **Caching of intermediate aux files.** Tectonic is fast and Bazel caches
+4. **Bundle updates.** The current pinned bundle is the upstream tlextras
+   2021.3r1, which is still being served from the CDN as of writing.
+   Upstream has not cut a newer tlextras release; we should track that
+   repo and bump when they do.
+5. **Caching of intermediate aux files.** Tectonic is fast and Bazel caches
    the action output, so this is probably never worth doing — but worth
    benchmarking on multi-pass documents (e.g. with biblatex).
-8. **Reproducibility of PDF output.** PDFs embed timestamps by default. We
-   should consider passing `SOURCE_DATE_EPOCH=0` or `--reproducible` flags
-   to Tectonic where supported, so identical inputs produce byte-identical
-   PDFs.
 
 ## 6. Versioning
 
 `rules_latex` will follow semver post-1.0. Pre-1.0 releases (v0.x) can break
 API freely; expect every rule to potentially change shape.
 
-## 7. Release process (target state)
+## 7. Release process
 
-- Tag `vX.Y.Z` on `master`.
-- A GitHub Action creates a release archive and computes its integrity hash.
-- A second action opens a PR against
-  [`bazelbuild/bazel-central-registry`](https://github.com/bazelbuild/bazel-central-registry)
-  to publish the new version.
+- Tag `vX.Y.Z` on `master`. The `.github/workflows/release.yml` workflow
+  runs automatically and:
+  - Verifies the tag matches the `version = ...` field in `MODULE.bazel`.
+  - Produces `rules_latex-X.Y.Z.tar.gz` via `git archive`.
+  - Computes its sha256 and a BCR-formatted `integrity = "sha256-…"` hash.
+  - Publishes a GitHub Release with the archive and BCR submission
+    snippet in the release notes.
+- The Bazel Central Registry PR is opened manually (one-time per
+  release) using the snippet from the release notes.
 
-Not implemented yet — to be set up before v0.1.0.
+The post-tag bits below are still manual:
+
+- Drafting `CHANGELOG.md` entries before tagging.
+- Opening the BCR PR against
+  [`bazelbuild/bazel-central-registry`](https://github.com/bazelbuild/bazel-central-registry).

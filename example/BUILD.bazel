@@ -1,4 +1,4 @@
-load("@rules_latex//latex:defs.bzl", "latex_document", "latex_library")
+load("@rules_latex//latex:defs.bzl", "latex_document", "latex_library", "latex_test")
 
 # A tiny helper library with a shared preamble.
 latex_library(
@@ -9,6 +9,25 @@ latex_library(
 # A minimal "hello, world" document that uses the helper library above.
 latex_document(
     name = "hello",
+    srcs = ["hello.tex"],
+    main = "hello.tex",
+    deps = [":preamble"],
+)
+
+# Same document, but built deterministically: identical inputs produce
+# byte-identical output.
+latex_document(
+    name = "hello_reproducible",
+    srcs = ["hello.tex"],
+    main = "hello.tex",
+    reproducible = True,
+    deps = [":preamble"],
+)
+
+# Regression test: compile hello.tex and make sure no LaTeX errors show
+# up in the log. Exercises the latex_test rule end-to-end.
+latex_test(
+    name = "hello_compiles",
     srcs = ["hello.tex"],
     main = "hello.tex",
     deps = [":preamble"],

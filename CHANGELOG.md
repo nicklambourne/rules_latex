@@ -9,10 +9,22 @@ that, expect breaking changes in any v0.x release.
 ### Added
 - Initial scaffold: `latex_document`, `latex_library`, `latex_pkg` rules.
 - Bzlmod module extension that downloads Tectonic 0.16.9 binaries for
-  Linux x86_64/aarch64 and macOS x86_64/aarch64.
+  Linux x86_64/aarch64 (both musl, statically linked), macOS x86_64/aarch64,
+  and Windows x86_64.
+- `tectonic.bundle()` module extension tag that opts into a pinned offline
+  package bundle (`tlextras-2021.3r1`), making compilation fully hermetic.
+- `latex_document(reproducible = True)` attribute that combines
+  `SOURCE_DATE_EPOCH=0` with `-Z deterministic-mode`, producing byte-identical
+  PDFs across clean builds.
+- `latex_test` rule: compiles a document under `bazel test` and asserts on
+  patterns in the tectonic log (e.g. fails the build on `LaTeX Error:`).
 - `LatexInfo` provider for inter-target source propagation.
 - Apache 2.0 license.
-- Hello-world example workspace under `example/`.
+- Hello-world example workspace under `example/` exercising the public API
+  end-to-end (document, reproducible document, and test).
 - CI workflow building the rules and smoke-testing the example on Linux and
-  macOS.
+  macOS, plus buildifier linting.
+- Tag-triggered release workflow that produces a `git archive` source
+  tarball, publishes a GitHub Release, and emits a BCR `source.json` snippet
+  ready to paste into a Bazel Central Registry PR.
 - Design document and README.

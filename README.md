@@ -33,6 +33,10 @@ bazel_dep(name = "rules_latex", version = "0.1.0")
 
 tectonic = use_extension("@rules_latex//latex/toolchain:extensions.bzl", "tectonic")
 tectonic.toolchain()
+# Opt into the pinned offline package bundle for fully hermetic, no-network
+# compilation. Remove this line for online mode (fetches packages on first
+# run from tectonic's CDN).
+tectonic.bundle()
 use_repo(tectonic, "rules_latex_tectonic_toolchains")
 register_toolchains("@rules_latex_tectonic_toolchains//:all")
 ```
@@ -40,7 +44,7 @@ register_toolchains("@rules_latex_tectonic_toolchains//:all")
 In a `BUILD.bazel`:
 
 ```python
-load("@rules_latex//latex:defs.bzl", "latex_document", "latex_library")
+load("@rules_latex//latex:defs.bzl", "latex_document", "latex_library", "latex_test")
 
 latex_library(
     name = "preamble",
@@ -52,6 +56,16 @@ latex_document(
     main = "cv.tex",
     srcs = ["cv.tex"],
     deps = [":preamble"],
+    # Optional: produce byte-identical PDFs across runs.
+    reproducible = True,
+)
+
+# Regression test: fails if cv.tex stops compiling cleanly.
+latex_test(
+    name = "cv_compiles",
+    main = "cv.tex",
+    srcs = ["cv.tex"],
+    deps = [":preamble"],
 )
 ```
 
@@ -60,6 +74,8 @@ Then:
 ```bash
 bazel build //:cv
 # bazel-bin/cv.pdf is your document.
+
+bazel test //:cv_compiles
 ```
 
 A complete, runnable example lives under [`example/`](./example).
@@ -71,19 +87,19 @@ A complete, runnable example lives under [`example/`](./example).
 | [`latex_document`](./latex/private/latex_document.bzl) | Compile a `.tex` file (plus its transitive sources) into a PDF (or other tectonic-supported format). |
 | [`latex_library`](./latex/private/latex_library.bzl) | Group reusable LaTeX source files (preambles, custom style/class files) that other targets depend on. |
 | [`latex_pkg`](./latex/private/latex_pkg.bzl) | Group non-LaTeX resources (images, fonts, `.bib` files) that documents may need. |
+| [`latex_test`](./latex/private/latex_test.bzl) | Compile a document under `bazel test` and assert on patterns in the tectonic log file (e.g. fail on `LaTeX Error:`). |
 
-All three are loaded from `@rules_latex//latex:defs.bzl`.
+All four are loaded from `@rules_latex//latex:defs.bzl`.
 
 ## Supported platforms
 
 `rules_latex` currently ships pinned Tectonic binaries for:
 
-- Linux x86_64 (gnu)
-- Linux aarch64 (musl)
+- Linux x86_64 (musl, statically linked)
+- Linux aarch64 (musl, statically linked)
 - macOS x86_64
 - macOS aarch64 (Apple Silicon)
-
-Windows support is planned but not yet wired up.
+- Windows x86_64 (MSVC)
 
 ## Design
 
