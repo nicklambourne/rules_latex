@@ -29,6 +29,7 @@ def _latex_document_impl(ctx):
     tectonic = toolchain.tectonic
 
     args = ctx.actions.args()
+    args.add(tectonic.path)
     args.add("-X")
     args.add("compile")
     args.add("--outfmt", outfmt)
@@ -44,20 +45,35 @@ def _latex_document_impl(ctx):
     args.add(main.path)
 
     inputs = depset(
-        direct = [main] + ([toolchain.bundle] if toolchain.bundle else []),
+        direct = [main, tectonic] + ([toolchain.bundle] if toolchain.bundle else []),
         transitive = [all_srcs],
     )
 
-    ctx.actions.run(
-        executable = tectonic,
+    # We invoke tectonic from a tiny shell wrapper so we can point its
+    # cache directory at a per-action writable scratch dir. Tectonic by
+    # default derives the cache from `$XDG_CACHE_HOME` / `$HOME`, both of
+    # which are unset under Bazel's Linux sandbox — leading to "Read-only
+    # file system (os error 30)" on first use. `mktemp -d` always returns
+    # a writable temp dir under `$TMPDIR` (which Bazel guarantees per
+    # action), and the directory is reaped with the action sandbox.
+    ctx.actions.run_shell(
+        command = (
+            "set -eu\n" +
+            'TECTONIC_CACHE_DIR="$(mktemp -d)"\n' +
+            "export TECTONIC_CACHE_DIR\n" +
+            "export LC_ALL=C.UTF-8\n" +
+            'exec "$@"\n'
+        ),
         arguments = [args],
         inputs = inputs,
         outputs = [output],
         mnemonic = "TectonicCompile",
         progress_message = "Compiling LaTeX %{label}",
-        env = {
-            # Some downstream tools (e.g. biber) require a UTF-8 locale.
-            "LC_ALL": "C.UTF-8",
+        execution_requirements = {
+            # Online mode needs network to fetch the bundle on first
+            # run. With a pinned offline bundle the action is fully
+            # hermetic and this can be dropped.
+            "requires-network": "" if toolchain.bundle else "1",
         },
     )
 
