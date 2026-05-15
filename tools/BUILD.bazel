@@ -1,0 +1,14 @@
+# Developer-facing helpers run via `bazel run`.
+#
+# Nothing under this package is part of the public rules_latex API.
+
+package(default_visibility = ["//visibility:public"])
+
+# The cache snapshot script is exposed as a plain file rather than a
+# py_binary because:
+#   1. We don't want to take an `rules_python` dependency just for a
+#      stdlib-only script.
+#   2. `latex_cache_snapshot` constructs its own shell launcher anyway,
+#      and shelling out to `python3` keeps the rules invocation chain
+#      trivial.
+exports_files(["make_cache_snapshot.py"])
