@@ -38,6 +38,13 @@ jobs:
           ls -lh bazel-bin/hello.pdf
           file bazel-bin/hello.pdf | grep -q "PDF document"
 
+      - name: Build offline via checked-in cache snapshot
+        working-directory: example
+        run: |
+          bazel build //:hello_offline --config=ci
+          ls -lh bazel-bin/hello_offline.pdf
+          file bazel-bin/hello_offline.pdf | grep -q "PDF document"
+
       - name: Run latex_test target
         working-directory: example
         run: bazel test //:hello_compiles --config=ci
@@ -57,6 +64,24 @@ jobs:
             exit 1
           fi
           echo "OK: reproducible build is byte-identical (sha256=$first_sha)"
+
+      - name: Verify cache snapshot regeneration is byte-identical
+        working-directory: example
+        run: |
+          # The snapshot tarball is content-addressed and deterministic;
+          # re-running //:hello_snapshot should leave hello_cache.tar.gz
+          # unchanged. Catches non-reproducibility bugs in the packing
+          # logic before they sneak into a checked-in snapshot.
+          first_sha="$(sha256sum hello_cache.tar.gz | cut -d' ' -f1)"
+          bazel run //:hello_snapshot
+          second_sha="$(sha256sum hello_cache.tar.gz | cut -d' ' -f1)"
+          if [[ "$first_sha" != "$second_sha" ]]; then
+            echo "FAIL: re-running //:hello_snapshot produced a different tarball." >&2
+            echo "  first  = $first_sha" >&2
+            echo "  second = $second_sha" >&2
+            exit 1
+          fi
+          echo "OK: snapshot regeneration is byte-identical (sha256=$first_sha)"
 
   lint:
     name: buildifier
