@@ -25,6 +25,15 @@ def _latex_document_impl(ctx):
     outfmt = ctx.attr.outfmt
     output = ctx.actions.declare_file("{}.{}".format(ctx.label.name, outfmt))
 
+    # Tectonic always names its output after the input file (e.g.
+    # `hello.tex` → `hello.pdf`). When the target name differs from the
+    # input stem we ask tectonic to write into a private subdir of the
+    # action's outputs and then rename the result; otherwise we let
+    # tectonic write directly to the declared output's directory.
+    main_stem = main.basename[:-len("." + main.extension)] if main.extension else main.basename
+    needs_rename = main_stem != ctx.label.name
+    work_subdir = output.dirname + "/_" + ctx.label.name if needs_rename else output.dirname
+
     toolchain = ctx.toolchains["//latex/toolchain:toolchain_type"].latex_toolchain_info
     tectonic = toolchain.tectonic
 
@@ -33,13 +42,20 @@ def _latex_document_impl(ctx):
     args.add("-X")
     args.add("compile")
     args.add("--outfmt", outfmt)
-    args.add("--outdir", output.dirname)
+    args.add("--outdir", work_subdir)
     args.add("--keep-logs")
     if toolchain.bundle:
         # Offline mode: tectonic reads packages from the pinned bundle and
         # does not touch the network.
         args.add("--bundle", toolchain.bundle.path)
         args.add("--only-cached")
+    if ctx.attr.reproducible:
+        # Tectonic honours SOURCE_DATE_EPOCH for PDF creation timestamps;
+        # we pass it via env (below) and also enable the engine's
+        # deterministic build mode here. See
+        # https://reproducible-builds.org/specs/source-date-epoch/.
+        args.add("-Z")
+        args.add("deterministic-mode")
     for extra in ctx.attr.tectonic_args:
         args.add(extra)
     args.add(main.path)
@@ -56,23 +72,50 @@ def _latex_document_impl(ctx):
     # file system (os error 30)" on first use. `mktemp -d` always returns
     # a writable temp dir under `$TMPDIR` (which Bazel guarantees per
     # action), and the directory is reaped with the action sandbox.
+    env = {
+        # Some downstream tools (e.g. biber) require a UTF-8 locale.
+        "LC_ALL": "C.UTF-8",
+    }
+    if ctx.attr.reproducible:
+        # SOURCE_DATE_EPOCH=0 produces fully deterministic PDF metadata
+        # (creation/modification dates), and is enough for byte-identical
+        # output across runs when combined with -Z deterministic-mode.
+        env["SOURCE_DATE_EPOCH"] = "0"
+
+    # When the target name differs from the input stem we have tectonic
+    # write to a private subdirectory, then move the result into place.
+    # See the comment around `needs_rename` above.
+    if needs_rename:
+        rename_cmd = 'mkdir -p "{work}" && '.format(work = work_subdir)
+        rename_post = ' && mv "{work}/{stem}.{ext}" "{out}"'.format(
+            work = work_subdir,
+            stem = main_stem,
+            ext = outfmt,
+            out = output.path,
+        )
+    else:
+        rename_cmd = ""
+        rename_post = ""
+
     ctx.actions.run_shell(
         command = (
             "set -eu\n" +
             'TECTONIC_CACHE_DIR="$(mktemp -d)"\n' +
             "export TECTONIC_CACHE_DIR\n" +
-            "export LC_ALL=C.UTF-8\n" +
-            'exec "$@"\n'
+            'trap "rm -rf \\"$TECTONIC_CACHE_DIR\\"" EXIT\n' +
+            rename_cmd +
+            '"$@"' + rename_post + "\n"
         ),
         arguments = [args],
         inputs = inputs,
         outputs = [output],
         mnemonic = "TectonicCompile",
         progress_message = "Compiling LaTeX %{label}",
+        env = env,
         execution_requirements = {
-            # Online mode needs network to fetch the bundle on first
-            # run. With a pinned offline bundle the action is fully
-            # hermetic and this can be dropped.
+            # Online mode needs network to fetch packages on first run.
+            # With a pinned offline bundle the action is fully hermetic
+            # and we drop the hint.
             "requires-network": "" if toolchain.bundle else "1",
         },
     )
@@ -109,6 +152,14 @@ latex_document = rule(
             doc = "Output format. Passed to `tectonic -X compile --outfmt`.",
             default = "pdf",
             values = _OUTFMTS,
+        ),
+        "reproducible": attr.bool(
+            doc = "When True, run tectonic in deterministic mode and set " +
+                  "SOURCE_DATE_EPOCH=0, producing byte-identical output " +
+                  "across runs given identical inputs. Off by default to " +
+                  "keep PDF metadata (creation date) reflecting the actual " +
+                  "build time.",
+            default = False,
         ),
         "tectonic_args": attr.string_list(
             doc = "Extra command-line arguments passed to tectonic. Use " +
