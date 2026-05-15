@@ -2,3 +2,9 @@ common --enable_bzlmod
 common --noenable_workspace
 build --verbose_failures
 test --test_output=errors
+
+# CI config (mirrors the root .bazelrc so example/ builds work under
+# `bazel build ... --config=ci`).
+build:ci --color=yes
+build:ci --show_timestamps
+test:ci --test_output=all
