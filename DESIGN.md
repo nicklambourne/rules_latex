@@ -47,10 +47,11 @@ known open questions for `rules_latex`. It is meant to be read alongside the
 
 Loaded from `@rules_latex//latex:defs.bzl`:
 
-- `latex_document(name, main, srcs, deps = [], outfmt = "pdf", reproducible = False, tectonic_args = [])`
+- `latex_document(name, main, srcs, deps = [], outfmt = "pdf", reproducible = False, cache = None, tectonic_args = [])`
 - `latex_library(name, srcs, deps = [])`
 - `latex_pkg(name, srcs)`
-- `latex_test(name, main, srcs, deps = [], outfmt = "pdf", forbidden_patterns = [], forbidden_patterns_replace = False, required_patterns = [])`
+- `latex_test(name, main, srcs, deps = [], outfmt = "pdf", cache = None, forbidden_patterns = [], forbidden_patterns_replace = False, required_patterns = [])`
+- `latex_cache_snapshot(name, main, srcs, deps = [], output)`
 - `LatexInfo` provider (for users authoring their own rules)
 
 The toolchain type is exported at `@rules_latex//latex:toolchain_type` for
@@ -101,21 +102,35 @@ By default, Tectonic fetches its package bundle on first run from
 `relay.fullyjustified.net`. This is convenient but non-hermetic and a single
 point of failure.
 
-`rules_latex` supports two modes:
+`rules_latex` supports three modes:
 
 1. **Online mode (default).** No `tectonic.bundle()` tag in the consumer's
-   `MODULE.bazel`; Tectonic reaches out to fetch packages on first run,
-   caching them in a per-action scratch directory. Documented as "fine for
-   local dev, not for CI".
-2. **Offline mode.** When `tectonic.bundle()` is declared on the `tectonic`
+   `MODULE.bazel` and no per-document `cache = ...`; Tectonic reaches out to
+   fetch packages on first run, caching them in a per-action scratch
+   directory. Documented as "fine for local dev, not for CI".
+2. **Full bundle.** When `tectonic.bundle()` is declared on the `tectonic`
    module extension, a `tectonic_bundle_repository` http-fetches the pinned
    bundle (`tlextras-2021.3r1.tar`, sha256 published alongside the
    tectonic-typesetting/tectonic-texlive-bundles GitHub release) and feeds
-   it into every materialised `latex_toolchain`. Actions then run with
-   `--bundle <path>` and `--only-cached`, which refuses any network access.
+   it into every materialised `latex_toolchain`. Actions run with
+   `--bundle <path>` and `--only-cached`, no network access required at
+   build time. The downside: every first build fetches ~3 GB.
+3. **Per-document cache snapshot.** A `latex_cache_snapshot` target is run
+   once with `bazel run` to compile the document in online mode, capture
+   the resulting tectonic cache directory (typically 10–100 MB depending
+   on the document), and tar it up reproducibly into the source tree. The
+   `latex_document(cache = ...)` attribute then consumes that snapshot:
+   the action extracts it into `$TECTONIC_CACHE_DIR` and runs with
+   `--only-cached`, producing a fully hermetic build that doesn't pull the
+   full bundle. This is much smaller than the full bundle approach,
+   content-addressed, and only needs refreshing when the document starts
+   `\\usepackage`'ing something new. See
+   [`latex/private/latex_cache_snapshot.bzl`](./latex/private/latex_cache_snapshot.bzl)
+   and [`tools/make_cache_snapshot.py`](./tools/make_cache_snapshot.py).
 
-The bundle URL and SHA are pinned in
-[`latex/private/bundles.bzl`](./latex/private/bundles.bzl).
+Snapshot mode and full-bundle mode are not exclusive — they coexist on a
+per-target basis: the `cache = ...` attribute always wins over the
+toolchain-level bundle when both are set.
 
 ### 4.5 Reproducibility
 
