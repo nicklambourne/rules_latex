@@ -1,0 +1,12 @@
+package(default_visibility = ["//visibility:public"])
+
+# Toolchain type that all latex actions resolve against.
+toolchain_type(
+    name = "toolchain_type",
+)
+
+exports_files([
+    "toolchain.bzl",
+    "repositories.bzl",
+    "extensions.bzl",
+])

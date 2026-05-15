@@ -1,0 +1,4 @@
+common --enable_bzlmod
+common --noenable_workspace
+build --verbose_failures
+test --test_output=errors

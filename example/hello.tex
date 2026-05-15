@@ -1,0 +1,22 @@
+\documentclass{article}
+\input{preamble.tex}
+
+\title{Hello from rules\_latex}
+\author{Nicholas Lambourne}
+
+\begin{document}
+\maketitle
+
+This PDF was produced by Bazel via the \texttt{rules\_latex} ruleset, which
+wraps the \href{https://tectonic-typesetting.github.io/}{Tectonic} typesetting
+engine.
+
+\section*{Smoke test}
+
+\begin{itemize}
+    \item Document compiled successfully.
+    \item Preamble was pulled in via a \texttt{latex\_library} dependency.
+    \item Toolchain was resolved automatically for your platform.
+\end{itemize}
+
+\end{document}

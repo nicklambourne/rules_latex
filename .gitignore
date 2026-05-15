@@ -1,0 +1,19 @@
+# Bazel
+bazel-*
+.bazelrc.user
+MODULE.bazel.lock
+
+# Editors
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# OS / build output
+*.aux
+*.log
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz

@@ -1,0 +1,5 @@
+# Private implementation details. Do not load from outside //latex/*.
+
+package(default_visibility = ["//latex:__subpackages__"])
+
+exports_files(glob(["*.bzl"]))

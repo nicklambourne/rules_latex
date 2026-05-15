@@ -1,0 +1,15 @@
+load("@rules_latex//latex:defs.bzl", "latex_document", "latex_library")
+
+# A tiny helper library with a shared preamble.
+latex_library(
+    name = "preamble",
+    srcs = ["preamble.tex"],
+)
+
+# A minimal "hello, world" document that uses the helper library above.
+latex_document(
+    name = "hello",
+    srcs = ["hello.tex"],
+    main = "hello.tex",
+    deps = [":preamble"],
+)

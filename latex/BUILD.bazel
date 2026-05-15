@@ -1,0 +1,16 @@
+# Public surface of rules_latex.
+#
+# Users typically `load("@rules_latex//latex:defs.bzl", ...)`.
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "defs.bzl",
+    "providers.bzl",
+])
+
+# Re-export the toolchain type at the canonical location.
+alias(
+    name = "toolchain_type",
+    actual = "//latex/toolchain:toolchain_type",
+)

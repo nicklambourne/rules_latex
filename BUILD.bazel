@@ -1,0 +1,10 @@
+# Root BUILD file for rules_latex.
+#
+# Most rule definitions live under //latex. This file is intentionally minimal.
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "LICENSE",
+    "MODULE.bazel",
+])

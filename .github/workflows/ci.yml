@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & smoke-test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-14]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Bazelisk
+        uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-${{ matrix.os }}
+          repository-cache: true
+
+      - name: Build rules_latex (root)
+        run: bazel build //... --config=ci
+
+      - name: Smoke test example/hello
+        working-directory: example
+        run: |
+          bazel build //:hello --config=ci
+          ls -lh bazel-bin/hello.pdf
+          file bazel-bin/hello.pdf | grep -q "PDF document"
+
+  lint:
+    name: buildifier
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install buildifier
+        run: |
+          wget -qO /usr/local/bin/buildifier https://github.com/bazelbuild/buildtools/releases/latest/download/buildifier-linux-amd64
+          chmod +x /usr/local/bin/buildifier
+      - name: Lint
+        run: buildifier --mode=check --lint=warn -r .

@@ -1,0 +1,24 @@
+# Bzlmod is the only supported module system.
+common --enable_bzlmod
+common --noenable_workspace
+
+# Use platforms for toolchain resolution.
+build --incompatible_enable_cc_toolchain_resolution
+
+# Show progress and full error output by default.
+common --show_progress_rate_limit=0.5
+build --verbose_failures
+
+# Test output.
+test --test_output=errors
+test --test_summary=detailed
+
+# Use a single ./bazel-* symlink layout that's gitignored.
+build --symlink_prefix=bazel-
+
+# CI defaults (override locally via .bazelrc.user if desired).
+build:ci --color=yes
+build:ci --show_timestamps
+test:ci --test_output=all
+
+try-import %workspace%/.bazelrc.user

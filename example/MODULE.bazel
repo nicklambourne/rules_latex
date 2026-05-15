@@ -1,0 +1,27 @@
+"""Example workspace that consumes rules_latex from its parent directory.
+
+Run from this directory:
+
+    bazel build //:hello
+"""
+
+module(
+    name = "rules_latex_example",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "rules_latex", version = "0.1.0")
+
+# When running directly out of the rules_latex git checkout, override the
+# resolved location to point at the parent directory. Drop this stanza when
+# consuming a published version from BCR or another registry.
+local_path_override(
+    module_name = "rules_latex",
+    path = "..",
+)
+
+tectonic = use_extension("@rules_latex//latex/toolchain:extensions.bzl", "tectonic")
+tectonic.toolchain()
+use_repo(tectonic, "rules_latex_tectonic_toolchains")
+
+register_toolchains("@rules_latex_tectonic_toolchains//:all")
