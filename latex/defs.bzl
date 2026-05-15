@@ -2,12 +2,18 @@
 
 Load symbols from here:
 
-    load("@rules_latex//latex:defs.bzl", "latex_document", "latex_library", "latex_pkg", "latex_test")
+    load("@rules_latex//latex:defs.bzl",
+         "latex_document", "latex_library", "latex_pkg",
+         "latex_test", "latex_cache_snapshot")
 """
 
 load(
     "//latex:providers.bzl",
     _LatexInfo = "LatexInfo",
+)
+load(
+    "//latex/private:latex_cache_snapshot.bzl",
+    _latex_cache_snapshot = "latex_cache_snapshot",
 )
 load(
     "//latex/private:latex_document.bzl",
@@ -26,6 +32,7 @@ load(
     _latex_test = "latex_test",
 )
 
+latex_cache_snapshot = _latex_cache_snapshot
 latex_document = _latex_document
 latex_library = _latex_library
 latex_pkg = _latex_pkg

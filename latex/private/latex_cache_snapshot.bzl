@@ -1,0 +1,145 @@
+"""The `latex_cache_snapshot` rule.
+
+`latex_cache_snapshot` produces a small, content-addressed snapshot of
+the tectonic cache needed to compile a given document, suitable for
+checking into the repository and consuming via `latex_document(cache =
+...)`.
+
+Typical workflow:
+
+    latex_document(
+        name = "cv",
+        main = "cv.tex",
+        srcs = ["cv.tex"],
+    )
+
+    latex_cache_snapshot(
+        name = "cv_cache",
+        main = "cv.tex",
+        srcs = ["cv.tex"],
+        output = "cv_cache.tar.gz",
+    )
+
+Then, once, with internet access:
+
+    $ bazel run //:cv_cache
+
+This compiles `cv.tex` once in online mode, captures the resulting
+~tens-of-MB tectonic cache, and writes `cv_cache.tar.gz` into the
+source tree. After committing the snapshot, `latex_document(cache =
+":cv_cache.tar.gz")` builds the document fully offline using only the
+snapshot — no internet, no 3 GB full bundle.
+
+The rule is *not* a normal build action because it inherently needs
+network access on first invocation and a writable source-tree
+destination. It's a developer command, run on demand, much like
+`cargo vendor` or `pip-compile`.
+"""
+
+load("//latex:providers.bzl", "LatexInfo")
+
+def _collect_transitive_srcs(deps):
+    return [dep[LatexInfo].srcs for dep in deps if LatexInfo in dep]
+
+def _latex_cache_snapshot_impl(ctx):
+    toolchain = ctx.toolchains["//latex/toolchain:toolchain_type"].latex_toolchain_info
+    tectonic = toolchain.tectonic
+
+    main = ctx.file.main
+    if main not in ctx.files.srcs:
+        fail("`main` ({}) must also appear in `srcs`.".format(main.short_path))
+
+    all_srcs = depset(
+        direct = ctx.files.srcs,
+        transitive = _collect_transitive_srcs(ctx.attr.deps),
+    ).to_list()
+
+    launcher = ctx.actions.declare_file(ctx.label.name + ".sh")
+
+    # Build the list of --src flags for the snapshot tool. Each input is
+    # referenced via its runfiles short_path so the script works from
+    # the bazel-run runfiles tree.
+    src_args = " \\\n        ".join([
+        '--src "$RUNFILES/{}"'.format(s.short_path)
+        for s in all_srcs
+    ])
+
+    # Find a stable workspace-relative root for the sources. We assume
+    # all srcs live under a single package's source tree (typical
+    # latex_document layout) and use that package's short_path as the
+    # --src-root so any \\input{subdir/foo} references continue to
+    # resolve correctly.
+    src_root = main.dirname
+
+    script = """\
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -z "${{BUILD_WORKSPACE_DIRECTORY:-}}" ]]; then
+    echo "ERROR: this target must be invoked with 'bazel run', not 'bazel build'." >&2
+    echo "  bazel run //{pkg}:{name}" >&2
+    exit 1
+fi
+
+RUNFILES="$(pwd)"
+PYTHON="${{PYTHON:-python3}}"
+
+exec "$PYTHON" "$RUNFILES/{tool}" \\
+    --tectonic "$RUNFILES/{tectonic}" \\
+    --main "$RUNFILES/{main}" \\
+    {src_args} \\
+    --src-root "$RUNFILES/{src_root}" \\
+    --workspace "$BUILD_WORKSPACE_DIRECTORY" \\
+    --output "{output}"
+""".format(
+        pkg = ctx.label.package,
+        name = ctx.label.name,
+        tool = ctx.file._tool.short_path,
+        tectonic = tectonic.short_path,
+        main = main.short_path,
+        src_args = src_args,
+        src_root = src_root,
+        output = ctx.attr.output,
+    )
+    ctx.actions.write(launcher, script, is_executable = True)
+
+    runfiles = ctx.runfiles(
+        files = [tectonic, ctx.file._tool] + all_srcs,
+    )
+    return [DefaultInfo(executable = launcher, runfiles = runfiles)]
+
+latex_cache_snapshot = rule(
+    implementation = _latex_cache_snapshot_impl,
+    doc = "Bazel-run target that captures a tectonic cache snapshot.",
+    executable = True,
+    attrs = {
+        "main": attr.label(
+            doc = "The top-level .tex file passed to tectonic. Must also " +
+                  "appear in `srcs`.",
+            allow_single_file = [".tex"],
+            mandatory = True,
+        ),
+        "srcs": attr.label_list(
+            doc = "All LaTeX source files needed to compile the document " +
+                  "online. The cache snapshot will contain whatever " +
+                  "tectonic decides to fetch for this compile, so make " +
+                  "sure this list is realistic.",
+            allow_files = True,
+            mandatory = True,
+        ),
+        "deps": attr.label_list(
+            doc = "Other targets that contribute LaTeX sources.",
+            providers = [[LatexInfo]],
+        ),
+        "output": attr.string(
+            doc = "Destination path for the snapshot tarball, relative to " +
+                  "the workspace root.",
+            mandatory = True,
+        ),
+        "_tool": attr.label(
+            default = "//tools:make_cache_snapshot.py",
+            allow_single_file = True,
+        ),
+    },
+    toolchains = ["//latex/toolchain:toolchain_type"],
+)
