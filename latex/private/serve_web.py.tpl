@@ -362,8 +362,16 @@ def run_bazel_build(workspace: Path) -> tuple[bool, float, str]:
         "build",
         "--watchfs",
         "--noshow_progress",
-        DOCUMENT_LABEL,
     ]
+    # When synctex is enabled the .synctex.gz file lives in a non-default
+    # OutputGroup. Without --output_groups=+synctex bazel won't actually
+    # materialise it in bazel-bin/, even though the target is up-to-date,
+    # and the reverse-sync endpoint will then 404 ("synctex file not
+    # produced yet"). See latex/private/latex_document.bzl where the
+    # output is exposed via OutputGroupInfo(synctex = ...).
+    if SYNCTEX_ENABLED:
+        cmd.append("--output_groups=+synctex")
+    cmd.append(DOCUMENT_LABEL)
     try:
         result = subprocess.run(
             cmd,

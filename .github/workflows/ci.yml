@@ -25,12 +25,7 @@ jobs:
         uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: true
-          # The v2 suffix invalidates the cache after the
-          # latex_document rule added a second declared output
-          # (synctex.gz). Bazel's action key doesn't include
-          # the declared-output set, so old cache entries restore
-          # only the PDF and the synctex file silently goes missing.
-          disk-cache: ${{ github.workflow }}-${{ matrix.os }}-v2
+          disk-cache: ${{ github.workflow }}-${{ matrix.os }}
           repository-cache: true
 
       - name: Install poppler-utils (for citation grep in biber smoke test)
@@ -160,7 +155,16 @@ jobs:
           # synchronous build is a cache hit. The doc uses the
           # checked-in cache snapshot, so this is hermetic — no need
           # to retry around CDN flakes.
-          bazel build //hello:hello_synctex --config=ci
+          #
+          # --output_groups=+synctex is mandatory: the .synctex.gz file
+          # lives in a non-default output group, so a plain `bazel build`
+          # leaves it un-materialised in bazel-bin/ even when the target
+          # is up-to-date. The serve_web watcher also passes this flag
+          # internally; we pass it here too so the very first reverse-
+          # sync call doesn't race the watcher's first rebuild.
+          bazel build //hello:hello_synctex \
+            --config=ci \
+            --output_groups=+synctex
 
           # //hello:hello_synctex_serve serves a document built with
           # synctex = True, on port 8766. Boot it, POST a click, expect
