@@ -16,6 +16,13 @@ def _latex_document_impl(ctx):
     main = ctx.file.main
     if main not in ctx.files.srcs:
         fail("`main` ({}) must also appear in `srcs`.".format(main.short_path))
+    if ctx.attr.reproducible and ctx.attr.synctex:
+        fail(
+            "`reproducible` and `synctex` cannot both be True on the same " +
+            "latex_document: tectonic's -Z deterministic-mode disables " +
+            "SyncTeX output (auxiliary files would otherwise include " +
+            "absolute paths that aren't deterministic across machines).",
+        )
 
     all_srcs = depset(
         direct = ctx.files.srcs,
@@ -33,6 +40,15 @@ def _latex_document_impl(ctx):
     main_stem = main.basename[:-len("." + main.extension)] if main.extension else main.basename
     needs_rename = main_stem != ctx.label.name
     work_subdir = output.dirname + "/_" + ctx.label.name if needs_rename else output.dirname
+
+    # Declare the synctex file as an additional output so live-preview
+    # tooling can find it next to the PDF. Tectonic writes it as
+    # `<stem>.synctex.gz`; if needs_rename, we mv it after compile.
+    synctex_output = None
+    if ctx.attr.synctex:
+        synctex_output = ctx.actions.declare_file(
+            "{}.synctex.gz".format(ctx.label.name),
+        )
 
     toolchain = ctx.toolchains["//latex/toolchain:toolchain_type"].latex_toolchain_info
     tectonic = toolchain.tectonic
@@ -66,6 +82,9 @@ def _latex_document_impl(ctx):
         # https://reproducible-builds.org/specs/source-date-epoch/.
         args.add("-Z")
         args.add("deterministic-mode")
+    if ctx.attr.synctex:
+        # Tectonic writes <stem>.synctex.gz alongside the PDF.
+        args.add("--synctex")
     for extra in ctx.attr.tectonic_args:
         args.add(extra)
     args.add(main.path)
@@ -107,9 +126,20 @@ def _latex_document_impl(ctx):
             ext = outfmt,
             out = output.path,
         )
+        if synctex_output:
+            rename_post += ' && mv "{work}/{stem}.synctex.gz" "{out}"'.format(
+                work = work_subdir,
+                stem = main_stem,
+                out = synctex_output.path,
+            )
     else:
         rename_cmd = ""
         rename_post = ""
+        if synctex_output:
+            # Even in the no-rename case tectonic writes
+            # `<stem>.synctex.gz` next to the PDF; that's exactly where
+            # we declared synctex_output to live, so no mv needed.
+            pass
 
     # When a per-document cache snapshot is supplied we extract it into
     # the scratch cache dir before invoking tectonic, so --only-cached
@@ -121,6 +151,10 @@ def _latex_document_impl(ctx):
         )
     else:
         cache_setup = ""
+
+    outputs = [output]
+    if synctex_output:
+        outputs.append(synctex_output)
 
     ctx.actions.run_shell(
         command = (
@@ -134,7 +168,7 @@ def _latex_document_impl(ctx):
         ),
         arguments = [args],
         inputs = inputs,
-        outputs = [output],
+        outputs = outputs,
         mnemonic = "TectonicCompile",
         progress_message = "Compiling LaTeX %{label}",
         env = env,
@@ -146,11 +180,15 @@ def _latex_document_impl(ctx):
         },
     )
 
+    output_groups = {
+        "pdf": depset([output]) if outfmt == "pdf" else depset(),
+    }
+    if synctex_output:
+        output_groups["synctex"] = depset([synctex_output])
+
     return [
         DefaultInfo(files = depset([output])),
-        OutputGroupInfo(
-            pdf = depset([output]) if outfmt == "pdf" else depset(),
-        ),
+        OutputGroupInfo(**output_groups),
         # Propagate the document's transitive sources so live-preview
         # rules (latex_serve) and other meta-tooling can discover them
         # without re-declaring `main`/`srcs`/`deps`.
@@ -191,7 +229,17 @@ latex_document = rule(
                   "SOURCE_DATE_EPOCH=0, producing byte-identical output " +
                   "across runs given identical inputs. Off by default to " +
                   "keep PDF metadata (creation date) reflecting the actual " +
-                  "build time.",
+                  "build time. Mutually exclusive with `synctex`.",
+            default = False,
+        ),
+        "synctex": attr.bool(
+            doc = "When True, tectonic is invoked with --synctex and the " +
+                  "resulting `<name>.synctex.gz` is exposed as an additional " +
+                  "output (also surfaced via the `synctex` OutputGroup). " +
+                  "Consumed by `latex_serve_web` for click-to-source " +
+                  "reverse-sync in the browser. Mutually exclusive with " +
+                  "`reproducible` because tectonic's deterministic mode " +
+                  "disables SyncTeX output.",
             default = False,
         ),
         "cache": attr.label(
