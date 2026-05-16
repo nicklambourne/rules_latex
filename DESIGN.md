@@ -417,22 +417,27 @@ These are deliberately out of scope for v0.1 but worth flagging.
 
 1. **Tectonic v2 workspace mode.** Tectonic v2 introduced a project format
    with `Tectonic.toml`. Worth supporting eventually, but the simpler
-   `-X compile <main.tex>` invocation is enough for v0.1.
+   `-X compile <main.tex>` invocation is enough for v0.1. Tracked in
+   [GitHub issue #3](https://github.com/nicklambourne/rules_latex/issues/3).
 2. **`bibtex` / `makeindex` toolchain attrs.** Tectonic vendors these
    internally, but advanced workflows may want to swap them. Add as
    optional fields on `latex_toolchain` later if there's demand. Biber
-   is already done (§4.9).
+   is already done (§4.9). Tracked in
+   [GitHub issue #4](https://github.com/nicklambourne/rules_latex/issues/4).
 3. **`latex_lint`.** Wraps `chktex` / `lacheck`. Could ship as an optional
-   toolchain.
+   toolchain. Tracked in
+   [GitHub issue #5](https://github.com/nicklambourne/rules_latex/issues/5).
 4. **Bundle updates.** The current pinned bundle is `tlextras-2022.0r0`
    (the version tectonic 0.16.9 itself asks for by default). Upstream
    has not cut a newer tlextras release since 2022 and the
    `tectonic-texlive-bundles` repo was archived in October 2024; we
    should track that repo for any new releases and bump when (if) they
-   appear.
+   appear. Tracked in
+   [GitHub issue #6](https://github.com/nicklambourne/rules_latex/issues/6).
 5. **Caching of intermediate aux files.** Tectonic is fast and Bazel caches
    the action output, so this is probably never worth doing — but worth
-   benchmarking on multi-pass documents (e.g. with biblatex).
+   benchmarking on multi-pass documents (e.g. with biblatex). Tracked in
+   [GitHub issue #7](https://github.com/nicklambourne/rules_latex/issues/7).
 6. **Forward-sync (editor → PDF) for SyncTeX.** Currently `latex_serve_web`
    only implements reverse-sync (click on PDF → source location). A
    future feature could expose a `POST /sync/forward` endpoint that the
@@ -442,7 +447,8 @@ These are deliberately out of scope for v0.1 but worth flagging.
    `jump-to-page-N-y-Y` event over the existing SSE channel, which the
    browser handles by scrolling the relevant page into view and
    highlighting the location. No new comms primitive needed beyond the
-   ones we already have.
+   ones we already have. Tracked in
+   [GitHub issue #8](https://github.com/nicklambourne/rules_latex/issues/8).
 7. **WebSocket-based live-reload channel.** `latex_serve_web` currently
    uses Server-Sent Events for the server→browser "reload" signal, which
    is unidirectional. WebSockets would allow the browser to push state
@@ -453,12 +459,13 @@ These are deliberately out of scope for v0.1 but worth flagging.
    non-trivial: Python's stdlib doesn't ship a WebSocket server, so
    we'd either hand-roll RFC 6455 frame handling (~100–200 lines of
    security-relevant Python) or take a third-party dep that pulls in
-   `rules_python`. Neither is justified by the v0.1 feature set: the
-   one duplex feature we want (SyncTeX forward-sync from a CLI to the
-   browser) is solvable with a `POST /sync/forward` endpoint that
-   piggybacks on the existing SSE channel for the resulting jump
-   event. Revisit if a future feature genuinely needs duplex binary
-   comms.
+   `rules_python` (see issue #2). Neither is justified by the v0.1
+   feature set: the one duplex feature we want (SyncTeX forward-sync
+   from a CLI to the browser) is solvable with a `POST /sync/forward`
+   endpoint that piggybacks on the existing SSE channel for the
+   resulting jump event. Revisit if a future feature genuinely needs
+   duplex binary comms. Tracked in
+   [GitHub issue #9](https://github.com/nicklambourne/rules_latex/issues/9).
 8. **Modern biblatex / fresh TeX Live bundle.** The upstream
    `tlextras-2022.0r0` bundle and matched biber 2.17 are both
    ~3 years stale because the bundle-publishing project is archived
@@ -480,8 +487,22 @@ These are deliberately out of scope for v0.1 but worth flagging.
    ecosystem (most likely `rules_perl` plus a vendored Perl), then
    driving `pp` (the PAR packager) to bundle everything into a
    single executable. Not trivial, but the only fully-hermetic
-   answer for that platform. Tracked separately because of the
-   significant work involved.
+   answer for that platform. Tracked in
+   [GitHub issue #10](https://github.com/nicklambourne/rules_latex/issues/10).
+10. **Rule-version env var to prevent declared-output cache
+    poisoning.** Bazel's action cache key doesn't include the set of
+    declared outputs, so adding or removing an optional output on a
+    rule can silently match a stale cache entry. Hit once for the
+    synctex case (see commit `0d4639c`, reverted by `1978f5d`). The
+    defensive fix is to bake a schema version into the action's env,
+    plus an analysistest that catches forgotten bumps. Tracked in
+    [GitHub issue #11](https://github.com/nicklambourne/rules_latex/issues/11).
+11. **Python toolchain hermeticity (sh_test vs rules_python).**
+    Tests use system `python3` via `sh_test` rather than `py_test`
+    + `rules_python`, matching how the runtime tooling is invoked.
+    Honest trade-off documented in
+    [GitHub issue #2](https://github.com/nicklambourne/rules_latex/issues/2)
+    along with the triggers that would justify revisiting.
 
 ## 6. Versioning
 
