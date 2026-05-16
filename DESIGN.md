@@ -299,30 +299,117 @@ workarounds:
    integration. This is a multi-day project (Biber has 50+ CPAN
    module deps) and not justified for v0.2.
 
-### 4.10 Biber/biblatex version coupling
+### 4.10 Biber/biblatex version coupling, and the upstream-bundle staleness
 
 Biber and biblatex are **tightly coupled by a "control file format"
-version number**. biblatex writes a control file in the format it
-knows; biber refuses to process a control file whose format it
-doesn't recognise. Each minor biber release maps to a single
-acceptable control file version, and biblatex point-releases bump the
-format version periodically.
+version number**. biblatex writes a `.bcf` control file in the format
+it knows; biber refuses to process one whose format it doesn't
+recognise. Each minor biber release maps to a single acceptable
+control file version, and biblatex point-releases bump the format
+version periodically.
 
 Concretely, the pinned tectonic bundle (`tlextras-2022.0r0`, dated
-2022-09-25) ships a build of biblatex that writes control file v3.8.
+2022-09-25) ships biblatex 3.17 which writes control file v3.8.
 Biber 2.17 reads v3.8; biber 2.18+ require v3.9 or newer. So
-rules_latex must pin biber 2.17 — not the latest 2.21 — until the
-bundle is refreshed.
+rules_latex pins biber 2.17 — not the upstream-latest 2.21 — to match
+what the bundle ships.
 
-The upstream `tectonic-texlive-bundles` project (which historically
-shipped bundle updates) was archived in October 2024 with no
-successor, so we're stuck on this pair until either:
+#### Why the bundle is so old
 
-* Tectonic upstream resurrects bundle distribution and we follow with
-  matching biber, or
-* `rules_latex` ships its own bundle (built from a TeX Live source
-  tree with `tectonic -X bundle create`) and bumps both biblatex and
-  biber together. This is a v1.0 candidate; tracked in §5.8.
+There are four links in the "engine → bundle → package → backend"
+chain, each of which is part of the problem:
+
+1. **Tectonic ships zero LaTeX packages itself.** When a document
+   does `\usepackage{biblatex}`, Tectonic resolves that by fetching
+   `biblatex.sty` (and ~50 other files) from an external **bundle** —
+   a single tar archive containing a curated subset of TeX Live.
+2. **The bundle is published by upstream `tectonic-texlive-bundles`.**
+   That repo takes a TeX Live source release, selects ~15% of its
+   files, patches some of them, and packs them into a versioned
+   bundle. It was **archived on 2024-10-02 with no successor
+   announced**. The last release is `tlextras-2021.3r1` (which despite
+   the name was rebuilt with a 2022 TeX Live snapshot and is what the
+   CDN serves as `tlextras-2022.0r0`).
+3. **Biber and biblatex are version-coupled** by the .bcf format
+   number, as described above.
+4. **The Tectonic binary hardcodes a bundle URL.** Tectonic 0.16.9
+   asks for `default_bundle_v33.tar` by default; the "v33" is a
+   *bundle-format* version baked into the engine source. The
+   `--bundle <path>` flag overrides the URL but the engine still
+   expects v33-format contents.
+
+Net effect: the LaTeX ecosystem is shipping biblatex 3.21, tikz 3.1.10,
+new biblatex-apa/biblatex-ieee releases, etc., but no one is rebuilding
+the Tectonic bundle. Anyone using Tectonic — not just rules_latex — is
+running 2022-vintage packages. We made it visible by writing a Bazel
+rule set around Tectonic; we didn't cause it.
+
+#### Solution options (graded)
+
+The five plausible responses, in roughly increasing cost and
+durability:
+
+1. **Do nothing; wait for Tectonic upstream.** Tectonic might at any
+   time cut a fresh bundle and host it on `relay.fullyjustified.net`,
+   or bump the format version. Cost: zero. Risk: indefinite wait,
+   could be months or years. The discussion on Tectonic GitHub issues
+   is intermittent.
+2. **Self-host a "shim overlay bundle"** that takes the upstream
+   `tlextras-2022.0r0` as a base and drops in newer versions of
+   specific packages (biblatex, tikz, citation-style packages)
+   pulled from CTAN. Tectonic doesn't natively stack bundles, but a
+   repository rule could extract the upstream bundle, layer newer
+   files on top, and re-pack. Cost: ~2-3 days. Risk: version-skew
+   bugs — upgrading biblatex without upgrading every package that
+   depends on its newer features is brittle.
+3. **Drive `tectonic -X bundle create` from a Bazel repository rule.**
+   Tectonic's own `bundle create` subcommand reads a TOML spec and
+   produces a `.tar`. We'd fetch a recent TeX Live source tarball
+   via `http_archive`, run `bundle create` against it, and host the
+   resulting bundle on a rules_latex GitHub release. Cost: ~2-4
+   days. Risk: ongoing maintenance — we own a bundle.toml that has
+   to track TeX Live upstream changes once or twice a year. The
+   `bundle create` subcommand is mostly internal-use and may have
+   quirks against fresh TeX Live snapshots.
+4. **Fork the archived `tectonic-texlive-bundles` builder.** It's a
+   ~1500-line Rust program + supporting Perl/Python that
+   `bundle create` is itself derived from but with additional
+   patching machinery. Same end-state as (3), more upfront cost,
+   more control. Cost: ~3-7 days. Risk: same ongoing maintenance
+   plus a fork to keep aligned.
+5. **Drop Tectonic for TeX Live.** Abandon the whole engine-binary
+   model and shell out to a system or vendored TeX Live install.
+   Solves the package-staleness problem entirely (TeX Live has a
+   well-oiled release cycle and `tlmgr` keeps things current) but
+   throws away most of Tectonic's value proposition: single
+   statically-linked binary, content-addressed packages, no system
+   install required. Cost: high (effectively rewriting the
+   toolchain layer). Risk: we'd be reinventing what `bazel_latex`
+   does, which is the project we set out to *replace*.
+
+#### Recommendation
+
+For v0.2 and v0.3 we ship with the current biblatex 3.17 + biber 2.17
+stack and document the limitation clearly. This is defensible because:
+
+* The 2022-vintage biblatex covers ~95% of real-world citation needs.
+  All major styles (APA, Chicago, IEEE, Vancouver, Harvard) were
+  mature by then.
+* Users who hit a specific package's staleness can self-host a newer
+  bundle and override via `tectonic.bundle()` — the escape hatch
+  already exists.
+* The implicit cache pipeline (§4.4) means the bundle is fetched
+  exactly once per platform across an entire CI fleet (via the remote
+  cache). The "stale" 2.88 GB is a one-time cost, not per-build.
+
+The right time to do option (3) is when one of:
+
+* Tectonic upstream cuts a new bundle (which makes the bundle path
+  worth investing in because there's a flow to follow), or
+* A real user blocks on a feature in biblatex 3.18+, or
+* We have a half-week of capacity to invest in long-term durability.
+
+Until then, this is tracked as §5.8 with the full option matrix above.
 
 ## 5. Open questions / future work
 
@@ -372,16 +459,21 @@ These are deliberately out of scope for v0.1 but worth flagging.
    piggybacks on the existing SSE channel for the resulting jump
    event. Revisit if a future feature genuinely needs duplex binary
    comms.
-8. **`rules_latex`-shipped TeX Live bundle.** The pinned upstream
-   `tlextras-2022.0r0` bundle and the matched biber 2.17 are both
-   ~3 years stale (and effectively unmaintained — see §4.10). The
-   long-term fix is for `rules_latex` to build its own bundle from a
-   recent TeX Live source tree using `tectonic -X bundle create`,
-   host it on the `rules_latex` GitHub releases, and bump biber to
-   match. This is a multi-day project (the upstream
-   `tectonic-texlive-bundles` builder is a Rust program plus a few
-   thousand lines of Perl glue) and not v0.2 material, but it's the
-   only path to landing modern biblatex/CTAN.
+8. **Modern biblatex / fresh TeX Live bundle.** The upstream
+   `tlextras-2022.0r0` bundle and matched biber 2.17 are both
+   ~3 years stale because the bundle-publishing project is archived
+   (see §4.10 for the full chain). Tracked in
+   [GitHub issue #1](https://github.com/nicklambourne/rules_latex/issues/1).
+   §4.10 lays out five graded options ranging from "shim overlay
+   bundle" (~2-3 days) through "drive `tectonic -X bundle create`
+   from a repo rule against a fresh TeX Live" (~2-4 days,
+   recommended) to "drop Tectonic for TeX Live entirely". Not
+   actioned for v0.2 because: (a) the 2022-vintage stack covers
+   ~95% of real citation use cases, (b) users with specific package
+   needs can self-host newer bundles and override via
+   `tectonic.bundle()`, and (c) ownership of a TeX Live distribution
+   is an ongoing maintenance commitment we don't want to take on
+   speculatively.
 9. **Biber from source for linux/aarch64.** Upstream ships no
    prebuilt biber for that triple. Building biber from source means
    resolving its 50+ CPAN dependencies via a Bazel-friendly Perl

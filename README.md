@@ -191,25 +191,43 @@ no "works locally, fails in CI" drift.
 
 ## Hermetic builds
 
-`rules_latex` supports three modes, from fastest-to-set-up to
-most-hermetic:
+`rules_latex` supports four modes (the rule chooses automatically; in
+priority order):
 
-1. **Online** (the default). Tectonic fetches packages from
-   `relay.fullyjustified.net` on first use and caches them per-action.
-   Convenient for local dev; not suitable for CI or air-gapped builds.
-2. **Full bundle** — add `tectonic.bundle()` to your `MODULE.bazel`.
-   Pulls the pinned ~3 GB upstream bundle once, gives a hermetic
-   `--bundle` + `--only-cached` invocation for every document.
-3. **Per-document cache snapshot** — declare a `latex_cache_snapshot`
-   for each document, run it once (`bazel run //:cv_cache`) to
-   produce a checked-in ~10–100 MB tarball that contains exactly the
-   packages your document needs. Subsequent builds use it via
-   `latex_document(cache = "cv_cache.tar.gz")` and run fully offline
-   in seconds.
+1. **Per-document checked-in cache snapshot** (most hermetic). Declare
+   a `latex_cache_snapshot`, run it once with internet to produce a
+   ~10–100 MB tarball, commit it, and set `cache = "foo.tar.gz"` on
+   the document. Subsequent builds run fully offline. Best for
+   air-gapped CI and byte-reproducible release builds.
+2. **Full bundle**. Add `tectonic.bundle()` to your `MODULE.bazel`;
+   the pinned 2.88 GB upstream bundle is fetched once via
+   `download_and_extract` and used as `--bundle` for every compile.
+   Fully hermetic, no per-document setup, but every fresh CI runner
+   spends bandwidth pulling 2.88 GB.
+3. **Implicit cache pipeline** (default, recommended). When neither
+   (1) nor (2) is configured, the rule synthesises a one-time online
+   prime per document, captures the resulting cache as a Bazel
+   action output, and feeds it to a hermetic compile. Bazel's
+   action cache means the prime is shared across local builds and
+   CI runners via the remote cache. You write zero extra build-file
+   plumbing for this.
+4. **Pure online**. Only happens by accident — there's no flag for
+   it. If you somehow disable the implicit pipeline and don't pin a
+   bundle or cache, the legacy "fetch on every action" behaviour
+   would kick in, which we don't recommend.
 
-The snapshot mode is the recommended option for repos that ship
-specific documents: small, fast, content-addressed, and you only re-run
-the snapshot when you add new `\\usepackage` lines.
+## LaTeX package versions
+
+The pinned Tectonic bundle dates from 2022 (the upstream
+`tectonic-texlive-bundles` project was archived in October 2024).
+That's fine for ~95% of real-world LaTeX use — all major citation
+styles (APA, Chicago, IEEE, Harvard, Vancouver), tikz, beamer,
+biblatex, etc. were mature by then — but it does mean you don't get
+biblatex 3.18+ or any CTAN packages released after September 2022.
+See `DESIGN.md` §4.10 for the chain of causes and the five
+solution options we've considered. Users who hit a specific
+package's staleness can self-host a newer bundle today via
+`tectonic.bundle()`.
 
 ## Design
 
