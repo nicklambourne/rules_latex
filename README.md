@@ -104,13 +104,15 @@ A complete, runnable example lives under [`example/`](./example).
 | [`latex_test`](./latex/private/latex_test.bzl) | Compile a document under `bazel test` and assert on patterns in the tectonic log file (e.g. fail on `LaTeX Error:`). |
 | [`latex_cache_snapshot`](./latex/private/latex_cache_snapshot.bzl) | `bazel run`-able command that captures a small, per-document offline cache snapshot for hermetic builds. |
 | [`latex_serve`](./latex/private/latex_serve.bzl) | `bazel run`-able live-preview loop: watches the document's sources, rebuilds via `bazel build` on every save, opens the PDF in the system viewer. |
+| [`latex_serve_web`](./latex/private/latex_serve_web.bzl) | Like `latex_serve`, but exposes the preview as a localhost HTTP page rendered with PDF.js — Overleaf-style in-browser preview with auto-refresh on save. |
 
-All six are loaded from `@rules_latex//latex:defs.bzl`.
+All seven are loaded from `@rules_latex//latex:defs.bzl`.
 
 ## Live preview
 
 For an Overleaf-style edit-and-see-it-update experience, declare a
-`latex_serve` target alongside your document:
+`latex_serve` (system PDF viewer) or `latex_serve_web` (in-browser
+preview) target alongside your document:
 
 ```python
 latex_document(
@@ -120,8 +122,17 @@ latex_document(
     cache = "cv_cache.tar.gz",   # so live rebuilds are offline and fast
 )
 
+# System-PDF-viewer flavour (lightest).
 latex_serve(
     name = "cv_live",
+    document = ":cv",
+)
+
+# In-browser flavour (Overleaf-like). PDF.js handles rendering, the
+# server pushes 'reload' events over Server-Sent Events on every
+# successful rebuild, and scroll position is preserved across updates.
+latex_serve_web(
+    name = "cv_web",
     document = ":cv",
 )
 ```
@@ -132,6 +143,14 @@ Then in one terminal:
 bazel run //:cv_live
 # Watches cv.tex (and any latex_library/latex_pkg deps), rebuilds on
 # every save, opens bazel-bin/cv.pdf in the system PDF viewer.
+```
+
+Or in a browser-driven workflow:
+
+```bash
+bazel run //:cv_web
+# serving live preview at http://127.0.0.1:8765/
+# (open the URL; edit cv.tex; the page auto-refreshes the PDF)
 ```
 
 Edit the source in your editor of choice; the PDF is rebuilt within a

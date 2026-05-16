@@ -25,6 +25,11 @@ that, expect breaking changes in any v0.x release.
   on every save, and opens the resulting PDF in the system viewer. Uses
   `--watchfs` and the resident Bazel server so steady-state rebuilds for
   small documents complete in ~200–400 ms.
+- `latex_serve_web` rule: Overleaf-style in-browser preview. Stands up a
+  localhost HTTP server with PDF.js rendering and Server-Sent Events
+  for "reload" pushes on every successful rebuild. Preserves scroll
+  position across re-renders. Pure-stdlib Python on the server side;
+  PDF.js loaded from a CDN at page-load time.
 - `latex_document(reproducible = True)` attribute that combines
   `SOURCE_DATE_EPOCH=0` with `-Z deterministic-mode`, producing byte-identical
   PDFs across clean builds.

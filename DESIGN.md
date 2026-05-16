@@ -53,6 +53,7 @@ Loaded from `@rules_latex//latex:defs.bzl`:
 - `latex_test(name, main, srcs, deps = [], outfmt = "pdf", cache = None, forbidden_patterns = [], forbidden_patterns_replace = False, required_patterns = [])`
 - `latex_cache_snapshot(name, main, srcs, deps = [], output)`
 - `latex_serve(name, document, poll_interval_ms = 250, open_pdf = True)`
+- `latex_serve_web(name, document, port = 8765, poll_interval_ms = 250, pdfjs_version = "5.4.149")`
 - `LatexInfo` provider (for users authoring their own rules)
 
 The toolchain type is exported at `@rules_latex//latex:toolchain_type` for
@@ -155,8 +156,18 @@ The wrapper also propagates `LC_ALL=C.UTF-8` (some downstream helpers like
 
 ### 4.7 Live preview
 
-`latex_serve` is intentionally implemented as a thin watcher around
-`bazel build`, not a separately-driven Tectonic process. The justification:
+Two preview rules ship with v0.1:
+
+* `latex_serve` — a watcher loop that opens the PDF in the system
+  viewer and lets the viewer's own auto-reload handle subsequent
+  updates. Minimal: ~200 LOC of Python + a shell launcher.
+* `latex_serve_web` — a tiny localhost HTTP server with PDF.js for
+  in-browser rendering and Server-Sent Events for "reload" pushes.
+  Overleaf-style experience without the cloud round-trip.
+
+Both rules are intentionally implemented as thin watchers around
+`bazel build`, not separately-driven Tectonic processes. The
+justification:
 
 * **Same toolchain, sandbox, and cache as a regular build.** A document
   that builds happily in `bazel build` and CI but breaks in
@@ -170,8 +181,8 @@ The wrapper also propagates `LC_ALL=C.UTF-8` (some downstream helpers like
   still trigger a correct rebuild because Bazel's analysis picks up the
   staleness.
 * **Cross-target sharing.** Multiple `latex_document` targets can share
-  a `latex_library`; running `latex_serve` on one of them doesn't
-  preclude editing the shared library and getting consistent rebuilds.
+  a `latex_library`; running a preview on one of them doesn't preclude
+  editing the shared library and getting consistent rebuilds.
 
 The cost is a couple of hundred milliseconds of Bazel CLI startup
 overhead per rebuild, mitigated with `--watchfs` (Bazel uses
@@ -181,6 +192,12 @@ a checked-in cache snapshot, the steady-state rebuild latency in the
 example workspace is in the 200–400 ms range — well within "feels live".
 The watcher itself is pure-stdlib Python so consumers don't need
 `rules_python` or `watchdog`.
+
+`latex_serve_web` adds one external dependency: PDF.js, pulled from
+`cdn.jsdelivr.net` at page-load time. The rule deliberately does not
+vendor the ~3 MB JS bundle into the rule set; users on air-gapped
+machines can fall back to `latex_serve` (system viewer) or self-host a
+PDF.js mirror via the `pdfjs_version` attribute.
 
 ## 5. Open questions / future work
 
