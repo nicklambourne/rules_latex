@@ -138,20 +138,24 @@ jobs:
       - name: SyncTeX reverse-sync end-to-end
         working-directory: example
         run: |
+          # Pre-build //:hello_synctex so the serve target's initial
+          # synchronous build is a cache hit. The doc uses the
+          # checked-in cache snapshot, so this is hermetic — no need
+          # to retry around CDN flakes.
+          bazel build //:hello_synctex --config=ci
+
           # //:hello_synctex_serve serves a document built with
           # synctex = True, on port 8766. Boot it, POST a click, expect
           # to get back (hello.tex, line) for any in-document click.
           bazel run //:hello_synctex_serve > /tmp/synctex_serve.log 2>&1 &
           PID=$!
           # Wait for the server to accept connections AND for the
-          # initial build to finish (last_success must be true; just
-          # checking synctex_enabled isn't enough — that's compile-time
-          # and races the first synchronous bazel build the watcher
-          # runs).
-          for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+          # initial build to finish (last_success must be true).
+          for i in $(seq 1 30); do
             if curl -sf http://127.0.0.1:8766/status \
                 | python3 -c \
-                  'import sys, json; sys.exit(0 if json.load(sys.stdin).get("last_success") else 1)'; then
+                  'import sys, json; sys.exit(0 if json.load(sys.stdin).get("last_success") else 1)' \
+                2>/dev/null; then
               break
             fi
             sleep 2
