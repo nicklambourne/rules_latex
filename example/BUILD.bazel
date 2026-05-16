@@ -4,6 +4,7 @@ load(
     "latex_document",
     "latex_library",
     "latex_serve",
+    "latex_serve_web",
     "latex_test",
 )
 
@@ -58,6 +59,16 @@ latex_cache_snapshot(
 # every save, and opens the result in the system PDF viewer.
 latex_serve(
     name = "hello_serve",
+    document = ":hello_offline",
+)
+
+# In-browser live-preview workflow: `bazel run //:hello_serve_web`
+# stands up a tiny HTTP server on http://127.0.0.1:8765/ that renders
+# the PDF with PDF.js and auto-reloads on every save. Same rebuild
+# path as latex_serve (sandboxed `bazel build`), so behaviour matches
+# CI.
+latex_serve_web(
+    name = "hello_serve_web",
     document = ":hello_offline",
 )
 
