@@ -143,16 +143,23 @@ jobs:
           # to get back (hello.tex, line) for any in-document click.
           bazel run //:hello_synctex_serve > /tmp/synctex_serve.log 2>&1 &
           PID=$!
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-            if curl -sf http://127.0.0.1:8766/status > /dev/null; then
+          # Wait for the server to accept connections AND for the
+          # initial build to finish (last_success must be true; just
+          # checking synctex_enabled isn't enough — that's compile-time
+          # and races the first synchronous bazel build the watcher
+          # runs).
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+            if curl -sf http://127.0.0.1:8766/status \
+                | python3 -c \
+                  'import sys, json; sys.exit(0 if json.load(sys.stdin).get("last_success") else 1)'; then
               break
             fi
-            sleep 1
+            sleep 2
           done
 
           # /status must advertise synctex_enabled = true.
           curl -sf http://127.0.0.1:8766/status | python3 -c \
-            'import sys, json; s=json.load(sys.stdin); assert s["synctex_enabled"] is True, s; print("synctex status OK")'
+            'import sys, json; s=json.load(sys.stdin); assert s["synctex_enabled"] is True, s; assert s["last_success"] is True, s; print("synctex status OK")'
 
           # Reverse-sync click in the middle of page 1 should resolve to
           # the workspace-relative hello.tex.
