@@ -47,13 +47,13 @@ known open questions for `rules_latex`. It is meant to be read alongside the
 
 Loaded from `@rules_latex//latex:defs.bzl`:
 
-- `latex_document(name, main, srcs, deps = [], outfmt = "pdf", reproducible = False, cache = None, tectonic_args = [])`
+- `latex_document(name, main, srcs, deps = [], outfmt = "pdf", reproducible = False, synctex = False, cache = None, tectonic_args = [])`
 - `latex_library(name, srcs, deps = [])`
 - `latex_pkg(name, srcs)`
 - `latex_test(name, main, srcs, deps = [], outfmt = "pdf", cache = None, forbidden_patterns = [], forbidden_patterns_replace = False, required_patterns = [])`
 - `latex_cache_snapshot(name, main, srcs, deps = [], output)`
 - `latex_serve(name, document, poll_interval_ms = 250, open_pdf = True)`
-- `latex_serve_web(name, document, port = 8765, poll_interval_ms = 250, pdfjs_version = "5.4.149")`
+- `latex_serve_web(name, document, port = 8765, poll_interval_ms = 250)`
 - `LatexInfo` provider (for users authoring their own rules)
 
 The toolchain type is exported at `@rules_latex//latex:toolchain_type` for
@@ -193,11 +193,43 @@ example workspace is in the 200–400 ms range — well within "feels live".
 The watcher itself is pure-stdlib Python so consumers don't need
 `rules_python` or `watchdog`.
 
-`latex_serve_web` adds one external dependency: PDF.js, pulled from
-`cdn.jsdelivr.net` at page-load time. The rule deliberately does not
-vendor the ~3 MB JS bundle into the rule set; users on air-gapped
-machines can fall back to `latex_serve` (system viewer) or self-host a
-PDF.js mirror via the `pdfjs_version` attribute.
+`latex_serve_web` vendors PDF.js into the rule set via the
+`@rules_latex_pdfjs` repository (materialised by the `pdfjs` module
+extension). The browser imports `pdf.mjs` and `pdf.worker.mjs` from
+the running server (`/_pdfjs/pdf.mjs`, `/_pdfjs/pdf.worker.mjs`)
+instead of from a CDN, so live preview works air-gapped and the PDF.js
+version is content-addressed at build time alongside the rest of the
+rule set.
+
+### 4.8 SyncTeX
+
+When `latex_document(synctex = True)` is set, tectonic is invoked with
+`--synctex` and the resulting `<name>.synctex.gz` is exposed as an
+additional output. `latex_serve_web` auto-discovers that file via the
+document's `synctex` `OutputGroupInfo` and offers two affordances:
+
+* Browser-side: clicking on the rendered PDF page POSTs the
+  (page, x, y) coordinates (in PDF points) to `/sync/reverse`. The
+  response is rendered in the footer as `file:line`.
+* Server-side: a minimal SyncTeX v1 parser in
+  [`serve_web.py.tpl`](./latex/private/serve_web.py.tpl) reads the
+  gzipped synctex file, builds an index of (file_id → path) plus a
+  flat list of box records, and resolves clicks to the smallest
+  enclosing box. Paths in the synctex file are sandbox-absolute (TeX
+  sees the execroot path); the handler maps them back to
+  workspace-relative paths by matching basenames against the watched
+  source list, which is sufficient for typical single-package
+  documents.
+
+`reproducible = True` and `synctex = True` are mutually exclusive on
+the same `latex_document` — tectonic's deterministic mode disables
+SyncTeX output because aux files would otherwise embed absolute paths
+that aren't stable across machines.
+
+Forward-sync (editor → PDF) is intentionally not implemented in v0.x;
+the natural surface would be a `POST /sync/forward` endpoint that the
+editor posts to, with the server pushing a `jump-to-page-N-line-Y`
+event over the existing SSE channel. See §5.6 for the discussion.
 
 ## 5. Open questions / future work
 
@@ -220,7 +252,17 @@ These are deliberately out of scope for v0.1 but worth flagging.
 5. **Caching of intermediate aux files.** Tectonic is fast and Bazel caches
    the action output, so this is probably never worth doing — but worth
    benchmarking on multi-pass documents (e.g. with biblatex).
-6. **WebSocket-based live-reload channel.** `latex_serve_web` currently
+6. **Forward-sync (editor → PDF) for SyncTeX.** Currently `latex_serve_web`
+   only implements reverse-sync (click on PDF → source location). A
+   future feature could expose a `POST /sync/forward` endpoint that the
+   editor (or a small `bazel run //:foo_jump -- file.tex:42` CLI shim)
+   posts to. The server would parse the synctex file in the opposite
+   direction (file_id + line → first matching box) and push a
+   `jump-to-page-N-y-Y` event over the existing SSE channel, which the
+   browser handles by scrolling the relevant page into view and
+   highlighting the location. No new comms primitive needed beyond the
+   ones we already have.
+7. **WebSocket-based live-reload channel.** `latex_serve_web` currently
    uses Server-Sent Events for the server→browser "reload" signal, which
    is unidirectional. WebSockets would allow the browser to push state
    back (current scroll position, current zoom, "I'm idle, debounce

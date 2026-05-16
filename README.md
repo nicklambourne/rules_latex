@@ -120,6 +120,7 @@ latex_document(
     main = "cv.tex",
     srcs = ["cv.tex"],
     cache = "cv_cache.tar.gz",   # so live rebuilds are offline and fast
+    synctex = True,              # click-to-source in latex_serve_web
 )
 
 # System-PDF-viewer flavour (lightest).
@@ -128,9 +129,12 @@ latex_serve(
     document = ":cv",
 )
 
-# In-browser flavour (Overleaf-like). PDF.js handles rendering, the
-# server pushes 'reload' events over Server-Sent Events on every
-# successful rebuild, and scroll position is preserved across updates.
+# In-browser flavour (Overleaf-like). PDF.js handles rendering (served
+# from the self-hosted /_pdfjs/ endpoint, no CDN), the server pushes
+# 'reload' events over Server-Sent Events on every successful rebuild,
+# and scroll position is preserved across updates. Clicking on the PDF
+# jumps to the source line via SyncTeX when `synctex = True` is set on
+# the document.
 latex_serve_web(
     name = "cv_web",
     document = ":cv",
@@ -150,7 +154,8 @@ Or in a browser-driven workflow:
 ```bash
 bazel run //:cv_web
 # serving live preview at http://127.0.0.1:8765/
-# (open the URL; edit cv.tex; the page auto-refreshes the PDF)
+# (open the URL; edit cv.tex; the page auto-refreshes the PDF;
+#  click anywhere in the PDF to see the corresponding source line)
 ```
 
 Edit the source in your editor of choice; the PDF is rebuilt within a

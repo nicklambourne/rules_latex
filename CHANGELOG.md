@@ -4,6 +4,30 @@ All notable changes to `rules_latex` are documented here. This project follows
 [Semantic Versioning](https://semver.org/) once v1.0.0 is reached; before
 that, expect breaking changes in any v0.x release.
 
+## [Unreleased]
+
+### Added
+- `latex_document(synctex = True)` produces a `<name>.synctex.gz` next
+  to the PDF, exposed via the `synctex` OutputGroup.
+- `latex_serve_web` auto-discovers the synctex output when the document
+  was built with `synctex = True` and grows a `POST /sync/reverse`
+  endpoint that maps PDF-point (page, x, y) clicks to
+  `(source_path, line)` tuples. The browser binds `click` on the
+  rendered canvases and shows the resolved source location in a
+  footer banner.
+- Self-hosted PDF.js: `latex_serve_web` no longer fetches PDF.js from
+  cdn.jsdelivr.net. The pinned `pdfjs-dist@5.4.149` tarball is
+  fetched at repository-rule time via the new `pdfjs` module
+  extension (`@rules_latex_pdfjs`), and served at
+  `/_pdfjs/pdf.mjs` + `/_pdfjs/pdf.worker.mjs` from the running
+  server. Air-gapped live preview now works out of the box.
+
+### Changed
+- `latex_serve_web` no longer accepts a `pdfjs_version` attribute; the
+  version is pinned in `//latex/private:pdfjs_versions.bzl` and bumped
+  via a normal rules_latex release. To override the URL/SHA, fork the
+  pin file or vendor your own `@rules_latex_pdfjs`.
+
 ## [0.1.0] - 2026-05-16
 
 ### Added

@@ -31,13 +31,16 @@ fall back to `latex_serve` (system viewer).
 
 from __future__ import annotations
 
+import gzip
 import json
 import queue
+import re
 import signal
 import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -45,6 +48,7 @@ from pathlib import Path
 # Filled in by `latex_serve_web`:
 DOCUMENT_LABEL = "{{DOCUMENT_LABEL}}"
 PDF_RELPATH = "{{PDF_RELPATH}}"
+SYNCTEX_RELPATH = "{{SYNCTEX_RELPATH}}"
 WATCHED_PATHS_RAW = """\
 {{WATCHED_PATHS}}"""
 POLL_INTERVAL_MS = int("{{POLL_INTERVAL}}")
@@ -61,6 +65,179 @@ PDFJS_WORKER_RUNFILE = "{{PDFJS_WORKER_RUNFILE}}"
 # template is just a format string.
 PDFJS_LIB = "/_pdfjs/pdf.mjs"
 PDFJS_WORKER = "/_pdfjs/pdf.worker.mjs"
+
+# True iff this serve target was built against a latex_document with
+# synctex = True. Used to gate the reverse-sync endpoint and the
+# corresponding UI affordance in the browser.
+SYNCTEX_ENABLED = bool(SYNCTEX_RELPATH)
+
+
+# -----------------------------------------------------------------------------
+# SyncTeX
+# -----------------------------------------------------------------------------
+#
+# SyncTeX is the (de facto) standard for mapping between PDF coordinates
+# and source-file (file, line) tuples. Tectonic emits a `<stem>.synctex.gz`
+# alongside the PDF when `latex_document(synctex = True)`. The format is
+# documented at https://github.com/jlaurens/synctex.
+#
+# We need only reverse-sync here (PDF click → source location). The
+# parser is intentionally minimal: it reads the Input: directory and the
+# bracketed box records, ignoring glyph-level annotations that aren't
+# useful for click-level resolution. Forward-sync (source → PDF) is
+# similar but inverted; we leave it as a future addition.
+
+
+# SyncTeX uses "scaled points": 1 sp = 1/65536 pt = 1/(65536*72) inch.
+# PDF.js reports coordinates in PDF points (1 pt). The exact factor
+# between the two depends on the engine's TeX resolution but 65536 is
+# the canonical conversion used everywhere.
+SYNCTEX_SP_PER_PT = 65536
+
+
+@dataclass(frozen=True)
+class SyncTeXBox:
+    """One box record from the SyncTeX content section.
+
+    All coordinates are in scaled points. (x, y) is the box origin
+    (bottom-left in TeX's coordinate system). w, h, d are width,
+    height-above-baseline, and depth-below-baseline.
+    """
+    page: int
+    file_id: int
+    line: int
+    x: int
+    y: int
+    w: int
+    h: int
+    d: int
+
+    def contains(self, page: int, sp_x: int, sp_y: int) -> bool:
+        if self.page != page:
+            return False
+        if not (self.x <= sp_x <= self.x + self.w):
+            return False
+        # In SyncTeX's coordinate system y grows downward and the box
+        # extends from (y - h) to (y + d) — total height = h + d.
+        return (self.y - self.h) <= sp_y <= (self.y + self.d)
+
+    def area(self) -> int:
+        return self.w * (self.h + self.d)
+
+
+# Records of the form:
+#   [page,line:x,y:w,h,d
+#   (page,line:x,y:w,h,d
+# Tectonic also emits 'h', 'v', 'g', 'k', 'x', '$' records for glyph
+# runs; we ignore those for click-level resolution.
+_BOX_RE = re.compile(
+    r"^[\[(](?P<file>\d+),(?P<line>\d+):"
+    r"(?P<x>-?\d+),(?P<y>-?\d+):"
+    r"(?P<w>-?\d+),(?P<h>-?\d+),(?P<d>-?\d+)",
+)
+
+
+class SyncTeXIndex:
+    """Parsed SyncTeX file, queryable by (page, x, y) in PDF points."""
+
+    def __init__(self, inputs: dict[int, Path], boxes: list[SyncTeXBox]) -> None:
+        self._inputs = inputs
+        self._boxes = boxes
+
+    @classmethod
+    def from_file(cls, path: Path) -> "SyncTeXIndex":
+        if path.suffix == ".gz":
+            with gzip.open(path, "rt", encoding="utf-8", errors="replace") as fp:
+                lines = fp.readlines()
+        else:
+            with path.open("r", encoding="utf-8", errors="replace") as fp:
+                lines = fp.readlines()
+
+        inputs: dict[int, Path] = {}
+        boxes: list[SyncTeXBox] = []
+        current_page = 0
+        in_content = False
+
+        for raw in lines:
+            line = raw.rstrip("\n")
+            if not in_content:
+                if line.startswith("Input:"):
+                    # Input:<id>:<path>
+                    parts = line.split(":", 2)
+                    if len(parts) == 3 and parts[2]:
+                        try:
+                            fid = int(parts[1])
+                        except ValueError:
+                            continue
+                        inputs[fid] = Path(parts[2])
+                elif line == "Content:":
+                    in_content = True
+                continue
+
+            # In the Content section. Page boundaries:
+            #   {N  starts page N
+            #   }N  ends page N
+            if line.startswith("{"):
+                try:
+                    current_page = int(line[1:].split(",")[0])
+                except ValueError:
+                    pass
+                continue
+            if line.startswith("}"):
+                current_page = 0
+                continue
+            if line.startswith("!"):
+                # `!N` is a hint that the next box's offset can be
+                # derived; we don't care about that level of detail.
+                continue
+
+            m = _BOX_RE.match(line)
+            if not m:
+                continue
+            try:
+                box = SyncTeXBox(
+                    page=current_page,
+                    file_id=int(m.group("file")),
+                    line=int(m.group("line")),
+                    x=int(m.group("x")),
+                    y=int(m.group("y")),
+                    w=int(m.group("w")),
+                    h=int(m.group("h")),
+                    d=int(m.group("d")),
+                )
+            except ValueError:
+                continue
+            if box.w <= 0 or (box.h + box.d) <= 0:
+                continue
+            boxes.append(box)
+
+        return cls(inputs=inputs, boxes=boxes)
+
+    def reverse_lookup(
+        self,
+        page: int,
+        x_pt: float,
+        y_pt: float,
+    ) -> tuple[Path, int] | None:
+        """Map a PDF-point click to a (source_path, line) tuple.
+
+        Returns None if no box on the given page contains the point.
+        """
+        sp_x = int(x_pt * SYNCTEX_SP_PER_PT)
+        sp_y = int(y_pt * SYNCTEX_SP_PER_PT)
+
+        best: SyncTeXBox | None = None
+        for box in self._boxes:
+            if not box.contains(page, sp_x, sp_y):
+                continue
+            if best is None or box.area() < best.area():
+                best = box
+        if best is None:
+            return None
+        path = self._inputs.get(best.file_id)
+        if path is None:
+            return None
+        return (path, best.line)
 
 
 # -----------------------------------------------------------------------------
@@ -85,6 +262,11 @@ class BuildState:
         self._last_elapsed: float = 0.0
         self._last_finished_at: float = 0.0
         self._last_message: str = "starting up..."
+        # Lazily-parsed SyncTeX index for the current build. We
+        # invalidate this on every successful build and re-parse on
+        # demand the next time a /sync/reverse request comes in.
+        self._synctex: SyncTeXIndex | None = None
+        self._synctex_mtime: float = 0.0
 
     def add_listener(self) -> "queue.Queue[str]":
         q: queue.Queue[str] = queue.Queue(maxsize=8)
@@ -104,6 +286,10 @@ class BuildState:
             self._last_elapsed = elapsed
             self._last_finished_at = time.time()
             self._last_message = message
+            # Invalidate the cached SyncTeX index — the .synctex.gz
+            # file on disk has just changed.
+            self._synctex = None
+            self._synctex_mtime = 0.0
             listeners = list(self._listeners)
         # Notify outside the lock so a slow listener can't block the
         # build thread for more than the per-queue timeout.
@@ -123,7 +309,30 @@ class BuildState:
                 "last_elapsed_seconds": round(self._last_elapsed, 3),
                 "last_finished_at": self._last_finished_at,
                 "last_message": self._last_message,
+                "synctex_enabled": SYNCTEX_ENABLED,
             }
+
+    def get_synctex(self, path: Path) -> SyncTeXIndex | None:
+        """Return a parsed SyncTeXIndex, re-parsing if the file has changed.
+
+        Thread-safe. Returns None if the file doesn't exist (e.g. the
+        build failed before producing a .synctex.gz).
+        """
+        try:
+            mtime = path.stat().st_mtime
+        except FileNotFoundError:
+            return None
+        with self._lock:
+            if self._synctex is not None and self._synctex_mtime == mtime:
+                return self._synctex
+        # Parse outside the lock — parsing can take tens of ms on
+        # multi-MB synctex files and we don't want to block /status or
+        # /events listeners.
+        parsed = SyncTeXIndex.from_file(path)
+        with self._lock:
+            self._synctex = parsed
+            self._synctex_mtime = mtime
+        return parsed
 
 
 # -----------------------------------------------------------------------------
@@ -225,7 +434,7 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
   body {{
     font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     margin: 0; background: #2b2b2b; color: #e8e8e8;
-    display: grid; grid-template-rows: auto 1fr;
+    display: grid; grid-template-rows: auto 1fr auto;
     height: 100vh;
   }}
   header {{
@@ -259,11 +468,21 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
   #viewer canvas {{
     display: block; margin: 0 auto 12px; background: white;
     box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    cursor: var(--canvas-cursor, default);
   }}
+  body.synctex #viewer canvas {{ --canvas-cursor: crosshair; }}
   #empty {{ color: #888; padding: 32px; }}
+  footer {{
+    padding: 6px 12px; background: #1d1d1d;
+    border-top: 1px solid #000;
+    font-size: 12px; color: #888;
+    min-height: 28px;
+  }}
+  #sync-result {{ color: #b4d8f0; font-family: ui-monospace, monospace; }}
+  #sync-result a {{ color: #b4d8f0; text-decoration: underline; }}
 </style>
 </head>
-<body>
+<body class="{synctex_body_class}">
 <header>
   <h1>{document_name}</h1>
   <div id="zoom-controls">
@@ -274,17 +493,23 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
   <div id="status" class="idle">connecting…</div>
 </header>
 <div id="viewer"><div id="empty">waiting for first build…</div></div>
+<footer>
+  <span id="sync-result">{synctex_hint}</span>
+</footer>
 
 <script type="module">
 import * as pdfjsLib from "{pdfjs_lib}";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "{pdfjs_worker}";
 
+const SYNCTEX_ENABLED = {synctex_enabled};
 const viewer = document.getElementById("viewer");
 const statusEl = document.getElementById("status");
+const syncResultEl = document.getElementById("sync-result");
 let currentDoc = null;
 let scale = 1.5;
-
-const fmt = (n) => Number(n).toFixed(2);
+// Map canvas DOM element -> its rendered viewport (so click handlers
+// can convert client coords back to PDF coords).
+const canvasViewports = new WeakMap();
 
 function setStatus(cls, text) {{
   statusEl.className = cls;
@@ -293,9 +518,6 @@ function setStatus(cls, text) {{
 
 async function renderDocument(url) {{
   setStatus("building", "rendering…");
-  // Cache-busting query string forces a fresh fetch; the underlying
-  // /pdf endpoint sets Cache-Control: no-store anyway, but some
-  // browsers ignore that for explicit reload triggers.
   const bust = Date.now();
   try {{
     const loadingTask = pdfjsLib.getDocument(`${{url}}?t=${{bust}}`);
@@ -309,8 +531,6 @@ async function renderDocument(url) {{
 }}
 
 async function renderAllPages(pdf) {{
-  // Preserve scroll position across re-renders so editing doesn't
-  // bounce the user back to page 1.
   const prevScroll = {{ top: viewer.scrollTop, left: viewer.scrollLeft }};
   const fresh = document.createElement("div");
   for (let i = 1; i <= pdf.numPages; i++) {{
@@ -319,14 +539,17 @@ async function renderAllPages(pdf) {{
     const canvas = document.createElement("canvas");
     canvas.width = viewport.width;
     canvas.height = viewport.height;
+    canvas.dataset.pageNumber = String(i);
     const ctx = canvas.getContext("2d");
     await page.render({{ canvasContext: ctx, viewport }}).promise;
+    canvasViewports.set(canvas, viewport);
+    if (SYNCTEX_ENABLED) {{
+      canvas.addEventListener("click", onCanvasClick);
+    }}
     fresh.appendChild(canvas);
   }}
   viewer.replaceChildren(fresh);
   viewer.scrollTo(prevScroll);
-  // Apply the latest status from the server (race: a new build may
-  // have completed during the render).
   await refreshStatus();
 }}
 
@@ -344,13 +567,53 @@ async function refreshStatus() {{
   }}
 }}
 
+async function onCanvasClick(event) {{
+  const canvas = event.currentTarget;
+  const viewport = canvasViewports.get(canvas);
+  if (!viewport) return;
+  // Convert client coordinates (page-relative pixels) to canvas
+  // coordinates (account for canvas dimensions vs. displayed size).
+  const rect = canvas.getBoundingClientRect();
+  const cssX = event.clientX - rect.left;
+  const cssY = event.clientY - rect.top;
+  const cx = cssX * (canvas.width / rect.width);
+  const cy = cssY * (canvas.height / rect.height);
+  // PDF.js' viewport.convertToPdfPoint() maps canvas pixels back to
+  // PDF points relative to the page's bottom-left.
+  const [pdfX, pdfY] = viewport.convertToPdfPoint(cx, cy);
+  const pageNumber = parseInt(canvas.dataset.pageNumber, 10);
+
+  syncResultEl.textContent = "looking up source location…";
+  try {{
+    const r = await fetch("/sync/reverse", {{
+      method: "POST",
+      headers: {{ "Content-Type": "application/json" }},
+      body: JSON.stringify({{ page: pageNumber, x: pdfX, y: pdfY }}),
+    }});
+    const body = await r.json();
+    if (body.ok) {{
+      syncResultEl.innerHTML =
+        `→ <strong>${{escapeHtml(body.file)}}</strong>:` +
+        `<strong>${{body.line}}</strong> ` +
+        `(page ${{pageNumber}}, ${{pdfX.toFixed(1)}}, ${{pdfY.toFixed(1)}})`;
+    }} else {{
+      syncResultEl.textContent = `synctex: ${{body.error || "no match"}}`;
+    }}
+  }} catch (err) {{
+    syncResultEl.textContent = `synctex request failed: ${{err.message || err}}`;
+  }}
+}}
+
+function escapeHtml(s) {{
+  return String(s).replace(/[&<>"']/g,
+    c => ({{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}}[c]));
+}}
+
 const evtSrc = new EventSource("/events");
 evtSrc.onmessage = (e) => {{
   if (e.data === "reload") {{
     renderDocument("/pdf");
-  }} else if (e.data === "build-failed") {{
-    refreshStatus();
-  }} else if (e.data === "hello") {{
+  }} else if (e.data === "build-failed" || e.data === "hello") {{
     refreshStatus();
   }}
 }};
@@ -371,8 +634,6 @@ document.getElementById("zoom-reset").addEventListener("click", () => {{
   if (currentDoc) renderAllPages(currentDoc);
 }});
 
-// Try once on page load; the SSE 'hello' event will also call this
-// once the connection is up.
 renderDocument("/pdf");
 refreshStatus();
 </script>
@@ -416,6 +677,16 @@ class Handler(BaseHTTPRequestHandler):
                 document_name=DOCUMENT_NAME,
                 pdfjs_lib=PDFJS_LIB,
                 pdfjs_worker=PDFJS_WORKER,
+                synctex_enabled="true" if SYNCTEX_ENABLED else "false",
+                synctex_body_class="synctex" if SYNCTEX_ENABLED else "",
+                synctex_hint=(
+                    "click anywhere in the PDF to jump to source"
+                    if SYNCTEX_ENABLED
+                    else (
+                        "synctex disabled (build with "
+                        "latex_document(synctex = True) to enable)"
+                    )
+                ),
             )
             self._send(HTTPStatus.OK, html.encode("utf-8"), "text/html; charset=utf-8")
             return
@@ -459,6 +730,105 @@ class Handler(BaseHTTPRequestHandler):
             b"not found",
             "text/plain; charset=utf-8",
         )
+
+    def do_POST(self) -> None:  # noqa: N802 (http.server API)
+        path = self.path.split("?", 1)[0]
+        if path == "/sync/reverse":
+            self._handle_sync_reverse()
+            return
+        self._send(
+            HTTPStatus.NOT_FOUND,
+            b"not found",
+            "text/plain; charset=utf-8",
+        )
+
+    def _handle_sync_reverse(self) -> None:
+        """POST /sync/reverse — map a PDF click to a source location.
+
+        Request body (JSON):
+            {"page": 1, "x": 123.4, "y": 456.7}
+            where x/y are in PDF points relative to the page's bottom-
+            left corner.
+
+        Response body (JSON):
+            {"ok": true, "file": "cv.tex", "line": 42}
+        or
+            {"ok": false, "error": "synctex not enabled"}
+        """
+        if not SYNCTEX_ENABLED:
+            self._send_json(
+                HTTPStatus.NOT_FOUND,
+                {"ok": False, "error": "synctex not enabled for this document"},
+            )
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            body_raw = self.rfile.read(length) if length else b""
+            payload = json.loads(body_raw.decode("utf-8"))
+            page = int(payload["page"])
+            x = float(payload["x"])
+            y = float(payload["y"])
+        except (KeyError, ValueError, json.JSONDecodeError) as exc:
+            self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"ok": False, "error": "bad request: {}".format(exc)},
+            )
+            return
+
+        synctex_path = self.workspace / "bazel-bin" / SYNCTEX_RELPATH
+        idx = self.state.get_synctex(synctex_path)
+        if idx is None:
+            self._send_json(
+                HTTPStatus.NOT_FOUND,
+                {"ok": False, "error": "synctex file not produced yet"},
+            )
+            return
+
+        result = idx.reverse_lookup(page, x, y)
+        if result is None:
+            self._send_json(
+                HTTPStatus.OK,
+                {"ok": False, "error": "no source location found"},
+            )
+            return
+        synctex_path, line = result
+
+        # SyncTeX records the path as tectonic saw it inside the Bazel
+        # action sandbox, which is something like
+        # `/private/.../execroot/_main/preamble.tex`. Map that back to
+        # a workspace-relative path by matching basenames against the
+        # watched source list — that's a much more useful reference
+        # for an editor jump.
+        resolved = self._resolve_to_workspace(synctex_path)
+        self._send_json(
+            HTTPStatus.OK,
+            {"ok": True, "file": resolved, "line": line},
+        )
+
+    def _resolve_to_workspace(self, synctex_path: Path) -> str:
+        """Map a sandbox-absolute path back to a workspace-relative one.
+
+        Best-effort. Falls back to the original path's basename if no
+        watched source matches.
+        """
+        basename = synctex_path.name
+        for rel in WATCHED_PATHS_RAW.splitlines():
+            rel = rel.strip()
+            if not rel:
+                continue
+            if Path(rel).name == basename:
+                # Confirm the workspace actually has the file at this
+                # relative path. If two watched sources share a
+                # basename (unusual but possible) we pick the first.
+                if (self.workspace / rel).is_file():
+                    return rel
+        # No match in the watched sources; return the basename as a
+        # last resort so editor jumps at least show a meaningful name.
+        return basename
+
+    def _send_json(self, status: int, payload: object) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self._send(status, body, "application/json")
 
     def _stream_events(self) -> None:
         self.send_response(HTTPStatus.OK)

@@ -55,6 +55,23 @@ def _latex_serve_web_impl(ctx):
     if ctx.attr.document.label.package == "":
         pdf_relpath = "{}.pdf".format(ctx.attr.document.label.name)
 
+    # If the document was built with synctex = True, latex_document
+    # exposes the .synctex.gz file via an OutputGroup. Pluck it out so
+    # the server can offer reverse-sync; absent that output group,
+    # SyncTeX features are silently disabled in the browser.
+    synctex_files = []
+    if OutputGroupInfo in ctx.attr.document:
+        groups = ctx.attr.document[OutputGroupInfo]
+        if hasattr(groups, "synctex"):
+            synctex_files = groups.synctex.to_list()
+    synctex_relpath = ""
+    if synctex_files:
+        sf = synctex_files[0]
+        synctex_relpath = "{}/{}".format(
+            sf.owner.package,
+            sf.basename,
+        ) if sf.owner.package else sf.basename
+
     watched_paths = []
     for src in srcs:
         if src.owner.workspace_name:
@@ -71,6 +88,7 @@ def _latex_serve_web_impl(ctx):
         substitutions = {
             "{{DOCUMENT_LABEL}}": document_label,
             "{{PDF_RELPATH}}": pdf_relpath,
+            "{{SYNCTEX_RELPATH}}": synctex_relpath,
             "{{WATCHED_PATHS}}": "\n".join(watched_paths),
             "{{POLL_INTERVAL}}": str(ctx.attr.poll_interval_ms),
             "{{PORT}}": str(ctx.attr.port),

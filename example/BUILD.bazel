@@ -72,6 +72,24 @@ latex_serve_web(
     document = ":hello_offline",
 )
 
+# Same document built with synctex output, plus a serve target that
+# wires the .synctex.gz file into the server so clicking on a glyph
+# in the browser jumps to the corresponding source location.
+latex_document(
+    name = "hello_synctex",
+    srcs = ["hello.tex"],
+    cache = "hello_cache.tar.gz",
+    main = "hello.tex",
+    synctex = True,
+    deps = [":preamble"],
+)
+
+latex_serve_web(
+    name = "hello_synctex_serve",
+    document = ":hello_synctex",
+    port = 8766,
+)
+
 # Regression test: compile hello.tex and make sure no LaTeX errors show
 # up in the log. Uses the checked-in cache snapshot so the test runs
 # fully offline and finishes in ~3 seconds instead of pulling fresh
