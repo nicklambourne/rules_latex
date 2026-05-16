@@ -10,8 +10,14 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build & smoke-test (${{ matrix.os }})
+  test:
+    # Build the rules, run the //tests/... unit + analysistest suites,
+    # exercise the public rules against each example workspace, run the
+    # latex_test integration target, smoke-test the latex_serve_web
+    # HTTP endpoints, drive a SyncTeX reverse-sync round-trip, and
+    # assert that reproducible builds and cache-snapshot regeneration
+    # are byte-identical. Runs on Linux x86_64 and macOS arm64.
+    name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -220,14 +226,14 @@ jobs:
           wait "$PID" 2>/dev/null || true
           cat /tmp/synctex_serve.log
 
-      - name: Run unit tests
+      - name: Run //tests/... (Python + Starlark analysistests)
         run: |
           # //tests/... covers the Python tests for the snapshot tool
           # and the SyncTeX parser, plus the analysistests for
           # latex_document. Fully hermetic; no network needed.
           bazel test //tests/... --config=ci
 
-      - name: Run latex_test target
+      - name: Run latex_test integration target
         working-directory: examples
         run: |
           # Uses the checked-in cache snapshot, so this is hermetic.
