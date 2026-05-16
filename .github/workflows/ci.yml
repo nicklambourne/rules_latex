@@ -25,7 +25,12 @@ jobs:
         uses: bazel-contrib/setup-bazel@0.15.0
         with:
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-${{ matrix.os }}
+          # The v2 suffix invalidates the cache after the
+          # latex_document rule added a second declared output
+          # (synctex.gz). Bazel's action key doesn't include
+          # the declared-output set, so old cache entries restore
+          # only the PDF and the synctex file silently goes missing.
+          disk-cache: ${{ github.workflow }}-${{ matrix.os }}-v2
           repository-cache: true
 
       - name: Install poppler-utils (for citation grep in biber smoke test)
