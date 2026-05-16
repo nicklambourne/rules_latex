@@ -6,6 +6,8 @@ that, expect breaking changes in any v0.x release.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-16
+
 ### Added
 - **Biber toolchain.** A `biber` field on the `latex_toolchain` rule
   points at a platform-specific biber binary fetched from a
