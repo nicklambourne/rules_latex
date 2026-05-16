@@ -54,21 +54,29 @@ def _latex_cache_snapshot_impl(ctx):
         transitive = _collect_transitive_srcs(ctx.attr.deps),
     ).to_list()
 
+    # Decide whether to include biber in the priming run. Snapshots
+    # built without biber miss bibliography-related TeX Live files, so
+    # users compiling biblatex documents need to opt in here.
+    biber_file = None
+    if ctx.attr.biber:
+        if toolchain.biber == None:
+            fail(
+                "latex_cache_snapshot(biber = True) on {}, but the " +
+                "resolved toolchain has no biber binary. See DESIGN.md " +
+                "§4.9 for the linux/aarch64 workaround.".format(ctx.label),
+            )
+        biber_file = toolchain.biber
+
     launcher = ctx.actions.declare_file(ctx.label.name + ".sh")
 
-    # Build the list of --src flags for the snapshot tool. Each input is
-    # referenced via its runfiles short_path so the script works from
-    # the bazel-run runfiles tree.
     src_args = " \\\n        ".join([
         '--src "$RUNFILES/{}"'.format(s.short_path)
         for s in all_srcs
     ])
+    biber_arg = (
+        '--biber "$RUNFILES/{}"'.format(biber_file.short_path) if biber_file else ""
+    )
 
-    # Find a stable workspace-relative root for the sources. We assume
-    # all srcs live under a single package's source tree (typical
-    # latex_document layout) and use that package's short_path as the
-    # --src-root so any \\input{subdir/foo} references continue to
-    # resolve correctly.
     src_root = main.dirname
 
     script = """\
@@ -90,7 +98,8 @@ exec "$PYTHON" "$RUNFILES/{tool}" \\
     {src_args} \\
     --src-root "$RUNFILES/{src_root}" \\
     --workspace "$BUILD_WORKSPACE_DIRECTORY" \\
-    --output "{output}"
+    --output "{output}" \\
+    {biber_arg}
 """.format(
         pkg = ctx.label.package,
         name = ctx.label.name,
@@ -100,12 +109,14 @@ exec "$PYTHON" "$RUNFILES/{tool}" \\
         src_args = src_args,
         src_root = src_root,
         output = ctx.attr.output,
+        biber_arg = biber_arg,
     )
     ctx.actions.write(launcher, script, is_executable = True)
 
-    runfiles = ctx.runfiles(
-        files = [tectonic, ctx.file._tool] + all_srcs,
-    )
+    runfiles_files = [tectonic, ctx.file._tool] + all_srcs
+    if biber_file:
+        runfiles_files.append(biber_file)
+    runfiles = ctx.runfiles(files = runfiles_files)
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
 
 latex_cache_snapshot = rule(
@@ -135,6 +146,13 @@ latex_cache_snapshot = rule(
             doc = "Destination path for the snapshot tarball, relative to " +
                   "the workspace root.",
             mandatory = True,
+        ),
+        "biber": attr.bool(
+            doc = "If True, prime the cache with biber on PATH so the " +
+                  "resulting snapshot contains bibliography-related files. " +
+                  "Required when consumers compile biblatex documents " +
+                  "against this snapshot.",
+            default = False,
         ),
         "_tool": attr.label(
             default = "//tools:make_cache_snapshot.py",

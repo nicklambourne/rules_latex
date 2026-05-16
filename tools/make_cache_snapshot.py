@@ -83,6 +83,19 @@ def parse_args() -> argparse.Namespace:
             "the source tree (BUILD_WORKSPACE_DIRECTORY)."
         ),
     )
+    parser.add_argument(
+        "--biber",
+        type=Path,
+        default=None,
+        help=(
+            "Optional path to a biber executable. When set, the script "
+            "symlinks it into a per-run temporary directory and prepends "
+            "that directory to PATH so the underlying tectonic invocation "
+            "can resolve `biber` by basename. This is what lets "
+            "`\\addbibresource` and similar biblatex directives work during "
+            "cache priming."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -118,16 +131,41 @@ def stage_sources(
     return work_dir / main.name
 
 
-def run_tectonic(tectonic: Path, main_in_workdir: Path, cache_dir: Path) -> None:
+def run_tectonic(
+    tectonic: Path,
+    main_in_workdir: Path,
+    cache_dir: Path,
+    biber: Path | None = None,
+) -> None:
     """Run tectonic with a dedicated cache directory.
 
     We pass --keep-logs so a compile failure leaves a .log behind in the
     working directory for debugging. The compile output (.pdf) itself
     is discarded — we only care about populating the cache.
+
+    When ``biber`` is supplied we symlink it into a scratch dir and
+    prepend that dir to PATH so tectonic's bibliography subprocess can
+    resolve `biber` by basename.
     """
     env = os.environ.copy()
     env["TECTONIC_CACHE_DIR"] = str(cache_dir)
     env["LC_ALL"] = "C.UTF-8"
+
+    biber_dir_owned: tempfile.TemporaryDirectory[str] | None = None
+    if biber is not None:
+        biber_dir_owned = tempfile.TemporaryDirectory(prefix="rules_latex_biber_")
+        biber_link = Path(biber_dir_owned.name) / "biber"
+        try:
+            biber_link.symlink_to(biber.resolve())
+        except OSError:
+            # Fallback to copy for filesystems that don't support symlinks.
+            shutil.copy2(biber, biber_link)
+            biber_link.chmod(0o755)
+        env["PATH"] = "{}:{}".format(
+            biber_dir_owned.name,
+            env.get("PATH", "/usr/bin:/bin"),
+        )
+
     cmd = [
         str(tectonic),
         "-X",
@@ -138,7 +176,11 @@ def run_tectonic(tectonic: Path, main_in_workdir: Path, cache_dir: Path) -> None
         str(main_in_workdir),
     ]
     print("$ " + " ".join(cmd), file=sys.stderr)
-    result = subprocess.run(cmd, env=env, check=False)
+    try:
+        result = subprocess.run(cmd, env=env, check=False)
+    finally:
+        if biber_dir_owned is not None:
+            biber_dir_owned.cleanup()
     if result.returncode != 0:
         raise SystemExit(
             f"tectonic exited with code {result.returncode}; see log in "
@@ -196,7 +238,7 @@ def main() -> int:
         main_in_workdir = stage_sources(
             args.main, args.srcs, args.src_root, work_dir
         )
-        run_tectonic(args.tectonic, main_in_workdir, cache_dir)
+        run_tectonic(args.tectonic, main_in_workdir, cache_dir, biber=args.biber)
         pack_cache(cache_dir, output)
 
     size_mb = output.stat().st_size / (1024 * 1024)
