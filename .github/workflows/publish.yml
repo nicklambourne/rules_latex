@@ -16,6 +16,22 @@ on:
         description: "Release tag to publish to BCR (e.g. v0.2.0)"
         required: true
         type: string
+      templates_ref:
+        description: |
+          Optional git ref to read .bcr/ templates from. Defaults to
+          the tag itself, but can be overridden (e.g. to "master") when
+          republishing a release whose templates had errors.
+        required: false
+        type: string
+        default: ""
+      release_artifacts_run_id:
+        description: |
+          Workflow run id to download release_files/attestations from.
+          Defaults to the current run; set explicitly when retrying a
+          publish out-of-band against an older release's artifacts.
+        required: false
+        type: string
+        default: ""
   workflow_call:
     inputs:
       tag_name:
@@ -48,6 +64,14 @@ jobs:
       # release_ruleset reusable workflow (see release.yml). The
       # publish workflow picks them up automatically.
       attest: true
+      # When invoked via workflow_dispatch with templates_ref set,
+      # read .bcr/ templates from that ref (e.g. master) instead of
+      # the tag. Falls back to the tag for normal workflow_call
+      # invocations from release.yml.
+      templates_ref: ${{ inputs.templates_ref || inputs.tag_name }}
+      # Same idea for release artifacts: dispatch can point at a past
+      # release's run id; workflow_call uses the current run.
+      release_artifacts_run_id: ${{ inputs.release_artifacts_run_id || github.run_id }}
     secrets:
       # Classic PAT with `repo` + `workflow` scopes, owned by the
       # account that maintains the registry fork above.
