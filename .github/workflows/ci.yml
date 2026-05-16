@@ -194,6 +194,10 @@ jobs:
           echo "Reverse-sync body: $(cat /tmp/reverse.body)"
           if [[ "${http_status}" != "200" ]]; then
             echo "FAIL: expected HTTP 200, got ${http_status}" >&2
+            echo "--- pwd / bazel-bin tree ---" >&2
+            pwd >&2
+            ls -la bazel-bin/ 2>&1 | head -10 >&2 || true
+            ls -la bazel-bin/hello/ 2>&1 | head -20 >&2 || true
             echo "--- synctex_serve.log tail ---" >&2
             tail -30 /tmp/synctex_serve.log >&2 || true
             exit 1
