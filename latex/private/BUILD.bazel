@@ -2,4 +2,9 @@
 
 package(default_visibility = ["//latex:__subpackages__"])
 
-exports_files(glob(["*.bzl"]))
+exports_files(
+    glob([
+        "*.bzl",
+        "*.py.tpl",
+    ]),
+)
