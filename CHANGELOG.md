@@ -7,6 +7,33 @@ that, expect breaking changes in any v0.x release.
 ## [Unreleased]
 
 ### Added
+- **Biber toolchain.** A `biber` field on the `latex_toolchain` rule
+  points at a platform-specific biber binary fetched from a
+  rules_latex-owned GitHub release mirror (`biber-mirror-v2.17`). The
+  toolchain is materialised by the same `tectonic` module extension
+  that wires up tectonic. Pinned to biber 2.17 to match the biblatex
+  v3.8 control-file format shipped in the current `tlextras-2022.0r0`
+  bundle (see DESIGN.md §4.10). Available on linux/x86_64,
+  macos/x86_64+aarch64 (universal), and windows/x86_64; linux/aarch64
+  is gapped (see DESIGN.md §4.9).
+- **`latex_document(biber = True)`.** When set, the action stages the
+  toolchain biber binary onto PATH so tectonic's biblatex subprocess
+  finds it. Optional `biber_strategy = "system"` escape hatch
+  propagates `$PATH` for users on linux/aarch64 (or air-gapped builds
+  with a pre-installed system biber).
+- **Implicit cache pipeline.** `latex_document` now synthesises a
+  two-action build for documents without an explicit `cache =` or
+  toolchain bundle: `TectonicPopulateCache` does one online prime
+  (content-addressed by .tex sources × tectonic × bundle URL) and
+  feeds the resulting `tar.gz` into a hermetic `TectonicCompile`. The
+  online prime is action-cached so subsequent builds skip it
+  entirely. Net effect: users get a cache snapshot for free without
+  declaring any new targets or checking anything in. See DESIGN.md
+  §4.4.
+- **`latex_cache_snapshot(biber = True)`.** Same biber wiring as
+  above, for the manual-vendoring path. Snapshots primed without
+  biber are missing biblatex-related files and won't satisfy
+  `latex_document(biber = True)` consumers.
 - `latex_document(synctex = True)` produces a `<name>.synctex.gz` next
   to the PDF, exposed via the `synctex` OutputGroup.
 - `latex_serve_web` auto-discovers the synctex output when the document
@@ -21,8 +48,14 @@ that, expect breaking changes in any v0.x release.
   extension (`@rules_latex_pdfjs`), and served at
   `/_pdfjs/pdf.mjs` + `/_pdfjs/pdf.worker.mjs` from the running
   server. Air-gapped live preview now works out of the box.
+- New `thesis_like` example: a minimal biblatex+biber document that
+  exercises the implicit-cache pipeline end-to-end.
 
 ### Changed
+- The `latex_toolchain` rule grew a `biber` attribute. Auto-generated
+  toolchain BUILD files include it when a biber binary is available
+  for the platform; absent otherwise. Backwards-compatible — existing
+  toolchains continue to work, just without biber support.
 - `latex_serve_web` no longer accepts a `pdfjs_version` attribute; the
   version is pinned in `//latex/private:pdfjs_versions.bzl` and bumped
   via a normal rules_latex release. To override the URL/SHA, fork the

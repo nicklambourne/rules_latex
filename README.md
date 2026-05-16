@@ -33,10 +33,6 @@ bazel_dep(name = "rules_latex", version = "0.1.0")
 
 tectonic = use_extension("@rules_latex//latex/toolchain:extensions.bzl", "tectonic")
 tectonic.toolchain()
-# Opt into the pinned offline package bundle for fully hermetic, no-network
-# compilation. Remove this line for online mode (fetches packages on first
-# run from tectonic's CDN).
-tectonic.bundle()
 use_repo(tectonic, "rules_latex_tectonic_toolchains")
 register_toolchains("@rules_latex_tectonic_toolchains//:all")
 ```
@@ -44,8 +40,7 @@ register_toolchains("@rules_latex_tectonic_toolchains//:all")
 In a `BUILD.bazel`:
 
 ```python
-load("@rules_latex//latex:defs.bzl",
-     "latex_cache_snapshot", "latex_document", "latex_library", "latex_test")
+load("@rules_latex//latex:defs.bzl", "latex_document", "latex_library", "latex_test")
 
 latex_library(
     name = "preamble",
@@ -57,21 +52,8 @@ latex_document(
     main = "cv.tex",
     srcs = ["cv.tex"],
     deps = [":preamble"],
-    # Optional: produce byte-identical PDFs across runs.
-    reproducible = True,
-    # Optional: build hermetically against a checked-in cache snapshot
-    # produced by //:cv_snapshot below.
-    cache = "cv_cache.tar.gz",
-)
-
-# Run once with internet to (re-)generate cv_cache.tar.gz:
-#     bazel run //:cv_snapshot
-latex_cache_snapshot(
-    name = "cv_snapshot",
-    main = "cv.tex",
-    srcs = ["cv.tex"],
-    deps = [":preamble"],
-    output = "cv_cache.tar.gz",
+    # Enable biber for biblatex-using documents (thesis, papers, ...).
+    biber = True,
 )
 
 # Regression test: fails if cv.tex stops compiling cleanly.
@@ -80,16 +62,46 @@ latex_test(
     main = "cv.tex",
     srcs = ["cv.tex"],
     deps = [":preamble"],
-    cache = "cv_cache.tar.gz",
 )
 ```
 
 Then:
 
 ```bash
-bazel run //:cv_snapshot     # once, with internet; commit cv_cache.tar.gz
-bazel build //:cv            # subsequently, fully offline, ~seconds
+bazel build //:cv            # first build: ~30-90s online prime + offline compile
+bazel build //:cv            # subsequent builds: ~1-5s (action cache hit)
 bazel test //:cv_compiles
+```
+
+That's it — no `latex_cache_snapshot` target, no checked-in tarball,
+no enumerated `@bazel_latex//packages:foo` deps. The rule transparently
+populates a per-document cache from the pinned Tectonic bundle the
+first time you build, then runs the actual compile offline against
+that cache. Bazel's action cache makes subsequent builds (including
+across machines via the remote cache) skip the online prime entirely.
+
+For fully air-gapped builds, opt into a checked-in cache snapshot:
+
+```python
+# Run once with internet to (re-)generate cv_cache.tar.gz:
+#     bazel run //:cv_snapshot
+latex_cache_snapshot(
+    name = "cv_snapshot",
+    main = "cv.tex",
+    srcs = ["cv.tex"],
+    deps = [":preamble"],
+    output = "cv_cache.tar.gz",
+    biber = True,
+)
+
+latex_document(
+    name = "cv",
+    main = "cv.tex",
+    srcs = ["cv.tex"],
+    deps = [":preamble"],
+    biber = True,
+    cache = "cv_cache.tar.gz",   # skips the implicit pipeline entirely
+)
 ```
 
 A complete, runnable example lives under [`example/`](./example).

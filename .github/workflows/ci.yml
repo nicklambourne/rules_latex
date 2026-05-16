@@ -28,6 +28,19 @@ jobs:
           disk-cache: ${{ github.workflow }}-${{ matrix.os }}
           repository-cache: true
 
+      - name: Install poppler-utils (for citation grep in biber smoke test)
+        shell: bash
+        run: |
+          if command -v apt-get > /dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -qq -y poppler-utils
+          elif command -v brew > /dev/null; then
+            brew install poppler > /dev/null
+          else
+            echo "no supported package manager; pdftotext-dependent steps will skip themselves"
+          fi
+          command -v pdftotext || echo "pdftotext not installed; biber citation grep will be skipped"
+
       - name: Build rules_latex (root)
         run: bazel build //... --config=ci
 
@@ -183,6 +196,47 @@ jobs:
         run: |
           # Uses the checked-in cache snapshot, so this is hermetic.
           bazel test //:hello_compiles --config=ci
+
+      - name: Build biblatex-using document via implicit cache pipeline
+        working-directory: example
+        run: |
+          # //:thesis_like has no `cache` attribute, so the rule
+          # synthesises a PopulateCache action that primes a cache with
+          # biber on PATH, then feeds it to a hermetic TectonicCompile.
+          # This exercises both the biber toolchain and the
+          # implicit-pipeline machinery added in v0.2.
+          #
+          # First build is slow (online prime). Skip retry for now
+          # because the PopulateCache action is content-addressed —
+          # if it hits relay.fullyjustified.net flakes, the action
+          # cache hides it from subsequent runs.
+          attempt=1
+          max_attempts=3
+          while true; do
+            if bazel build //:thesis_like --config=ci; then
+              break
+            fi
+            if (( attempt >= max_attempts )); then
+              echo "FAIL: //:thesis_like build failed after ${max_attempts} attempts." >&2
+              exit 1
+            fi
+            sleep $(( 5 * attempt ))
+            attempt=$(( attempt + 1 ))
+          done
+
+          # The PDF should contain the resolved citation that biber
+          # produced (otherwise biber didn't run or the cache wasn't
+          # populated correctly). Spot-check with a simple grep on
+          # extracted text — installing poppler is the only way to
+          # do this portably from a shell step.
+          ls -lh bazel-bin/thesis_like.pdf
+          file bazel-bin/thesis_like.pdf | grep -q "PDF document"
+          if command -v pdftotext > /dev/null; then
+            pdftotext bazel-bin/thesis_like.pdf - | grep -q "Knuth"
+            echo "biber + biblatex citation resolved OK"
+          else
+            echo "pdftotext not available; skipped citation grep"
+          fi
 
       - name: Verify reproducible build is byte-identical
         working-directory: example

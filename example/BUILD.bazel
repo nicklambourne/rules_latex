@@ -101,3 +101,19 @@ latex_test(
     main = "hello.tex",
     deps = [":preamble"],
 )
+
+# End-to-end demonstration of the biber toolchain + implicit cache
+# pipeline. No explicit cache target, no checked-in tarball — the rule
+# synthesises a TectonicPopulateCache action that runs an online prime
+# with biber on PATH, then runs the hermetic TectonicCompile against
+# the resulting cache. After the first build the action cache makes
+# subsequent rebuilds offline-fast.
+latex_document(
+    name = "thesis_like",
+    srcs = [
+        "thesis_like.bib",
+        "thesis_like.tex",
+    ],
+    biber = True,
+    main = "thesis_like.tex",
+)

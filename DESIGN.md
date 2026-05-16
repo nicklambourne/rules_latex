@@ -104,35 +104,58 @@ By default, Tectonic fetches its package bundle on first run from
 `relay.fullyjustified.net`. This is convenient but non-hermetic and a single
 point of failure.
 
-`rules_latex` supports three modes:
+`rules_latex` supports four modes, in priority order:
 
-1. **Online mode (default).** No `tectonic.bundle()` tag in the consumer's
-   `MODULE.bazel` and no per-document `cache = ...`; Tectonic reaches out to
-   fetch packages on first run, caching them in a per-action scratch
-   directory. Documented as "fine for local dev, not for CI".
-2. **Full bundle.** When `tectonic.bundle()` is declared on the `tectonic`
-   module extension, a `tectonic_bundle_repository` http-fetches the pinned
-   bundle (`tlextras-2021.3r1.tar`, sha256 published alongside the
-   tectonic-typesetting/tectonic-texlive-bundles GitHub release) and feeds
+1. **Per-document checked-in cache snapshot.** A `latex_cache_snapshot`
+   target is run once with `bazel run` to compile the document in
+   online mode, capture the resulting tectonic cache directory
+   (typically 10–100 MB depending on the document), and tar it up
+   reproducibly into the source tree. The `latex_document(cache =
+   ...)` attribute then consumes that snapshot: the action extracts
+   it into `$TECTONIC_CACHE_DIR` and runs with `--only-cached`,
+   producing a fully hermetic build that doesn't pull the full
+   bundle and doesn't run any online prime. Best for air-gapped
+   builds and reproducible distribution. See
+   [`latex/private/latex_cache_snapshot.bzl`](./latex/private/latex_cache_snapshot.bzl).
+2. **Full bundle.** When `tectonic.bundle()` is declared on the
+   `tectonic` module extension, a `tectonic_bundle_repository`
+   http-fetches the pinned bundle (`tlextras-2022.0r0.tar`) and feeds
    it into every materialised `latex_toolchain`. Actions run with
-   `--bundle <path>` and `--only-cached`, no network access required at
-   build time. The downside: every first build fetches ~3 GB.
-3. **Per-document cache snapshot.** A `latex_cache_snapshot` target is run
-   once with `bazel run` to compile the document in online mode, capture
-   the resulting tectonic cache directory (typically 10–100 MB depending
-   on the document), and tar it up reproducibly into the source tree. The
-   `latex_document(cache = ...)` attribute then consumes that snapshot:
-   the action extracts it into `$TECTONIC_CACHE_DIR` and runs with
-   `--only-cached`, producing a fully hermetic build that doesn't pull the
-   full bundle. This is much smaller than the full bundle approach,
-   content-addressed, and only needs refreshing when the document starts
-   `\\usepackage`'ing something new. See
-   [`latex/private/latex_cache_snapshot.bzl`](./latex/private/latex_cache_snapshot.bzl)
-   and [`tools/make_cache_snapshot.py`](./tools/make_cache_snapshot.py).
+   `--bundle <path>` and `--only-cached`, no network access at build
+   time. The downside: every first build fetches ~3 GB.
+3. **Implicit cache pipeline (default, new in v0.2).** When neither
+   (1) nor (2) is set, the `latex_document` rule synthesises a
+   two-action pipeline:
+   - `TectonicPopulateCache` runs `tectonic` ONCE in online mode
+     against the document's sources, captures the resulting cache
+     directory as a deterministic `.tar.gz`, and emits it as a
+     Bazel-declared output. The action is marked
+     `requires-network = "1"` and content-addressed by .tex sources +
+     tectonic toolchain version.
+   - `TectonicCompile` consumes that tarball as an action input,
+     extracts it into `$TECTONIC_CACHE_DIR`, and runs tectonic with
+     `--only-cached` — fully hermetic.
 
-Snapshot mode and full-bundle mode are not exclusive — they coexist on a
-per-target basis: the `cache = ...` attribute always wins over the
-toolchain-level bundle when both are set.
+   Because PopulateCache is content-addressed, Bazel's action cache
+   makes it a one-time cost per (sources × tectonic × bundle URL)
+   tuple. Adding a new `\\usepackage` invalidates the cache; CI shares
+   warm caches via the remote cache. Subsequent local rebuilds with
+   identical sources hit both action caches and complete in under a
+   second. **Users don't write any cache target or check anything in
+   for this to work.**
+4. **Fully online (legacy).** Setting
+   `tectonic_args = ["--no-cache-download-only"]` (or similar) on a
+   `latex_document` would suppress (3) and let tectonic fetch
+   packages itself per-action. Not currently exposed because we have
+   no good use case — kept here for completeness.
+
+Mode precedence: explicit `cache =` always wins; otherwise
+toolchain-level bundle wins; otherwise the implicit pipeline kicks
+in. All three offline modes produce identical PDFs from identical
+sources.
+
+See [`latex/private/latex_document.bzl`](./latex/private/latex_document.bzl)
+and [`tools/make_cache_snapshot.py`](./tools/make_cache_snapshot.py).
 
 ### 4.5 Reproducibility
 
@@ -231,6 +254,76 @@ the natural surface would be a `POST /sync/forward` endpoint that the
 editor posts to, with the server pushing a `jump-to-page-N-line-Y`
 event over the existing SSE channel. See §5.6 for the discussion.
 
+### 4.9 Biber
+
+Tectonic implements XeTeX in-process but **shells out to `biber` as an
+external executable** when a document uses `\addbibresource` /
+`\bibliography` via the `biblatex` package. Under Bazel's sandbox the
+PATH is scrubbed, so a system-installed biber isn't visible. To keep
+biblatex-based documents building hermetically, `rules_latex` ships a
+biber toolchain alongside the tectonic toolchain.
+
+The biber binary lives in `@rules_latex_biber_<platform>`,
+materialised by the same `tectonic` module extension that wires up
+the tectonic binary. The pinned version is fetched from a
+**rules_latex-owned GitHub release mirror** (`biber-mirror-v<version>`)
+rather than directly from SourceForge, because SourceForge only
+serves predictable URLs for the `current` release rather than
+version-pinned ones — content-addressed pinning against upstream's
+URL scheme would break on every biber bump.
+
+#### Activation modes
+
+`latex_document(biber = ...)` and `latex_cache_snapshot(biber = ...)`
+accept a boolean. When True, the action stages the toolchain biber
+binary into a `mktemp -d` scratch dir and prepends that dir to PATH so
+tectonic's biber subprocess resolves it by basename.
+
+#### Linux arm64 gap
+
+Upstream doesn't ship a prebuilt biber for Linux arm64. The toolchain
+extension materialises biber repos only for platforms in
+`BIBER_RELEASES` — currently linux/x86_64, macos/x86_64+aarch64
+(universal), and windows/x86_64. On linux/aarch64 a document with
+`biber = True` fails at analysis time with a pointer to the
+workarounds:
+
+1. Cross-compile on linux/x86_64 (e.g. CI runs on a Graviton runner
+   but the build happens via a remote executor on x86_64).
+2. Install biber via the distro package manager and set
+   `biber_strategy = "system"` on affected targets. Less hermetic —
+   the build's behaviour depends on which biber version is on
+   `$PATH`, which may not match the rest of the pinned toolchain —
+   but unblocks Linux arm64 users today.
+3. Wait for the v0.3 plan: build biber from source via a `rules_perl`
+   integration. This is a multi-day project (Biber has 50+ CPAN
+   module deps) and not justified for v0.2.
+
+### 4.10 Biber/biblatex version coupling
+
+Biber and biblatex are **tightly coupled by a "control file format"
+version number**. biblatex writes a control file in the format it
+knows; biber refuses to process a control file whose format it
+doesn't recognise. Each minor biber release maps to a single
+acceptable control file version, and biblatex point-releases bump the
+format version periodically.
+
+Concretely, the pinned tectonic bundle (`tlextras-2022.0r0`, dated
+2022-09-25) ships a build of biblatex that writes control file v3.8.
+Biber 2.17 reads v3.8; biber 2.18+ require v3.9 or newer. So
+rules_latex must pin biber 2.17 — not the latest 2.21 — until the
+bundle is refreshed.
+
+The upstream `tectonic-texlive-bundles` project (which historically
+shipped bundle updates) was archived in October 2024 with no
+successor, so we're stuck on this pair until either:
+
+* Tectonic upstream resurrects bundle distribution and we follow with
+  matching biber, or
+* `rules_latex` ships its own bundle (built from a TeX Live source
+  tree with `tectonic -X bundle create`) and bumps both biblatex and
+  biber together. This is a v1.0 candidate; tracked in §5.8.
+
 ## 5. Open questions / future work
 
 These are deliberately out of scope for v0.1 but worth flagging.
@@ -238,9 +331,10 @@ These are deliberately out of scope for v0.1 but worth flagging.
 1. **Tectonic v2 workspace mode.** Tectonic v2 introduced a project format
    with `Tectonic.toml`. Worth supporting eventually, but the simpler
    `-X compile <main.tex>` invocation is enough for v0.1.
-2. **`biber` / `bibtex` / `makeindex` toolchain attrs.** Tectonic vendors
-   these internally, but advanced workflows may want to swap them. Add as
-   optional fields on `latex_toolchain` later if there's demand.
+2. **`bibtex` / `makeindex` toolchain attrs.** Tectonic vendors these
+   internally, but advanced workflows may want to swap them. Add as
+   optional fields on `latex_toolchain` later if there's demand. Biber
+   is already done (§4.9).
 3. **`latex_lint`.** Wraps `chktex` / `lacheck`. Could ship as an optional
    toolchain.
 4. **Bundle updates.** The current pinned bundle is `tlextras-2022.0r0`
@@ -278,6 +372,24 @@ These are deliberately out of scope for v0.1 but worth flagging.
    piggybacks on the existing SSE channel for the resulting jump
    event. Revisit if a future feature genuinely needs duplex binary
    comms.
+8. **`rules_latex`-shipped TeX Live bundle.** The pinned upstream
+   `tlextras-2022.0r0` bundle and the matched biber 2.17 are both
+   ~3 years stale (and effectively unmaintained — see §4.10). The
+   long-term fix is for `rules_latex` to build its own bundle from a
+   recent TeX Live source tree using `tectonic -X bundle create`,
+   host it on the `rules_latex` GitHub releases, and bump biber to
+   match. This is a multi-day project (the upstream
+   `tectonic-texlive-bundles` builder is a Rust program plus a few
+   thousand lines of Perl glue) and not v0.2 material, but it's the
+   only path to landing modern biblatex/CTAN.
+9. **Biber from source for linux/aarch64.** Upstream ships no
+   prebuilt biber for that triple. Building biber from source means
+   resolving its 50+ CPAN dependencies via a Bazel-friendly Perl
+   ecosystem (most likely `rules_perl` plus a vendored Perl), then
+   driving `pp` (the PAR packager) to bundle everything into a
+   single executable. Not trivial, but the only fully-hermetic
+   answer for that platform. Tracked separately because of the
+   significant work involved.
 
 ## 6. Versioning
 
