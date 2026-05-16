@@ -185,7 +185,7 @@ jobs:
             http://127.0.0.1:8766/sync/reverse)"
           echo "Reverse-sync response: $resp"
           echo "$resp" | python3 -c \
-            'import sys, json; r=json.load(sys.stdin); assert r["ok"] is True, r; assert r["file"] == "hello.tex", r; assert isinstance(r["line"], int), r; print("reverse-sync OK:", r)'
+            'import sys, json; r=json.load(sys.stdin); assert r["ok"] is True, r; assert r["file"] == "hello/hello.tex", r; assert isinstance(r["line"], int), r; print("reverse-sync OK:", r)'
 
           kill "$PID" || true
           wait "$PID" 2>/dev/null || true
