@@ -1,28 +1,49 @@
 # rules_latex
 
+[![CI](https://github.com/nicklambourne/rules_latex/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/nicklambourne/rules_latex/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/nicklambourne/rules_latex?label=release&sort=semver)](https://github.com/nicklambourne/rules_latex/releases)
+[![License](https://img.shields.io/github/license/nicklambourne/rules_latex)](./LICENSE)
+[![Bazel 8](https://img.shields.io/badge/bazel-8.0-43A047)](./.bazelversion)
+
 Bazel rules for building LaTeX documents with the
 [Tectonic](https://tectonic-typesetting.github.io/) typesetting engine.
+Bzlmod-only, toolchain-based, hermetic, with auto-managed package caching
+and an Overleaf-style live preview.
 
-> Status: **pre-alpha**. APIs may change without notice until v0.1.0 is tagged.
+```python
+load("@rules_latex//latex:defs.bzl", "latex_document")
 
-## Why?
+latex_document(
+    name = "cv",
+    main = "cv.tex",
+    srcs = ["cv.tex"],
+)
+```
 
-Existing Bazel LaTeX rule sets (notably
-[`bazel_latex`](https://github.com/ProdriveTechnologies/bazel-latex)) wrap a
-traditional TeX Live distribution and require users to declare every required
-LaTeX package as an explicit Bazel target. This is hermetic but verbose and
-brittle.
+That's it. No package enumeration, no checked-in tarballs, no system
+LaTeX install. `bazel build //:cv` works on a fresh machine.
 
-`rules_latex` takes a different approach:
+## Why
 
-- The toolchain is just a single statically-linked
-  [Tectonic](https://tectonic-typesetting.github.io/) binary, downloaded as a
-  versioned, content-addressed artifact.
-- LaTeX packages are resolved by Tectonic itself from an offline bundle, so
-  consumers don't have to enumerate every `\usepackage{...}` in their
-  `BUILD.bazel`.
-- The rules follow modern Bazel conventions: Bzlmod-only, toolchain-based,
-  one binary per `(os, cpu)` platform.
+|                                 | [`bazel_latex`](https://github.com/ProdriveTechnologies/bazel-latex) | **`rules_latex`** (this repo) |
+|---------------------------------|-----------------------------------|--------------------------------|
+| Backend                         | TeX Live (full distribution)      | Tectonic (XeTeX + bundle)      |
+| Package management              | Explicit Bazel labels per `.sty`  | Implicit, by Tectonic at compile time |
+| Module system                   | WORKSPACE + Bzlmod                | Bzlmod-only                    |
+| Bibliography (`biblatex`/biber) | System install, manual flags      | Vendored biber toolchain       |
+| Reproducible builds             | Possible, manual                  | `reproducible = True` attr     |
+| Live preview                    | None                              | `latex_serve` / `latex_serve_web` |
+| In-browser SyncTeX              | None                              | Click PDF → jump to source     |
+| Air-gapped CI                   | Yes (vendored TeX Live)           | Yes (`cache = "foo.tar.gz"`)   |
+| First-build cost                | Many MB of TeX Live as needed     | ~20 MB tectonic + 10–100 MB cache snapshot per document |
+
+The first time you build, `rules_latex` runs Tectonic once online to
+populate a per-document cache (~10–100 MB depending on the document),
+then runs the actual compile offline against it. Bazel's action cache
+makes the prime a one-time cost; subsequent builds (including across
+CI machines via the remote cache) skip it entirely. See the
+[implicit cache pipeline](./DESIGN.md#44-network-policy) section
+of `DESIGN.md` for the design rationale.
 
 ## Quick start
 
@@ -40,7 +61,12 @@ register_toolchains("@rules_latex_tectonic_toolchains//:all")
 In a `BUILD.bazel`:
 
 ```python
-load("@rules_latex//latex:defs.bzl", "latex_document", "latex_library", "latex_test")
+load(
+    "@rules_latex//latex:defs.bzl",
+    "latex_document",
+    "latex_library",
+    "latex_test",
+)
 
 latex_library(
     name = "preamble",
@@ -52,11 +78,13 @@ latex_document(
     main = "cv.tex",
     srcs = ["cv.tex"],
     deps = [":preamble"],
-    # Enable biber for biblatex-using documents (thesis, papers, ...).
-    biber = True,
+    # biber = True              # for biblatex documents
+    # reproducible = True       # byte-identical PDF across builds
+    # synctex = True            # click PDF → jump to source in serve_web
+    # cache = "cv_cache.tar.gz" # for fully air-gapped builds
 )
 
-# Regression test: fails if cv.tex stops compiling cleanly.
+# Catch regressions: fails CI if cv.tex stops compiling cleanly.
 latex_test(
     name = "cv_compiles",
     main = "cv.tex",
@@ -65,46 +93,14 @@ latex_test(
 )
 ```
 
-Then:
-
 ```bash
-bazel build //:cv            # first build: ~30-90s online prime + offline compile
-bazel build //:cv            # subsequent builds: ~1-5s (action cache hit)
+bazel build //:cv            # first build: ~30-90s (online prime + compile)
+bazel build //:cv            # subsequent builds: ~1-5s (action-cache hit)
 bazel test //:cv_compiles
 ```
 
-That's it — no `latex_cache_snapshot` target, no checked-in tarball,
-no enumerated `@bazel_latex//packages:foo` deps. The rule transparently
-populates a per-document cache from the pinned Tectonic bundle the
-first time you build, then runs the actual compile offline against
-that cache. Bazel's action cache makes subsequent builds (including
-across machines via the remote cache) skip the online prime entirely.
-
-For fully air-gapped builds, opt into a checked-in cache snapshot:
-
-```python
-# Run once with internet to (re-)generate cv_cache.tar.gz:
-#     bazel run //:cv_snapshot
-latex_cache_snapshot(
-    name = "cv_snapshot",
-    main = "cv.tex",
-    srcs = ["cv.tex"],
-    deps = [":preamble"],
-    output = "cv_cache.tar.gz",
-    biber = True,
-)
-
-latex_document(
-    name = "cv",
-    main = "cv.tex",
-    srcs = ["cv.tex"],
-    deps = [":preamble"],
-    biber = True,
-    cache = "cv_cache.tar.gz",   # skips the implicit pipeline entirely
-)
-```
-
-A complete, runnable example lives under [`example/`](./example).
+For more, see the [examples](./examples/) directory — letter, CV,
+paper, thesis, and beamer slides — and the full [user guide](https://nicklambourne.github.io/rules_latex/).
 
 ## Rules
 
@@ -120,119 +116,98 @@ A complete, runnable example lives under [`example/`](./example).
 
 All seven are loaded from `@rules_latex//latex:defs.bzl`.
 
-## Live preview
+## Features
 
-For an Overleaf-style edit-and-see-it-update experience, declare a
-`latex_serve` (system PDF viewer) or `latex_serve_web` (in-browser
-preview) target alongside your document:
+### Bibliography (biblatex / biber)
+
+```python
+latex_document(
+    name = "paper",
+    main = "paper.tex",
+    srcs = glob(["paper.tex", "references.bib"]),
+    biber = True,
+)
+```
+
+A vendored biber binary (pinned to 2.17 to match the bundle's biblatex
+3.17) is staged onto PATH at compile time. On Linux arm64 — where
+upstream ships no prebuilt biber — set `biber_strategy = "system"` to
+fall back to a distro-installed binary. See
+[DESIGN.md §4.9](./DESIGN.md#49-biber).
+
+### Live preview
+
+```bash
+bazel run //:cv_live        # opens cv.pdf in your system viewer, auto-rebuilds on save
+bazel run //:cv_web         # http://127.0.0.1:8765/ — PDF.js + SSE auto-reload
+```
+
+`latex_serve_web` self-hosts PDF.js (no CDN), preserves scroll
+position across reloads, and offers click-to-source via SyncTeX when
+the underlying document declares `synctex = True`.
+
+### Reproducible PDFs
 
 ```python
 latex_document(
     name = "cv",
     main = "cv.tex",
     srcs = ["cv.tex"],
-    cache = "cv_cache.tar.gz",   # so live rebuilds are offline and fast
-    synctex = True,              # click-to-source in latex_serve_web
-)
-
-# System-PDF-viewer flavour (lightest).
-latex_serve(
-    name = "cv_live",
-    document = ":cv",
-)
-
-# In-browser flavour (Overleaf-like). PDF.js handles rendering (served
-# from the self-hosted /_pdfjs/ endpoint, no CDN), the server pushes
-# 'reload' events over Server-Sent Events on every successful rebuild,
-# and scroll position is preserved across updates. Clicking on the PDF
-# jumps to the source line via SyncTeX when `synctex = True` is set on
-# the document.
-latex_serve_web(
-    name = "cv_web",
-    document = ":cv",
+    reproducible = True,
 )
 ```
 
-Then in one terminal:
+Combines `SOURCE_DATE_EPOCH=0` with Tectonic's `-Z deterministic-mode`
+to produce byte-identical output across clean builds. CI verifies this
+on every push.
 
-```bash
-bazel run //:cv_live
-# Watches cv.tex (and any latex_library/latex_pkg deps), rebuilds on
-# every save, opens bazel-bin/cv.pdf in the system PDF viewer.
-```
+### Hermetic offline builds
 
-Or in a browser-driven workflow:
-
-```bash
-bazel run //:cv_web
-# serving live preview at http://127.0.0.1:8765/
-# (open the URL; edit cv.tex; the page auto-refreshes the PDF;
-#  click anywhere in the PDF to see the corresponding source line)
-```
-
-Edit the source in your editor of choice; the PDF is rebuilt within a
-second or so per change. The viewer's own auto-reload behaviour kicks
-in (macOS Preview, Linux Evince/Okular all support this out of the
-box).
-
-Because the rebuild is just `bazel build //:cv` under the hood, it
-shares the toolchain, sandbox, and cache snapshot with normal builds —
-no "works locally, fails in CI" drift.
+Three offline modes plus a default implicit pipeline; the rule
+chooses based on what you've configured. See
+[DESIGN.md §4.4](./DESIGN.md#44-network-policy) for the full
+hierarchy.
 
 ## Supported platforms
 
-`rules_latex` currently ships pinned Tectonic binaries for:
+| Platform        | tectonic | biber             | bundle |
+|-----------------|---------|-------------------|--------|
+| Linux x86_64    | ✅ musl  | ✅ glibc            | ✅      |
+| Linux aarch64   | ✅ musl  | ⚠️ system only     | ✅      |
+| macOS x86_64    | ✅       | ✅ universal binary | ✅      |
+| macOS aarch64   | ✅       | ✅ universal binary | ✅      |
+| Windows x86_64  | ✅ MSVC  | ✅                  | ✅      |
 
-- Linux x86_64 (musl, statically linked)
-- Linux aarch64 (musl, statically linked)
-- macOS x86_64
-- macOS aarch64 (Apple Silicon)
-- Windows x86_64 (MSVC)
+The Linux arm64 biber gap is documented in
+[DESIGN.md §4.9](./DESIGN.md#49-biber); workarounds available today.
 
-## Hermetic builds
+## Project status
 
-`rules_latex` supports four modes (the rule chooses automatically; in
-priority order):
+| Layer | Status |
+|---|---|
+| Core rules (`document`, `library`, `pkg`, `test`) | Stable since v0.1.0 |
+| Toolchain (`tectonic`, `bundle`, `biber`) | Stable since v0.2.0 |
+| Live preview (`serve`, `serve_web`) | Stable since v0.2.0 |
+| SyncTeX reverse-sync | Stable since v0.2.0 |
+| Implicit cache pipeline | Stable since v0.2.0 |
+| Self-hosted PDF.js | Stable since v0.2.0 |
+| Modern biblatex (3.18+) | Blocked on upstream bundle refresh ([#1](https://github.com/nicklambourne/rules_latex/issues/1)) |
+| Linux arm64 biber | Pending v0.3 (build from source) |
+| SyncTeX forward-sync | Future (`DESIGN.md` §5.6) |
 
-1. **Per-document checked-in cache snapshot** (most hermetic). Declare
-   a `latex_cache_snapshot`, run it once with internet to produce a
-   ~10–100 MB tarball, commit it, and set `cache = "foo.tar.gz"` on
-   the document. Subsequent builds run fully offline. Best for
-   air-gapped CI and byte-reproducible release builds.
-2. **Full bundle**. Add `tectonic.bundle()` to your `MODULE.bazel`;
-   the pinned 2.88 GB upstream bundle is fetched once via
-   `download_and_extract` and used as `--bundle` for every compile.
-   Fully hermetic, no per-document setup, but every fresh CI runner
-   spends bandwidth pulling 2.88 GB.
-3. **Implicit cache pipeline** (default, recommended). When neither
-   (1) nor (2) is configured, the rule synthesises a one-time online
-   prime per document, captures the resulting cache as a Bazel
-   action output, and feeds it to a hermetic compile. Bazel's
-   action cache means the prime is shared across local builds and
-   CI runners via the remote cache. You write zero extra build-file
-   plumbing for this.
-4. **Pure online**. Only happens by accident — there's no flag for
-   it. If you somehow disable the implicit pipeline and don't pin a
-   bundle or cache, the legacy "fetch on every action" behaviour
-   would kick in, which we don't recommend.
+## Compatibility
 
-## LaTeX package versions
+- **Bazel**: 8.0+ (Bzlmod-only)
+- **Tectonic**: 0.16.9 (pinned)
+- **biber / biblatex**: 2.17 / 3.17 (paired by control-file format)
+- **TeX Live**: 2022 (frozen — see [DESIGN.md §4.10](./DESIGN.md#410-biberbiblatex-version-coupling-and-the-upstream-bundle-staleness))
 
-The pinned Tectonic bundle dates from 2022 (the upstream
-`tectonic-texlive-bundles` project was archived in October 2024).
-That's fine for ~95% of real-world LaTeX use — all major citation
-styles (APA, Chicago, IEEE, Harvard, Vancouver), tikz, beamer,
-biblatex, etc. were mature by then — but it does mean you don't get
-biblatex 3.18+ or any CTAN packages released after September 2022.
-See `DESIGN.md` §4.10 for the chain of causes and the five
-solution options we've considered. Users who hit a specific
-package's staleness can self-host a newer bundle today via
-`tectonic.bundle()`.
+## Documentation
 
-## Design
-
-For the architectural rationale and an outline of the v0.x → v1.0 roadmap, see
-[`DESIGN.md`](./DESIGN.md).
+- [User guide](https://nicklambourne.github.io/rules_latex/) — generated from Stardoc, with the Material theme
+- [`DESIGN.md`](./DESIGN.md) — architectural rationale, the v0.x → v1.0 roadmap, and open questions
+- [`CHANGELOG.md`](./CHANGELOG.md)
+- [`examples/`](./examples/) — five runnable examples (letter, CV, paper, thesis, beamer)
 
 ## License
 
