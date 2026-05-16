@@ -6,6 +6,25 @@ that, expect breaking changes in any v0.x release.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-05-17
+
+### Fixed
+
+- `latex_test` script generation used `${{...}}` (double braces) for
+  shell variable expansions in a section of the launcher that wasn't
+  passed through `.format()`. macOS bash silently tolerated the
+  malformed form; Linux bash rejected it with "bad substitution",
+  breaking `latex_test` targets in CI. Drop the extra braces.
+
+- Buildifier docstring-header lint regressions on
+  `_resolved_pkg_files` helpers. Add proper one-line summaries.
+
+- `latex_test(biber_strategy = "system")` silently produced a broken
+  test script (`use_system_biber` was set but never wired). Replace
+  silent inability with an explicit `fail()` at analysis time:
+  `latex_test` doesn't currently support system biber because the
+  test sandbox scrubs PATH.
+
 ## [0.3.0] - 2026-05-17
 
 ### Changed (breaking)
