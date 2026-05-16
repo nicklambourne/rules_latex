@@ -1,0 +1,30 @@
+"""An academic paper using biblatex + biber.
+
+Demonstrates:
+  * biblatex with numeric citation style, biber backend (`biber = True`).
+  * A .bib file in the document's srcs.
+  * The implicit cache pipeline running biber on PATH for the prime.
+"""
+
+load("@rules_latex//latex:defs.bzl", "latex_document", "latex_test")
+
+latex_document(
+    name = "paper",
+    srcs = [
+        "paper.tex",
+        "references.bib",
+    ],
+    biber = True,
+    main = "paper.tex",
+    visibility = ["//visibility:public"],
+)
+
+latex_test(
+    name = "paper_compiles",
+    srcs = [
+        "paper.tex",
+        "references.bib",
+    ],
+    biber = True,
+    main = "paper.tex",
+)

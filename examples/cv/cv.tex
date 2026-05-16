@@ -1,0 +1,79 @@
+\documentclass[a4paper,11pt]{article}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage[top=1.2cm,bottom=1.2cm,left=1.5cm,right=1.5cm]{geometry}
+\usepackage[hidelinks]{hyperref}
+\usepackage{enumitem}
+
+\pagestyle{empty}
+\setlist[itemize]{nosep,topsep=0pt,partopsep=0pt,itemsep=2pt,parsep=0pt,leftmargin=*}
+\raggedright
+\setlength{\parskip}{2pt}
+\setlength{\parindent}{0pt}
+
+\newcommand{\header}[1]{%
+    \vspace{4pt}%
+    {\large\bfseries\scshape #1}%
+    \hrule height 0.4pt%
+    \vspace{2pt}%
+}
+
+\begin{document}
+
+\begin{center}
+    {\Huge\scshape Jane Engineer} \\[2pt]
+    Sydney, Australia $\cdot$
+    \href{mailto:jane@example.com}{jane@example.com} $\cdot$
+    \href{https://example.com}{example.com}
+\end{center}
+
+\vspace{-6pt}
+
+\header{Experience}
+
+\textbf{\href{https://example.com}{Example Corp}} \hfill Sydney, NSW \\
+\textit{Staff Engineer} \hfill 2023 -- Present
+\begin{itemize}
+    \item Led the migration of the company's build system from Make
+        to Bazel, reducing average local builds from 8\,min to 90\,s
+        and shrinking CI compute spend by 40\%.
+    \item Designed and implemented internal Bazel rule sets for
+        TypeScript, Python, and LaTeX. The LaTeX one is now open
+        source: \href{https://github.com/nicklambourne/rules_latex}{nicklambourne/rules\_latex}.
+    \item Mentored four engineers through Bazel onboarding;
+        co-authored an internal contribution guide.
+\end{itemize}
+
+\textit{Senior Software Engineer} \hfill 2020 -- 2023
+\begin{itemize}
+    \item Owned the API gateway service: 10k req/s peak, 99.97\% SLO.
+    \item Drove a quarterly engineering-excellence program that
+        improved Tier-1 service reliability by two nines.
+\end{itemize}
+
+\header{Education}
+
+\textbf{University of Queensland} \hfill Brisbane, QLD \\
+B.\,Sc.~Computer Science, First Class Honours \hfill 2016 -- 2019
+
+\header{Selected Open-Source Contributions}
+
+\begin{itemize}
+    \item \href{https://github.com/nicklambourne/rules_latex}{\textbf{rules\_latex}}
+        --- Bazel rules for building LaTeX documents with Tectonic.
+        Bzlmod-only, toolchain-based, in-browser live preview with
+        SyncTeX.
+    \item Various smaller patches to Bazel, Tectonic, and a handful
+        of CTAN packages.
+\end{itemize}
+
+\header{Skills}
+
+\textbf{Build systems}: Bazel (rule authoring, toolchains, remote
+execution), Make, ninja. \\
+\textbf{Languages}: TypeScript, Python, Go, Rust, Starlark, C++. \\
+\textbf{Distributed systems}: Kubernetes, gRPC, distributed tracing,
+event-driven architectures.
+
+\end{document}

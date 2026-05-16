@@ -1,0 +1,23 @@
+"""Aggregate target so `bazel build //...` exercises every example.
+
+See the README in each sub-directory for what the example does:
+
+  * //hello   — the minimal hello-world document
+  * //letter  — single-page formal letter
+  * //cv      — packed-layout single-page CV
+  * //paper   — academic paper with biblatex + biber
+  * //thesis  — multi-chapter book with ToC and bibliography
+  * //beamer  — slide deck
+"""
+
+filegroup(
+    name = "all_examples",
+    srcs = [
+        "//beamer:slides",
+        "//cv",
+        "//hello",
+        "//letter",
+        "//paper",
+        "//thesis",
+    ],
+)

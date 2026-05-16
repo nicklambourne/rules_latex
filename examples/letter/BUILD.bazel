@@ -1,0 +1,24 @@
+"""A formal letter using the standard `letter` document class.
+
+Demonstrates:
+  * The `letter` document class, the simplest of the LaTeX classes
+    targeting a real document shape.
+  * Vanilla `\\usepackage` use with `geometry` and `hyperref`. No
+    package enumeration in the BUILD file thanks to the implicit
+    cache pipeline.
+"""
+
+load("@rules_latex//latex:defs.bzl", "latex_document", "latex_test")
+
+latex_document(
+    name = "letter",
+    srcs = ["letter.tex"],
+    main = "letter.tex",
+    visibility = ["//visibility:public"],
+)
+
+latex_test(
+    name = "letter_compiles",
+    srcs = ["letter.tex"],
+    main = "letter.tex",
+)

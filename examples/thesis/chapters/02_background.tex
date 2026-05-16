@@ -1,0 +1,14 @@
+\chapter{Background}
+\label{ch:background}
+
+Bazel is a content-addressed build system originally developed inside
+Google~\cite{google2007blaze}. Tectonic is a self-contained TeX/LaTeX
+engine derived from XeTeX~\cite{tectonic2025}. The combination has
+appealing properties for reproducible document
+production~\cite{morgenthaler2012searching}.
+
+Both projects emphasise hermeticity, but neither solves the problem
+end-to-end on its own. Bazel needs an actual TeX engine to invoke;
+Tectonic needs an external manager to handle multi-document builds,
+caching, and cross-project sharing. \texttt{rules\_latex} fills the
+gap.

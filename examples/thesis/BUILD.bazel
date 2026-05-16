@@ -1,0 +1,34 @@
+"""A multi-chapter thesis-style document.
+
+Demonstrates:
+  * `book` document class with frontmatter / mainmatter / backmatter.
+  * `\\input{}`-driven chapter structure (chapters live in a subdir).
+  * biblatex + biber with a separate `references.bib` file.
+  * Table of contents.
+
+The compile is non-trivial: tectonic does multiple passes (TeX → biber
+→ TeX) to resolve the ToC and citations.
+"""
+
+load("@rules_latex//latex:defs.bzl", "latex_document", "latex_test")
+
+latex_document(
+    name = "thesis",
+    srcs = [
+        "main.tex",
+        "references.bib",
+    ] + glob(["chapters/*.tex"]),
+    biber = True,
+    main = "main.tex",
+    visibility = ["//visibility:public"],
+)
+
+latex_test(
+    name = "thesis_compiles",
+    srcs = [
+        "main.tex",
+        "references.bib",
+    ] + glob(["chapters/*.tex"]),
+    biber = True,
+    main = "main.tex",
+)

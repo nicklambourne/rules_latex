@@ -1,0 +1,43 @@
+\documentclass[12pt,a4paper,oneside]{book}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[backend=biber,style=numeric,sorting=none]{biblatex}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[hidelinks]{hyperref}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+
+\addbibresource{references.bib}
+
+\title{Thesis Title}
+\author{The Author}
+\date{}
+
+\begin{document}
+
+\frontmatter
+\maketitle
+
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+
+This is a minimal example of the kind of multi-chapter thesis-style
+document \texttt{rules\_latex} can build hermetically. It demonstrates
+biblatex for citations, the \texttt{book} class for chapter
+structure, and the use of \texttt{\textbackslash input} to break
+the document up into chapter files.
+
+\tableofcontents
+
+\mainmatter
+
+\input{chapters/01_introduction}
+\input{chapters/02_background}
+\input{chapters/03_results}
+
+\backmatter
+\printbibliography[heading=bibintoc]
+
+\end{document}

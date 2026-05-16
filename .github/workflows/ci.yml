@@ -45,7 +45,7 @@ jobs:
         run: bazel build //... --config=ci
 
       - name: Smoke test example/hello
-        working-directory: example
+        working-directory: examples
         run: |
           # `hello` builds in online mode, which goes to
           # relay.fullyjustified.net for tectonic's package bundle.
@@ -55,53 +55,53 @@ jobs:
           attempt=1
           max_attempts=3
           while true; do
-            if bazel build //:hello --config=ci; then
+            if bazel build //hello:hello --config=ci; then
               break
             fi
             if (( attempt >= max_attempts )); then
-              echo "FAIL: //:hello build failed after ${max_attempts} attempts." >&2
+              echo "FAIL: //hello:hello build failed after ${max_attempts} attempts." >&2
               exit 1
             fi
             sleep $(( 5 * attempt ))
             attempt=$(( attempt + 1 ))
-            echo "::warning::retrying //:hello (attempt ${attempt}/${max_attempts}) after transient failure"
+            echo "::warning::retrying //hello:hello (attempt ${attempt}/${max_attempts}) after transient failure"
           done
-          ls -lh bazel-bin/hello.pdf
-          file bazel-bin/hello.pdf | grep -q "PDF document"
+          ls -lh bazel-bin/hello/hello.pdf
+          file bazel-bin/hello/hello.pdf | grep -q "PDF document"
 
       - name: Build offline via checked-in cache snapshot
-        working-directory: example
+        working-directory: examples
         run: |
           # Hermetic. No retry needed; any failure here is a real bug.
-          bazel build //:hello_offline --config=ci
-          ls -lh bazel-bin/hello_offline.pdf
-          file bazel-bin/hello_offline.pdf | grep -q "PDF document"
+          bazel build //hello:hello_offline --config=ci
+          ls -lh bazel-bin/hello/hello_offline.pdf
+          file bazel-bin/hello/hello_offline.pdf | grep -q "PDF document"
 
       - name: Build latex_serve launcher
-        working-directory: example
+        working-directory: examples
         run: |
           # We can't easily run an interactive watcher in CI, but
           # building the target catches regressions in the rule, the
           # template expansion, and the LatexInfo propagation from
           # latex_document.
-          bazel build //:hello_serve --config=ci
-          test -x bazel-bin/hello_serve.sh
-          test -f bazel-bin/hello_serve.py
-          grep -q '^DOCUMENT_LABEL = "@@//:hello_offline"' bazel-bin/hello_serve.py
+          bazel build //hello:hello_serve --config=ci
+          test -x bazel-bin/hello/hello_serve.sh
+          test -f bazel-bin/hello/hello_serve.py
+          grep -q '^DOCUMENT_LABEL = "@@//hello:hello_offline"' bazel-bin/hello/hello_serve.py
 
       - name: Build latex_serve_web launcher and smoke-test endpoints
-        working-directory: example
+        working-directory: examples
         run: |
-          bazel build //:hello_serve_web //:hello_synctex_serve --config=ci
-          test -x bazel-bin/hello_serve_web.sh
-          test -f bazel-bin/hello_serve_web.py
-          grep -q '^DOCUMENT_LABEL = "@@//:hello_offline"' bazel-bin/hello_serve_web.py
+          bazel build //hello:hello_serve_web //hello:hello_synctex_serve --config=ci
+          test -x bazel-bin/hello/hello_serve_web.sh
+          test -f bazel-bin/hello/hello_serve_web.py
+          grep -q '^DOCUMENT_LABEL = "@@//hello:hello_offline"' bazel-bin/hello/hello_serve_web.py
 
           # Boot the server in the background, hit each endpoint, kill
           # it. Proves the http.server wiring works end-to-end against
           # the checked-in cache snapshot, and that the self-hosted
           # PDF.js endpoints are wired up correctly.
-          bazel run //:hello_serve_web > /tmp/web.log 2>&1 &
+          bazel run //hello:hello_serve_web > /tmp/web.log 2>&1 &
           PID=$!
           # Give it a beat for the initial build to finish, then probe.
           for i in 1 2 3 4 5 6 7 8 9 10; do
@@ -149,18 +149,18 @@ jobs:
           cat /tmp/web.log
 
       - name: SyncTeX reverse-sync end-to-end
-        working-directory: example
+        working-directory: examples
         run: |
-          # Pre-build //:hello_synctex so the serve target's initial
+          # Pre-build //hello:hello_synctex so the serve target's initial
           # synchronous build is a cache hit. The doc uses the
           # checked-in cache snapshot, so this is hermetic — no need
           # to retry around CDN flakes.
-          bazel build //:hello_synctex --config=ci
+          bazel build //hello:hello_synctex --config=ci
 
-          # //:hello_synctex_serve serves a document built with
+          # //hello:hello_synctex_serve serves a document built with
           # synctex = True, on port 8766. Boot it, POST a click, expect
           # to get back (hello.tex, line) for any in-document click.
-          bazel run //:hello_synctex_serve > /tmp/synctex_serve.log 2>&1 &
+          bazel run //hello:hello_synctex_serve > /tmp/synctex_serve.log 2>&1 &
           PID=$!
           # Wait for the server to accept connections AND for the
           # initial build to finish (last_success must be true).
@@ -192,32 +192,30 @@ jobs:
           cat /tmp/synctex_serve.log
 
       - name: Run latex_test target
-        working-directory: example
+        working-directory: examples
         run: |
           # Uses the checked-in cache snapshot, so this is hermetic.
-          bazel test //:hello_compiles --config=ci
+          bazel test //hello:hello_compiles --config=ci
 
       - name: Build biblatex-using document via implicit cache pipeline
-        working-directory: example
+        working-directory: examples
         run: |
-          # //:thesis_like has no `cache` attribute, so the rule
+          # //paper:paper has no `cache` attribute, so the rule
           # synthesises a PopulateCache action that primes a cache with
           # biber on PATH, then feeds it to a hermetic TectonicCompile.
           # This exercises both the biber toolchain and the
           # implicit-pipeline machinery added in v0.2.
           #
-          # First build is slow (online prime). Skip retry for now
-          # because the PopulateCache action is content-addressed —
-          # if it hits relay.fullyjustified.net flakes, the action
-          # cache hides it from subsequent runs.
+          # First build is slow (online prime). Retry for transient
+          # CDN issues.
           attempt=1
           max_attempts=3
           while true; do
-            if bazel build //:thesis_like --config=ci; then
+            if bazel build //paper:paper --config=ci; then
               break
             fi
             if (( attempt >= max_attempts )); then
-              echo "FAIL: //:thesis_like build failed after ${max_attempts} attempts." >&2
+              echo "FAIL: //paper:paper build failed after ${max_attempts} attempts." >&2
               exit 1
             fi
             sleep $(( 5 * attempt ))
@@ -225,52 +223,80 @@ jobs:
           done
 
           # The PDF should contain the resolved citation that biber
-          # produced (otherwise biber didn't run or the cache wasn't
-          # populated correctly). Spot-check with a simple grep on
-          # extracted text — installing poppler is the only way to
-          # do this portably from a shell step.
-          ls -lh bazel-bin/thesis_like.pdf
-          file bazel-bin/thesis_like.pdf | grep -q "PDF document"
+          # produced. Grep on extracted text via poppler.
+          ls -lh bazel-bin/paper/paper.pdf
+          file bazel-bin/paper/paper.pdf | grep -q "PDF document"
           if command -v pdftotext > /dev/null; then
-            pdftotext bazel-bin/thesis_like.pdf - | grep -q "Knuth"
+            pdftotext bazel-bin/paper/paper.pdf - | grep -q "Morgenthaler"
             echo "biber + biblatex citation resolved OK"
           else
             echo "pdftotext not available; skipped citation grep"
           fi
 
-      - name: Verify reproducible build is byte-identical
-        working-directory: example
+      - name: Build all other examples
+        working-directory: examples
         run: |
-          # Online compile, so retry for the same CDN-flakiness reason
-          # as //:hello above.
+          # letter, cv, thesis, beamer — exercise the full range of
+          # document shapes. CV is online (no cache attribute), letter
+          # and thesis use biber, beamer pulls in the metropolis theme.
+          # Combining them in one step lets Bazel parallelise.
           attempt=1
           max_attempts=3
           while true; do
-            if bazel build //:hello_reproducible --config=ci; then
+            if bazel build \
+                //letter:letter \
+                //cv:cv \
+                //thesis:thesis \
+                //beamer:slides \
+                --config=ci; then
               break
             fi
             if (( attempt >= max_attempts )); then
-              echo "FAIL: //:hello_reproducible build failed after ${max_attempts} attempts." >&2
+              echo "FAIL: example builds failed after ${max_attempts} attempts." >&2
               exit 1
             fi
             sleep $(( 5 * attempt ))
             attempt=$(( attempt + 1 ))
           done
-          first_sha="$(sha256sum bazel-bin/hello_reproducible.pdf | cut -d' ' -f1)"
+          for pdf in bazel-bin/letter/letter.pdf bazel-bin/cv/cv.pdf \
+                     bazel-bin/thesis/thesis.pdf bazel-bin/beamer/slides.pdf; do
+            file "$pdf" | grep -q "PDF document"
+            echo "OK: $pdf"
+          done
+
+      - name: Verify reproducible build is byte-identical
+        working-directory: examples
+        run: |
+          # Online compile, so retry for the same CDN-flakiness reason
+          # as //hello:hello above.
+          attempt=1
+          max_attempts=3
+          while true; do
+            if bazel build //hello:hello_reproducible --config=ci; then
+              break
+            fi
+            if (( attempt >= max_attempts )); then
+              echo "FAIL: //hello:hello_reproducible build failed after ${max_attempts} attempts." >&2
+              exit 1
+            fi
+            sleep $(( 5 * attempt ))
+            attempt=$(( attempt + 1 ))
+          done
+          first_sha="$(sha256sum bazel-bin/hello/hello_reproducible.pdf | cut -d' ' -f1)"
           bazel clean --expunge
           attempt=1
           while true; do
-            if bazel build //:hello_reproducible --config=ci; then
+            if bazel build //hello:hello_reproducible --config=ci; then
               break
             fi
             if (( attempt >= max_attempts )); then
-              echo "FAIL: //:hello_reproducible rebuild failed after ${max_attempts} attempts." >&2
+              echo "FAIL: //hello:hello_reproducible rebuild failed after ${max_attempts} attempts." >&2
               exit 1
             fi
             sleep $(( 5 * attempt ))
             attempt=$(( attempt + 1 ))
           done
-          second_sha="$(sha256sum bazel-bin/hello_reproducible.pdf | cut -d' ' -f1)"
+          second_sha="$(sha256sum bazel-bin/hello/hello_reproducible.pdf | cut -d' ' -f1)"
           if [[ "$first_sha" != "$second_sha" ]]; then
             echo "FAIL: reproducible build is not byte-identical." >&2
             echo "  first  = $first_sha" >&2
@@ -280,29 +306,29 @@ jobs:
           echo "OK: reproducible build is byte-identical (sha256=$first_sha)"
 
       - name: Verify cache snapshot regeneration is byte-identical
-        working-directory: example
+        working-directory: examples
         run: |
-          # `bazel run //:hello_snapshot` does an online compile to
+          # `bazel run //hello:hello_snapshot` does an online compile to
           # populate the cache, then packs it. Same CDN dependency as
-          # //:hello above; same retry treatment.
-          first_sha="$(sha256sum hello_cache.tar.gz | cut -d' ' -f1)"
+          # //hello:hello above; same retry treatment.
+          first_sha="$(sha256sum hello/hello_cache.tar.gz | cut -d' ' -f1)"
           attempt=1
           max_attempts=3
           while true; do
-            if bazel run //:hello_snapshot; then
+            if bazel run //hello:hello_snapshot; then
               break
             fi
             if (( attempt >= max_attempts )); then
-              echo "FAIL: //:hello_snapshot failed after ${max_attempts} attempts." >&2
+              echo "FAIL: //hello:hello_snapshot failed after ${max_attempts} attempts." >&2
               exit 1
             fi
             sleep $(( 5 * attempt ))
             attempt=$(( attempt + 1 ))
-            echo "::warning::retrying //:hello_snapshot (attempt ${attempt}/${max_attempts}) after transient failure"
+            echo "::warning::retrying //hello:hello_snapshot (attempt ${attempt}/${max_attempts}) after transient failure"
           done
-          second_sha="$(sha256sum hello_cache.tar.gz | cut -d' ' -f1)"
+          second_sha="$(sha256sum hello/hello_cache.tar.gz | cut -d' ' -f1)"
           if [[ "$first_sha" != "$second_sha" ]]; then
-            echo "FAIL: re-running //:hello_snapshot produced a different tarball." >&2
+            echo "FAIL: re-running //hello:hello_snapshot produced a different tarball." >&2
             echo "  first  = $first_sha" >&2
             echo "  second = $second_sha" >&2
             exit 1

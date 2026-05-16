@@ -1,0 +1,47 @@
+\documentclass[12pt]{letter}
+\usepackage[margin=2cm]{geometry}
+\usepackage[hidelinks]{hyperref}
+
+\signature{Nicholas Lambourne}
+\address{
+    Nicholas Lambourne \\
+    1 Example Street \\
+    Sydney NSW 2000 \\
+    Australia
+}
+
+\begin{document}
+
+\begin{letter}{
+    Hiring Manager \\
+    Example Corp \\
+    100 Imaginary Lane \\
+    San Francisco, CA 94103
+}
+
+\opening{Dear Hiring Manager,}
+
+I am writing to express my interest in the Software Engineer role
+advertised on your careers page. After several years working on
+large-scale Bazel-based build systems, I have come to appreciate the
+value of declarative, reproducible tooling --- and your team's
+commitment to those same principles in your engineering culture is
+what drew me to apply.
+
+In my current role I have led the design and implementation of
+\emph{rules\_latex}, an open-source Bazel rule set that compiles
+LaTeX documents (including this letter) hermetically on every
+platform. The project taught me a great deal about toolchain design,
+Bzlmod module extensions, and the surprising depth of the TeX
+ecosystem.
+
+I would welcome the opportunity to discuss how my background might
+fit your team's needs. Thank you for your time and consideration.
+
+\closing{Sincerely yours,}
+
+\encl{Curriculum Vitae}
+
+\end{letter}
+
+\end{document}

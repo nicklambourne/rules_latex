@@ -1,0 +1,64 @@
+\documentclass{beamer}
+
+\usetheme{metropolis}
+\setbeamertemplate{footline}[frame number]
+
+\title{rules\_latex}
+\subtitle{Hermetic, reproducible LaTeX builds with Bazel}
+\author{Nicholas Lambourne}
+\date{}
+\institute{Example Conference 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{frame}{Why a new LaTeX rule set?}
+  \begin{itemize}
+    \item Existing \texttt{bazel\_latex} wraps a full TeX Live install
+      and requires per-package \texttt{deps =} enumeration.
+    \item ``Bazel-native LaTeX'' shouldn't mean ``maintain a fragile
+      mirror of TeX Live in your build graph''.
+    \item Tectonic does the heavy lifting on package resolution
+      already; we just have to glue it to Bazel sensibly.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{What we built}
+  Five core rules:
+  \begin{itemize}
+    \item \texttt{latex\_document}
+    \item \texttt{latex\_library}
+    \item \texttt{latex\_pkg}
+    \item \texttt{latex\_test}
+    \item \texttt{latex\_cache\_snapshot}
+  \end{itemize}
+  Plus two ``meta'' rules for live preview:
+  \begin{itemize}
+    \item \texttt{latex\_serve} (system PDF viewer)
+    \item \texttt{latex\_serve\_web} (in-browser, PDF.js, SyncTeX)
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{The implicit cache pipeline}
+  \begin{enumerate}
+    \item User declares only \texttt{latex\_document(name, main, srcs)}.
+    \item The rule synthesises two actions:
+      \begin{itemize}
+        \item \alert{PopulateCache} (online) primes a per-document cache.
+        \item \alert{TectonicCompile} (offline) builds the PDF
+          against that cache.
+      \end{itemize}
+    \item Bazel's action cache makes the prime a one-time cost.
+  \end{enumerate}
+  Net effect: zero build-file plumbing, fast warm rebuilds, identical
+  behaviour in CI.
+\end{frame}
+
+\begin{frame}{Thanks}
+  \begin{center}
+    \Large github.com/nicklambourne/rules\_latex
+  \end{center}
+\end{frame}
+
+\end{document}

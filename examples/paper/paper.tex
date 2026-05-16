@@ -1,0 +1,62 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[backend=biber,style=numeric,sorting=none]{biblatex}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[hidelinks]{hyperref}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+
+\addbibresource{references.bib}
+
+\title{Build-System Hermeticity as a First-Class Concern}
+\author{Jane Engineer \\ \texttt{jane@example.com}}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We examine the cost of build-system non-hermeticity in industrial
+software projects, surveying recent practice from
+the literature~\cite{morgenthaler2012searching, esfahani2016cloudbuild}
+and contrasting it with content-addressed approaches popularised by
+modern build systems~\cite{erickson2018bazel}. We conclude that
+toolchain-level hermeticity, while occasionally painful to adopt, is
+a forcing function for several adjacent quality properties.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+In a 2012 survey of build practice at Google, Morgenthaler et al.
+report that an estimated 36\% of engineering time was lost to
+build-related friction~\cite{morgenthaler2012searching}. A
+subsequent generation of build systems --- including Bazel,
+Buck, and Pants --- has aimed to reduce that friction in part by
+treating hermeticity as a first-class concern.
+
+\section{Background}
+\label{sec:background}
+
+Hermeticity in this paper means: \emph{given identical inputs, a
+build action produces identical outputs, regardless of when, where,
+or by whom it is run}. Content-addressed inputs and sandboxed
+execution are the two main mechanisms by which modern build systems
+realise this property~\cite{erickson2018bazel}.
+
+The claim in
+Section~\ref{sec:cost} is that hermeticity also implies several
+adjacent properties (cacheability, distributed execution,
+reproducibility) that compound to large productivity gains.
+
+\section{The Cost and Benefit}
+\label{sec:cost}
+
+\dots
+
+\printbibliography
+
+\end{document}

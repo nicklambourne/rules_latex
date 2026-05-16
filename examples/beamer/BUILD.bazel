@@ -1,0 +1,23 @@
+"""A beamer slide deck.
+
+Demonstrates:
+  * The `beamer` class and a popular external theme (`metropolis`),
+    which lives in TeX Live as the `beamer-theme-metropolis` package.
+  * That tectonic resolves the theme files from the bundle without
+    needing them enumerated in the BUILD.
+"""
+
+load("@rules_latex//latex:defs.bzl", "latex_document", "latex_test")
+
+latex_document(
+    name = "slides",
+    srcs = ["slides.tex"],
+    main = "slides.tex",
+    visibility = ["//visibility:public"],
+)
+
+latex_test(
+    name = "slides_compile",
+    srcs = ["slides.tex"],
+    main = "slides.tex",
+)

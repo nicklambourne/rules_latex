@@ -1,3 +1,14 @@
+"""Minimal hello-world LaTeX document.
+
+The simplest possible rules_latex usage: a single .tex file, a tiny
+shared preamble, and a target that compiles them. Also demonstrates
+the reproducible mode, the manual cache snapshot path, the live
+preview rules, and the latex_test regression-testing rule.
+
+For real-world document shapes (letter, CV, paper, thesis, beamer)
+see the sibling example directories.
+"""
+
 load(
     "@rules_latex//latex:defs.bzl",
     "latex_cache_snapshot",
@@ -19,6 +30,7 @@ latex_document(
     name = "hello",
     srcs = ["hello.tex"],
     main = "hello.tex",
+    visibility = ["//visibility:public"],
     deps = [":preamble"],
 )
 
@@ -34,8 +46,9 @@ latex_document(
 
 # Same document, built fully offline against a small (~10 MB) cache
 # snapshot. The snapshot tarball is produced once by `bazel run
-# //:hello_snapshot` (requires internet) and checked into the repo;
-# every subsequent build is hermetic and skips the 3 GB upstream bundle.
+# //hello:hello_snapshot` (requires internet) and checked into the
+# repo; every subsequent build is hermetic and skips the implicit
+# cache pipeline entirely.
 latex_document(
     name = "hello_offline",
     srcs = ["hello.tex"],
@@ -45,36 +58,31 @@ latex_document(
 )
 
 # Developer command: refresh the cache snapshot. Run with:
-#     bazel run //:hello_snapshot
+#     bazel run //hello:hello_snapshot
 latex_cache_snapshot(
     name = "hello_snapshot",
     srcs = ["hello.tex"],
     main = "hello.tex",
-    output = "hello_cache.tar.gz",
+    output = "examples/hello/hello_cache.tar.gz",
     deps = [":preamble"],
 )
 
-# Live-preview workflow: `bazel run //:hello_serve` watches the
-# document's sources, rebuilds via `bazel build //:hello_offline` on
-# every save, and opens the result in the system PDF viewer.
+# Live-preview workflow: opens the PDF in the system viewer and
+# rebuilds on every source save.
 latex_serve(
     name = "hello_serve",
     document = ":hello_offline",
 )
 
-# In-browser live-preview workflow: `bazel run //:hello_serve_web`
-# stands up a tiny HTTP server on http://127.0.0.1:8765/ that renders
-# the PDF with PDF.js and auto-reloads on every save. Same rebuild
-# path as latex_serve (sandboxed `bazel build`), so behaviour matches
-# CI.
+# In-browser live-preview workflow: http://127.0.0.1:8765/
 latex_serve_web(
     name = "hello_serve_web",
     document = ":hello_offline",
 )
 
-# Same document built with synctex output, plus a serve target that
-# wires the .synctex.gz file into the server so clicking on a glyph
-# in the browser jumps to the corresponding source location.
+# Same document built with synctex output, wired into a serve target
+# so clicking in the rendered PDF jumps to the corresponding source
+# location.
 latex_document(
     name = "hello_synctex",
     srcs = ["hello.tex"],
@@ -90,30 +98,13 @@ latex_serve_web(
     port = 8766,
 )
 
-# Regression test: compile hello.tex and make sure no LaTeX errors show
-# up in the log. Uses the checked-in cache snapshot so the test runs
-# fully offline and finishes in ~3 seconds instead of pulling fresh
-# packages over the network.
+# Regression test: compile hello.tex and assert no LaTeX errors in the
+# log. Uses the checked-in snapshot so it runs offline and finishes in
+# ~3 seconds.
 latex_test(
     name = "hello_compiles",
     srcs = ["hello.tex"],
     cache = "hello_cache.tar.gz",
     main = "hello.tex",
     deps = [":preamble"],
-)
-
-# End-to-end demonstration of the biber toolchain + implicit cache
-# pipeline. No explicit cache target, no checked-in tarball — the rule
-# synthesises a TectonicPopulateCache action that runs an online prime
-# with biber on PATH, then runs the hermetic TectonicCompile against
-# the resulting cache. After the first build the action cache makes
-# subsequent rebuilds offline-fast.
-latex_document(
-    name = "thesis_like",
-    srcs = [
-        "thesis_like.bib",
-        "thesis_like.tex",
-    ],
-    biber = True,
-    main = "thesis_like.tex",
 )
