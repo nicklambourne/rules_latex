@@ -216,6 +216,13 @@ jobs:
           wait "$PID" 2>/dev/null || true
           cat /tmp/synctex_serve.log
 
+      - name: Run unit tests
+        run: |
+          # //tests/... covers the Python tests for the snapshot tool
+          # and the SyncTeX parser, plus the analysistests for
+          # latex_document. Fully hermetic; no network needed.
+          bazel test //tests/... --config=ci
+
       - name: Run latex_test target
         working-directory: examples
         run: |

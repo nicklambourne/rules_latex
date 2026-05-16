@@ -1,0 +1,3 @@
+load(":latex_document_test.bzl", "latex_document_test_suite")
+
+latex_document_test_suite(name = "latex_document_tests")

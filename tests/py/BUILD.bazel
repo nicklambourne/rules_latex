@@ -1,0 +1,43 @@
+"""Python unittest suite for the rules_latex tooling.
+
+We use sh_test instead of py_test so we don't take a rules_python
+dependency for tests - the tests run on the system python3, same as
+the snapshot tool itself does in production. This matches the
+philosophy elsewhere in this repo of keeping the tooling
+stdlib-only.
+
+Each sh_test is a one-liner that invokes `python3 -m unittest` on
+the corresponding test module. Tests do their own data file
+discovery via __file__-relative paths.
+"""
+
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+# Sources the test modules depend on at runtime, walked via
+# __file__-relative paths.
+_TEST_DATA = [
+    "//latex/private:serve_web.py.tpl",
+    "//tools:make_cache_snapshot.py",
+]
+
+sh_test(
+    name = "test_synctex_parser",
+    srcs = ["run_pytest.sh"],
+    args = ["tests/py/test_synctex_parser.py"],
+    data = _TEST_DATA + ["test_synctex_parser.py"],
+)
+
+sh_test(
+    name = "test_make_cache_snapshot",
+    srcs = ["run_pytest.sh"],
+    args = ["tests/py/test_make_cache_snapshot.py"],
+    data = _TEST_DATA + ["test_make_cache_snapshot.py"],
+)
+
+test_suite(
+    name = "py_tests",
+    tests = [
+        ":test_make_cache_snapshot",
+        ":test_synctex_parser",
+    ],
+)

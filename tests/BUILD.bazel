@@ -1,0 +1,18 @@
+"""Aggregate test suite.
+
+The two real test bodies live in:
+  * //tests/py        - Python unittest for the snapshot tool and
+    the SyncTeX parser.
+  * //tests/starlark  - analysistests for latex_document.
+
+`bazel test //tests/...` runs them all.
+"""
+
+# Convenience target: bazel test //tests:all.
+test_suite(
+    name = "all",
+    tests = [
+        "//tests/py:py_tests",
+        "//tests/starlark:latex_document_tests",
+    ],
+)
