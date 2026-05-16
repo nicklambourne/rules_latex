@@ -1,4 +1,11 @@
-load("@rules_latex//latex:defs.bzl", "latex_cache_snapshot", "latex_document", "latex_library", "latex_test")
+load(
+    "@rules_latex//latex:defs.bzl",
+    "latex_cache_snapshot",
+    "latex_document",
+    "latex_library",
+    "latex_serve",
+    "latex_test",
+)
 
 # A tiny helper library with a shared preamble.
 latex_library(
@@ -44,6 +51,14 @@ latex_cache_snapshot(
     main = "hello.tex",
     output = "hello_cache.tar.gz",
     deps = [":preamble"],
+)
+
+# Live-preview workflow: `bazel run //:hello_serve` watches the
+# document's sources, rebuilds via `bazel build //:hello_offline` on
+# every save, and opens the result in the system PDF viewer.
+latex_serve(
+    name = "hello_serve",
+    document = ":hello_offline",
 )
 
 # Regression test: compile hello.tex and make sure no LaTeX errors show

@@ -103,8 +103,45 @@ A complete, runnable example lives under [`example/`](./example).
 | [`latex_pkg`](./latex/private/latex_pkg.bzl) | Group non-LaTeX resources (images, fonts, `.bib` files) that documents may need. |
 | [`latex_test`](./latex/private/latex_test.bzl) | Compile a document under `bazel test` and assert on patterns in the tectonic log file (e.g. fail on `LaTeX Error:`). |
 | [`latex_cache_snapshot`](./latex/private/latex_cache_snapshot.bzl) | `bazel run`-able command that captures a small, per-document offline cache snapshot for hermetic builds. |
+| [`latex_serve`](./latex/private/latex_serve.bzl) | `bazel run`-able live-preview loop: watches the document's sources, rebuilds via `bazel build` on every save, opens the PDF in the system viewer. |
 
-All five are loaded from `@rules_latex//latex:defs.bzl`.
+All six are loaded from `@rules_latex//latex:defs.bzl`.
+
+## Live preview
+
+For an Overleaf-style edit-and-see-it-update experience, declare a
+`latex_serve` target alongside your document:
+
+```python
+latex_document(
+    name = "cv",
+    main = "cv.tex",
+    srcs = ["cv.tex"],
+    cache = "cv_cache.tar.gz",   # so live rebuilds are offline and fast
+)
+
+latex_serve(
+    name = "cv_live",
+    document = ":cv",
+)
+```
+
+Then in one terminal:
+
+```bash
+bazel run //:cv_live
+# Watches cv.tex (and any latex_library/latex_pkg deps), rebuilds on
+# every save, opens bazel-bin/cv.pdf in the system PDF viewer.
+```
+
+Edit the source in your editor of choice; the PDF is rebuilt within a
+second or so per change. The viewer's own auto-reload behaviour kicks
+in (macOS Preview, Linux Evince/Okular all support this out of the
+box).
+
+Because the rebuild is just `bazel build //:cv` under the hood, it
+shares the toolchain, sandbox, and cache snapshot with normal builds —
+no "works locally, fails in CI" drift.
 
 ## Supported platforms
 

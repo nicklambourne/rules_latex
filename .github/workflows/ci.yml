@@ -45,6 +45,18 @@ jobs:
           ls -lh bazel-bin/hello_offline.pdf
           file bazel-bin/hello_offline.pdf | grep -q "PDF document"
 
+      - name: Build latex_serve launcher
+        working-directory: example
+        run: |
+          # We can't easily run an interactive watcher in CI, but
+          # building the target catches regressions in the rule, the
+          # template expansion, and the LatexInfo propagation from
+          # latex_document.
+          bazel build //:hello_serve --config=ci
+          test -x bazel-bin/hello_serve.sh
+          test -f bazel-bin/hello_serve.py
+          grep -q '^DOCUMENT_LABEL = "@@//:hello_offline"' bazel-bin/hello_serve.py
+
       - name: Run latex_test target
         working-directory: example
         run: bazel test //:hello_compiles --config=ci

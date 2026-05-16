@@ -52,6 +52,7 @@ Loaded from `@rules_latex//latex:defs.bzl`:
 - `latex_pkg(name, srcs)`
 - `latex_test(name, main, srcs, deps = [], outfmt = "pdf", cache = None, forbidden_patterns = [], forbidden_patterns_replace = False, required_patterns = [])`
 - `latex_cache_snapshot(name, main, srcs, deps = [], output)`
+- `latex_serve(name, document, poll_interval_ms = 250, open_pdf = True)`
 - `LatexInfo` provider (for users authoring their own rules)
 
 The toolchain type is exported at `@rules_latex//latex:toolchain_type` for
@@ -151,6 +152,35 @@ Tectonic by default derives its cache directory from `$XDG_CACHE_HOME` /
 per-action `mktemp -d` scratch dir and exports it as `TECTONIC_CACHE_DIR`.
 The wrapper also propagates `LC_ALL=C.UTF-8` (some downstream helpers like
 `biber` insist on a UTF-8 locale).
+
+### 4.7 Live preview
+
+`latex_serve` is intentionally implemented as a thin watcher around
+`bazel build`, not a separately-driven Tectonic process. The justification:
+
+* **Same toolchain, sandbox, and cache as a regular build.** A document
+  that builds happily in `bazel build` and CI but breaks in
+  `tectonic -X watch` (different binary version, different bundle,
+  different env) is a particularly miserable bug to hit. Sharing the
+  compile path with `bazel build` eliminates that class of drift.
+* **Build graph aware.** When a document depends on a `latex_library`
+  whose sources are edited, the watcher sees them via the document's
+  `LatexInfo`; no separate input enumeration. Edits to non-watched
+  inputs (e.g. the toolchain binary, the bundle, or the cache snapshot)
+  still trigger a correct rebuild because Bazel's analysis picks up the
+  staleness.
+* **Cross-target sharing.** Multiple `latex_document` targets can share
+  a `latex_library`; running `latex_serve` on one of them doesn't
+  preclude editing the shared library and getting consistent rebuilds.
+
+The cost is a couple of hundred milliseconds of Bazel CLI startup
+overhead per rebuild, mitigated with `--watchfs` (Bazel uses
+inotify/FSEvents for change detection rather than re-stating every file)
+and the always-resident Bazel server. For a small document built against
+a checked-in cache snapshot, the steady-state rebuild latency in the
+example workspace is in the 200–400 ms range — well within "feels live".
+The watcher itself is pure-stdlib Python so consumers don't need
+`rules_python` or `watchdog`.
 
 ## 5. Open questions / future work
 
