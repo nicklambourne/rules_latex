@@ -179,10 +179,26 @@ jobs:
             'import sys, json; s=json.load(sys.stdin); assert s["synctex_enabled"] is True, s; assert s["last_success"] is True, s; print("synctex status OK")'
 
           # Reverse-sync click in the middle of page 1 should resolve to
-          # the workspace-relative hello.tex.
-          resp="$(curl -sf -X POST -H "Content-Type: application/json" \
+          # the workspace-relative hello.tex. Capture the full response
+          # plus HTTP status separately so a flaky failure shows up in
+          # logs even when `curl -sf` exits non-zero before we get to
+          # the echo.
+          set +e
+          http_status="$(curl -s -o /tmp/reverse.body -w "%{http_code}" \
+            -X POST -H "Content-Type: application/json" \
             --data '{"page":1,"x":300,"y":600}' \
             http://127.0.0.1:8766/sync/reverse)"
+          curl_exit=$?
+          set -e
+          echo "curl exit=${curl_exit} http_status=${http_status}"
+          echo "Reverse-sync body: $(cat /tmp/reverse.body)"
+          if [[ "${http_status}" != "200" ]]; then
+            echo "FAIL: expected HTTP 200, got ${http_status}" >&2
+            echo "--- synctex_serve.log tail ---" >&2
+            tail -30 /tmp/synctex_serve.log >&2 || true
+            exit 1
+          fi
+          resp="$(cat /tmp/reverse.body)"
           echo "Reverse-sync response: $resp"
           echo "$resp" | python3 -c \
             'import sys, json; r=json.load(sys.stdin); assert r["ok"] is True, r; assert r["file"] == "hello/hello.tex", r; assert isinstance(r["line"], int), r; print("reverse-sync OK:", r)'
