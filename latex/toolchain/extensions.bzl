@@ -19,7 +19,12 @@ per platform that holds the downloaded tectonic binary, plus (when
 """
 
 load(
+    "//latex/private:biber_versions.bzl",
+    "BIBER_RELEASES",
+)
+load(
     "//latex/toolchain:repositories.bzl",
+    "biber_repository",
     "tectonic_bundle_repository",
     "tectonic_repository",
 )
@@ -120,11 +125,26 @@ def _tectonic_impl(module_ctx):
         tectonic_bundle_repository(name = _BUNDLE_REPO_NAME)
 
     for p in _PLATFORMS:
+        # Materialise a biber repo for platforms with an upstream
+        # binary. Platforms without one (currently linux/aarch64) get
+        # no biber and latex_document(biber = True) targets fail at
+        # analysis with a pointer to the system escape hatch. See
+        # DESIGN.md §4.9.
+        biber_repo = ""
+        if (p.os, p.cpu) in BIBER_RELEASES:
+            biber_repo = "rules_latex_biber_{}".format(p.name)
+            biber_repository(
+                name = biber_repo,
+                os = p.os,
+                cpu = p.cpu,
+            )
+
         tectonic_repository(
             name = "rules_latex_tectonic_{}".format(p.name),
             os = p.os,
             cpu = p.cpu,
             bundle_repo = bundle_repo,
+            biber_repo = biber_repo,
         )
 
     _toolchain_hub_repository(name = "rules_latex_tectonic_toolchains")
