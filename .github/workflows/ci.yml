@@ -34,13 +34,32 @@ jobs:
       - name: Smoke test example/hello
         working-directory: example
         run: |
-          bazel build //:hello --config=ci
+          # `hello` builds in online mode, which goes to
+          # relay.fullyjustified.net for tectonic's package bundle.
+          # That endpoint has occasional 502s; retry with backoff so a
+          # transient CDN blip doesn't fail the whole run. Genuine
+          # build errors still surface after the retry budget is spent.
+          attempt=1
+          max_attempts=3
+          while true; do
+            if bazel build //:hello --config=ci; then
+              break
+            fi
+            if (( attempt >= max_attempts )); then
+              echo "FAIL: //:hello build failed after ${max_attempts} attempts." >&2
+              exit 1
+            fi
+            sleep $(( 5 * attempt ))
+            attempt=$(( attempt + 1 ))
+            echo "::warning::retrying //:hello (attempt ${attempt}/${max_attempts}) after transient failure"
+          done
           ls -lh bazel-bin/hello.pdf
           file bazel-bin/hello.pdf | grep -q "PDF document"
 
       - name: Build offline via checked-in cache snapshot
         working-directory: example
         run: |
+          # Hermetic. No retry needed; any failure here is a real bug.
           bazel build //:hello_offline --config=ci
           ls -lh bazel-bin/hello_offline.pdf
           file bazel-bin/hello_offline.pdf | grep -q "PDF document"
@@ -57,17 +76,75 @@ jobs:
           test -f bazel-bin/hello_serve.py
           grep -q '^DOCUMENT_LABEL = "@@//:hello_offline"' bazel-bin/hello_serve.py
 
+      - name: Build latex_serve_web launcher and smoke-test endpoints
+        working-directory: example
+        run: |
+          bazel build //:hello_serve_web --config=ci
+          test -x bazel-bin/hello_serve_web.sh
+          test -f bazel-bin/hello_serve_web.py
+          grep -q '^DOCUMENT_LABEL = "@@//:hello_offline"' bazel-bin/hello_serve_web.py
+
+          # Boot the server in the background, hit each endpoint, kill
+          # it. Proves the http.server wiring works end-to-end against
+          # the checked-in cache snapshot.
+          BUILD_WORKSPACE_DIRECTORY="$PWD" PYTHONUNBUFFERED=1 \
+            python3 bazel-bin/hello_serve_web.py "$PWD" > /tmp/web.log 2>&1 &
+          PID=$!
+          # Give it a beat for the initial build to finish, then probe.
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -sf http://127.0.0.1:8765/status > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          curl -sf http://127.0.0.1:8765/ | head -c 200 | grep -q "live preview"
+          curl -sf http://127.0.0.1:8765/pdf | file - | grep -q "PDF document"
+          curl -sf http://127.0.0.1:8765/status | python3 -c \
+            'import sys, json; s=json.load(sys.stdin); assert s["last_success"] is True, s; print("status OK:", s)'
+
+          kill "$PID" || true
+          wait "$PID" 2>/dev/null || true
+          cat /tmp/web.log
+
       - name: Run latex_test target
         working-directory: example
-        run: bazel test //:hello_compiles --config=ci
+        run: |
+          # Uses the checked-in cache snapshot, so this is hermetic.
+          bazel test //:hello_compiles --config=ci
 
       - name: Verify reproducible build is byte-identical
         working-directory: example
         run: |
-          bazel build //:hello_reproducible --config=ci
+          # Online compile, so retry for the same CDN-flakiness reason
+          # as //:hello above.
+          attempt=1
+          max_attempts=3
+          while true; do
+            if bazel build //:hello_reproducible --config=ci; then
+              break
+            fi
+            if (( attempt >= max_attempts )); then
+              echo "FAIL: //:hello_reproducible build failed after ${max_attempts} attempts." >&2
+              exit 1
+            fi
+            sleep $(( 5 * attempt ))
+            attempt=$(( attempt + 1 ))
+          done
           first_sha="$(sha256sum bazel-bin/hello_reproducible.pdf | cut -d' ' -f1)"
           bazel clean --expunge
-          bazel build //:hello_reproducible --config=ci
+          attempt=1
+          while true; do
+            if bazel build //:hello_reproducible --config=ci; then
+              break
+            fi
+            if (( attempt >= max_attempts )); then
+              echo "FAIL: //:hello_reproducible rebuild failed after ${max_attempts} attempts." >&2
+              exit 1
+            fi
+            sleep $(( 5 * attempt ))
+            attempt=$(( attempt + 1 ))
+          done
           second_sha="$(sha256sum bazel-bin/hello_reproducible.pdf | cut -d' ' -f1)"
           if [[ "$first_sha" != "$second_sha" ]]; then
             echo "FAIL: reproducible build is not byte-identical." >&2
@@ -80,12 +157,24 @@ jobs:
       - name: Verify cache snapshot regeneration is byte-identical
         working-directory: example
         run: |
-          # The snapshot tarball is content-addressed and deterministic;
-          # re-running //:hello_snapshot should leave hello_cache.tar.gz
-          # unchanged. Catches non-reproducibility bugs in the packing
-          # logic before they sneak into a checked-in snapshot.
+          # `bazel run //:hello_snapshot` does an online compile to
+          # populate the cache, then packs it. Same CDN dependency as
+          # //:hello above; same retry treatment.
           first_sha="$(sha256sum hello_cache.tar.gz | cut -d' ' -f1)"
-          bazel run //:hello_snapshot
+          attempt=1
+          max_attempts=3
+          while true; do
+            if bazel run //:hello_snapshot; then
+              break
+            fi
+            if (( attempt >= max_attempts )); then
+              echo "FAIL: //:hello_snapshot failed after ${max_attempts} attempts." >&2
+              exit 1
+            fi
+            sleep $(( 5 * attempt ))
+            attempt=$(( attempt + 1 ))
+            echo "::warning::retrying //:hello_snapshot (attempt ${attempt}/${max_attempts}) after transient failure"
+          done
           second_sha="$(sha256sum hello_cache.tar.gz | cut -d' ' -f1)"
           if [[ "$first_sha" != "$second_sha" ]]; then
             echo "FAIL: re-running //:hello_snapshot produced a different tarball." >&2
