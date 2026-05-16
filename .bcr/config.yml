@@ -1,0 +1,6 @@
+# publish-to-bcr config. Currently empty (defaults are correct for
+# our single-module repo).
+#
+# When/if we add support for multi-module submissions, populate
+# `moduleRoots` here. See
+# https://github.com/bazel-contrib/publish-to-bcr/blob/main/templates/README.md
