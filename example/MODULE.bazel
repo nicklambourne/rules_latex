@@ -25,3 +25,9 @@ tectonic.toolchain()
 use_repo(tectonic, "rules_latex_tectonic_toolchains")
 
 register_toolchains("@rules_latex_tectonic_toolchains//:all")
+
+# Vendored PDF.js used by latex_serve_web. The download is lazy: it
+# only happens when a target that actually needs it (e.g.
+# //:hello_serve_web) is built.
+pdfjs = use_extension("@rules_latex//latex/web:extensions.bzl", "pdfjs")
+use_repo(pdfjs, "rules_latex_pdfjs")

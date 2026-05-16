@@ -27,3 +27,11 @@ use_repo(
 )
 
 register_toolchains("@rules_latex_tectonic_toolchains//:all")
+
+# Module extension that vendors PDF.js for latex_serve_web. Always
+# materialised so the rule's default _pdfjs_lib / _pdfjs_worker
+# attributes resolve cleanly; the actual ~10 MB download only happens
+# when something in the build graph references the @rules_latex_pdfjs
+# repo (i.e. when a latex_serve_web target is built).
+pdfjs = use_extension("//latex/web:extensions.bzl", "pdfjs")
+use_repo(pdfjs, "rules_latex_pdfjs")

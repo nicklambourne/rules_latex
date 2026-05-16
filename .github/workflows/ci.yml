@@ -86,9 +86,9 @@ jobs:
 
           # Boot the server in the background, hit each endpoint, kill
           # it. Proves the http.server wiring works end-to-end against
-          # the checked-in cache snapshot.
-          BUILD_WORKSPACE_DIRECTORY="$PWD" PYTHONUNBUFFERED=1 \
-            python3 bazel-bin/hello_serve_web.py "$PWD" > /tmp/web.log 2>&1 &
+          # the checked-in cache snapshot, and that the self-hosted
+          # PDF.js endpoints are wired up correctly.
+          bazel run //:hello_serve_web > /tmp/web.log 2>&1 &
           PID=$!
           # Give it a beat for the initial build to finish, then probe.
           for i in 1 2 3 4 5 6 7 8 9 10; do
@@ -102,6 +102,24 @@ jobs:
           curl -sf http://127.0.0.1:8765/pdf | file - | grep -q "PDF document"
           curl -sf http://127.0.0.1:8765/status | python3 -c \
             'import sys, json; s=json.load(sys.stdin); assert s["last_success"] is True, s; print("status OK:", s)'
+
+          # Index page should import PDF.js from the locally-served
+          # path, not a CDN — that's the whole point of vendoring.
+          curl -sf http://127.0.0.1:8765/ | grep -q 'from "/_pdfjs/pdf.mjs"'
+          ! curl -sf http://127.0.0.1:8765/ | grep -q 'cdn.jsdelivr.net'
+
+          # The self-hosted PDF.js endpoints serve real JS.
+          lib_size="$(curl -sf -o /dev/null -w "%{size_download}" http://127.0.0.1:8765/_pdfjs/pdf.mjs)"
+          worker_size="$(curl -sf -o /dev/null -w "%{size_download}" http://127.0.0.1:8765/_pdfjs/pdf.worker.mjs)"
+          if (( lib_size < 100000 )); then
+            echo "FAIL: /_pdfjs/pdf.mjs is too small (${lib_size} bytes)" >&2
+            exit 1
+          fi
+          if (( worker_size < 100000 )); then
+            echo "FAIL: /_pdfjs/pdf.worker.mjs is too small (${worker_size} bytes)" >&2
+            exit 1
+          fi
+          echo "PDF.js endpoints OK: lib=${lib_size}B worker=${worker_size}B"
 
           kill "$PID" || true
           wait "$PID" 2>/dev/null || true

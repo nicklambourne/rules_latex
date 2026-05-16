@@ -50,13 +50,17 @@ WATCHED_PATHS_RAW = """\
 POLL_INTERVAL_MS = int("{{POLL_INTERVAL}}")
 PORT = int("{{PORT}}")
 DOCUMENT_NAME = "{{DOCUMENT_NAME}}"
-PDFJS_VERSION = "{{PDFJS_VERSION}}"
 
-# CDN paths for PDF.js. Centralised so a future rule attribute can let
-# users pin to a self-hosted mirror.
-PDFJS_BASE = f"https://cdn.jsdelivr.net/npm/pdfjs-dist@{PDFJS_VERSION}/build"
-PDFJS_LIB = f"{PDFJS_BASE}/pdf.mjs"
-PDFJS_WORKER = f"{PDFJS_BASE}/pdf.worker.mjs"
+# Paths to the vendored PDF.js files within the launcher's runfiles
+# tree. The server reads them once on startup and serves the bytes at
+# /_pdfjs/pdf.mjs and /_pdfjs/pdf.worker.mjs.
+PDFJS_LIB_RUNFILE = "{{PDFJS_LIB_RUNFILE}}"
+PDFJS_WORKER_RUNFILE = "{{PDFJS_WORKER_RUNFILE}}"
+
+# Browser-side URLs for the same files. Centralised so the HTML
+# template is just a format string.
+PDFJS_LIB = "/_pdfjs/pdf.mjs"
+PDFJS_WORKER = "/_pdfjs/pdf.worker.mjs"
 
 
 # -----------------------------------------------------------------------------
@@ -381,6 +385,8 @@ class Handler(BaseHTTPRequestHandler):
     # Class-level attributes set by run_server() before this is used.
     state: BuildState
     workspace: Path
+    pdfjs_lib_bytes: bytes
+    pdfjs_worker_bytes: bytes
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
         # http.server is chatty by default; we already log builds
@@ -425,6 +431,21 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
             self._send(HTTPStatus.OK, body, "application/pdf")
+            return
+        if path == "/_pdfjs/pdf.mjs":
+            # ESM Javascript MIME type per the WHATWG fetch spec.
+            self._send(
+                HTTPStatus.OK,
+                self.pdfjs_lib_bytes,
+                "text/javascript; charset=utf-8",
+            )
+            return
+        if path == "/_pdfjs/pdf.worker.mjs":
+            self._send(
+                HTTPStatus.OK,
+                self.pdfjs_worker_bytes,
+                "text/javascript; charset=utf-8",
+            )
             return
         if path == "/status":
             body = json.dumps(self.state.snapshot()).encode("utf-8")
@@ -483,17 +504,45 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
-        print("usage: serve_web.py <workspace_dir>", file=sys.stderr)
+    if len(sys.argv) < 3:
+        print(
+            "usage: serve_web.py <workspace_dir> <runfiles_dir>",
+            file=sys.stderr,
+        )
         return 2
     workspace = Path(sys.argv[1]).resolve()
+    runfiles = Path(sys.argv[2]).resolve()
     if not workspace.is_dir():
         print(f"ERROR: workspace {workspace} is not a directory.", file=sys.stderr)
+        return 2
+    if not runfiles.is_dir():
+        print(f"ERROR: runfiles {runfiles} is not a directory.", file=sys.stderr)
+        return 2
+
+    # Read the vendored PDF.js files once at startup so per-request
+    # serving is a fast in-memory copy. The launcher script puts both
+    # files into our runfiles tree.
+    pdfjs_lib_path = runfiles / PDFJS_LIB_RUNFILE
+    pdfjs_worker_path = runfiles / PDFJS_WORKER_RUNFILE
+    if not pdfjs_lib_path.is_file():
+        print(
+            f"ERROR: vendored pdfjs file missing at {pdfjs_lib_path}; "
+            "did the @rules_latex_pdfjs repo fail to materialise?",
+            file=sys.stderr,
+        )
+        return 2
+    if not pdfjs_worker_path.is_file():
+        print(
+            f"ERROR: vendored pdfjs worker missing at {pdfjs_worker_path}.",
+            file=sys.stderr,
+        )
         return 2
 
     state = BuildState()
     Handler.state = state
     Handler.workspace = workspace
+    Handler.pdfjs_lib_bytes = pdfjs_lib_path.read_bytes()
+    Handler.pdfjs_worker_bytes = pdfjs_worker_path.read_bytes()
 
     # SO_REUSEADDR lets the user kill+restart the serve target quickly
     # without hitting "Address already in use" while the kernel holds
@@ -505,6 +554,10 @@ def main() -> int:
     print(f"latex_serve_web: serving live preview at http://127.0.0.1:{PORT}/")
     print(f"  rebuild target: {DOCUMENT_LABEL}")
     print(f"  output pdf:     bazel-bin/{PDF_RELPATH}")
+    print(
+        f"  pdf.js sizes:   lib={len(Handler.pdfjs_lib_bytes)//1024} KiB, "
+        f"worker={len(Handler.pdfjs_worker_bytes)//1024} KiB",
+    )
     print("  press Ctrl-C to stop.")
     print()
 

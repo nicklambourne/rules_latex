@@ -211,13 +211,31 @@ These are deliberately out of scope for v0.1 but worth flagging.
    optional fields on `latex_toolchain` later if there's demand.
 3. **`latex_lint`.** Wraps `chktex` / `lacheck`. Could ship as an optional
    toolchain.
-4. **Bundle updates.** The current pinned bundle is the upstream tlextras
-   2021.3r1, which is still being served from the CDN as of writing.
-   Upstream has not cut a newer tlextras release; we should track that
-   repo and bump when they do.
+4. **Bundle updates.** The current pinned bundle is `tlextras-2022.0r0`
+   (the version tectonic 0.16.9 itself asks for by default). Upstream
+   has not cut a newer tlextras release since 2022 and the
+   `tectonic-texlive-bundles` repo was archived in October 2024; we
+   should track that repo for any new releases and bump when (if) they
+   appear.
 5. **Caching of intermediate aux files.** Tectonic is fast and Bazel caches
    the action output, so this is probably never worth doing — but worth
    benchmarking on multi-pass documents (e.g. with biblatex).
+6. **WebSocket-based live-reload channel.** `latex_serve_web` currently
+   uses Server-Sent Events for the server→browser "reload" signal, which
+   is unidirectional. WebSockets would allow the browser to push state
+   back (current scroll position, current zoom, "I'm idle, debounce
+   builds", typed-ahead source edits, etc.) over the same connection
+   and would also handle binary frames more naturally if we ever wanted
+   to push PDF deltas instead of triggering a re-fetch. The cost is
+   non-trivial: Python's stdlib doesn't ship a WebSocket server, so
+   we'd either hand-roll RFC 6455 frame handling (~100–200 lines of
+   security-relevant Python) or take a third-party dep that pulls in
+   `rules_python`. Neither is justified by the v0.1 feature set: the
+   one duplex feature we want (SyncTeX forward-sync from a CLI to the
+   browser) is solvable with a `POST /sync/forward` endpoint that
+   piggybacks on the existing SSE channel for the resulting jump
+   event. Revisit if a future feature genuinely needs duplex binary
+   comms.
 
 ## 6. Versioning
 

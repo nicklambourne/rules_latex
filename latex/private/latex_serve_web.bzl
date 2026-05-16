@@ -30,10 +30,10 @@ Design notes:
   "reload" signal and is dramatically simpler than WebSockets to
   implement in stdlib.
 
-* PDF.js is loaded from cdn.jsdelivr.net at page-load time. We
-  deliberately don't vendor a ~3 MB JS bundle into the rule set. Users
-  on air-gapped machines can fall back to `latex_serve` (system
-  viewer) or self-host a PDF.js mirror via the `pdfjs_version` attr.
+* PDF.js is vendored: the pinned pdfjs-dist tarball lives in
+  `@rules_latex_pdfjs` (materialised by the `pdfjs` module extension)
+  and is served at `/_pdfjs/pdf.mjs` and `/_pdfjs/pdf.worker.mjs` by
+  the running server. No CDN dependency at preview time.
 
 * The rebuild path is identical to `latex_serve`: shells out to
   `bazel build`, so live mode and CI use the same toolchain, sandbox,
@@ -41,11 +41,6 @@ Design notes:
 """
 
 load("//latex:providers.bzl", "LatexInfo")
-
-# Default PDF.js version. Pinned at the rule level so users get
-# deterministic behaviour; override via the `pdfjs_version` attr if you
-# need a different release.
-_DEFAULT_PDFJS_VERSION = "5.4.149"
 
 def _latex_serve_web_impl(ctx):
     info = ctx.attr.document[LatexInfo]
@@ -66,6 +61,9 @@ def _latex_serve_web_impl(ctx):
             continue
         watched_paths.append(src.short_path)
 
+    pdfjs_lib = ctx.file._pdfjs_lib
+    pdfjs_worker = ctx.file._pdfjs_worker
+
     server_script = ctx.actions.declare_file(ctx.label.name + ".py")
     ctx.actions.expand_template(
         template = ctx.file._server_template,
@@ -77,7 +75,8 @@ def _latex_serve_web_impl(ctx):
             "{{POLL_INTERVAL}}": str(ctx.attr.poll_interval_ms),
             "{{PORT}}": str(ctx.attr.port),
             "{{DOCUMENT_NAME}}": ctx.attr.document.label.name,
-            "{{PDFJS_VERSION}}": ctx.attr.pdfjs_version,
+            "{{PDFJS_LIB_RUNFILE}}": pdfjs_lib.short_path,
+            "{{PDFJS_WORKER_RUNFILE}}": pdfjs_worker.short_path,
         },
     )
 
@@ -93,11 +92,11 @@ fi
 
 RUNFILES="$(pwd)"
 PYTHON="${{PYTHON:-python3}}"
-exec "$PYTHON" "$RUNFILES/{server}" "$BUILD_WORKSPACE_DIRECTORY" "$@"
+exec "$PYTHON" "$RUNFILES/{server}" "$BUILD_WORKSPACE_DIRECTORY" "$RUNFILES" "$@"
 """.format(server = server_script.short_path)
     ctx.actions.write(launcher, launcher_content, is_executable = True)
 
-    runfiles = ctx.runfiles(files = [server_script])
+    runfiles = ctx.runfiles(files = [server_script, pdfjs_lib, pdfjs_worker])
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
 
 latex_serve_web = rule(
@@ -120,15 +119,16 @@ latex_serve_web = rule(
                   "in milliseconds.",
             default = 250,
         ),
-        "pdfjs_version": attr.string(
-            doc = "Pinned PDF.js version pulled from cdn.jsdelivr.net at " +
-                  "page-load time. Override to point at a different upstream " +
-                  "release (or a self-hosted mirror that mimics the " +
-                  "pdfjs-dist npm package layout).",
-            default = _DEFAULT_PDFJS_VERSION,
-        ),
         "_server_template": attr.label(
             default = "//latex/private:serve_web.py.tpl",
+            allow_single_file = True,
+        ),
+        "_pdfjs_lib": attr.label(
+            default = "@rules_latex_pdfjs//:pdf.mjs",
+            allow_single_file = True,
+        ),
+        "_pdfjs_worker": attr.label(
+            default = "@rules_latex_pdfjs//:pdf.worker.mjs",
             allow_single_file = True,
         ),
     },

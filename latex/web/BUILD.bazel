@@ -1,0 +1,8 @@
+# Public API for the live-preview web surface.
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "extensions.bzl",
+    "repositories.bzl",
+])
