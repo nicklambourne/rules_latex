@@ -4,7 +4,7 @@ All notable changes to `rules_latex` are documented here. This project follows
 [Semantic Versioning](https://semver.org/) once v1.0.0 is reached; before
 that, expect breaking changes in any v0.x release.
 
-## [Unreleased]
+## [0.1.0] - 2026-05-16
 
 ### Added
 - Initial scaffold: `latex_document`, `latex_library`, `latex_pkg` rules.
