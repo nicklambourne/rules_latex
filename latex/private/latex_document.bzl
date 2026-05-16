@@ -399,7 +399,7 @@ latex_document = rule(
         "biber_strategy": attr.string(
             doc = "Which biber binary to use when `biber = True`. " +
                   "`\"toolchain\"` (default) uses the rules_latex-vendored " +
-                  "biber 2.21; fails at analysis time on platforms without " +
+                  "biber 2.17; fails at analysis time on platforms without " +
                   "an upstream prebuilt (currently linux/aarch64). " +
                   "`\"system\"` propagates $PATH so a system-installed " +
                   "biber is found; less hermetic, intended as an escape " +

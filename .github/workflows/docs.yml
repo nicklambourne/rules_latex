@@ -1,0 +1,103 @@
+name: Docs
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment, but don't cancel in-progress
+# runs since we want CI to complete before publishing.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Verify Stardoc output matches committed copy
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Bazelisk
+        uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          disk-cache: docs-${{ github.workflow }}
+          repository-cache: true
+
+      - name: Generate API markdown
+        run: bazel build //docs:all_api
+
+      - name: Diff against committed copy
+        run: |
+          # The build above wrote bazel-bin/docs/api/<name>.md.
+          # Diff each against the in-tree docs/site/api/<name>.md
+          # checked into the repo. If they differ, the contributor
+          # forgot to run `bazel run //docs:regenerate` after editing
+          # a docstring.
+          fail=0
+          for f in bazel-bin/docs/api/*.md; do
+            name="$(basename "$f")"
+            committed="docs/site/api/${name}"
+            if [[ ! -f "${committed}" ]]; then
+              echo "::error file=docs/site/api/${name}::missing committed copy"
+              fail=1
+              continue
+            fi
+            if ! diff -q "${f}" "${committed}" > /dev/null; then
+              echo "::error file=docs/site/api/${name}::generated copy differs from committed; run 'bazel run //docs:regenerate'"
+              diff -u "${committed}" "${f}" || true
+              fail=1
+            fi
+          done
+          if (( fail )); then
+            exit 1
+          fi
+          echo "All committed API markdown matches generated."
+
+  build:
+    name: Build MkDocs site
+    runs-on: ubuntu-22.04
+    needs: check
+    outputs:
+      artifact: ${{ steps.upload.outputs.artifact_id }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install MkDocs Material
+        run: |
+          pip install \
+            mkdocs-material==9.* \
+            'pymdown-extensions>=10' \
+            'mkdocs-material[imaging]'
+      - name: Build site
+        working-directory: docs
+        run: mkdocs build --strict
+      - name: Upload Pages artifact
+        id: upload
+        # Only upload from master push (PRs and other branches just
+        # verify the build works).
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-22.04
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

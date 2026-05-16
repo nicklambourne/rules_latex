@@ -1,0 +1,102 @@
+"""Generated user-guide pages.
+
+We use Stardoc to extract the docstrings + attribute descriptions from
+every public `.bzl` and render them as Markdown. Those Markdown files
+are then bundled into a Material-themed MkDocs site published to
+GitHub Pages.
+
+The generated files are checked into `docs/api/` so they're easy to
+read in the GitHub UI and so a `.bzl` change shows up as a diff in
+the docs folder. CI re-runs Stardoc and asserts the committed copies
+match — see `.github/workflows/docs.yml`.
+
+To regenerate the committed Markdown after editing a `.bzl` docstring:
+
+    bazel run //docs:regenerate
+
+The MkDocs build (HTML output) is driven separately by the docs
+workflow — it doesn't have to live inside Bazel because MkDocs is
+already a fine standalone tool.
+"""
+
+load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("@stardoc//stardoc:stardoc.bzl", "stardoc")
+
+# Helper: bundle each public .bzl with its loaded dependencies so
+# Stardoc can resolve cross-file `load()` statements.
+bzl_library(
+    name = "providers_lib",
+    srcs = ["//latex:providers.bzl"],
+    visibility = ["//visibility:private"],
+)
+
+bzl_library(
+    name = "toolchain_lib",
+    srcs = ["//latex/toolchain:toolchain.bzl"],
+    visibility = ["//visibility:private"],
+)
+
+bzl_library(
+    name = "defs_lib",
+    srcs = ["//latex:defs.bzl"],
+    visibility = ["//visibility:private"],
+    deps = [
+        ":providers_lib",
+        "//latex/private:latex_cache_snapshot.bzl",
+        "//latex/private:latex_document.bzl",
+        "//latex/private:latex_library.bzl",
+        "//latex/private:latex_pkg.bzl",
+        "//latex/private:latex_serve.bzl",
+        "//latex/private:latex_serve_web.bzl",
+        "//latex/private:latex_test.bzl",
+    ],
+)
+
+# One stardoc target per public .bzl. The aggregate //docs:all_api
+# regenerates every page in one shot.
+#
+# Tuples are (page_name, input_bzl_label, bzl_library_target).
+_PUBLIC_MODULES = [
+    (
+        "rules",
+        "//latex:defs.bzl",
+        ":defs_lib",
+    ),
+    (
+        "providers",
+        "//latex:providers.bzl",
+        ":providers_lib",
+    ),
+    (
+        "toolchain",
+        "//latex/toolchain:toolchain.bzl",
+        ":toolchain_lib",
+    ),
+]
+
+[
+    stardoc(
+        name = "{}_md".format(page_name),
+        out = "api/{}.md".format(page_name),
+        input = input_bzl,
+        table_of_contents_template = "@stardoc//stardoc:templates/markdown_tables/table_of_contents.vm",
+        deps = [lib_target],
+    )
+    for page_name, input_bzl, lib_target in _PUBLIC_MODULES
+]
+
+filegroup(
+    name = "all_api",
+    srcs = ["{}_md".format(t[0]) for t in _PUBLIC_MODULES],
+)
+
+# `bazel run //docs:regenerate` writes every generated .md back into
+# the source tree, replacing committed copies. Run when a docstring
+# changes.
+sh_binary(
+    name = "regenerate",
+    srcs = ["regenerate.sh"],
+    args = [t[0] for t in _PUBLIC_MODULES],
+    data = [":all_api"],
+)
