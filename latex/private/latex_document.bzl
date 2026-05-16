@@ -87,8 +87,11 @@ def _resolve_biber(ctx, toolchain):
     return (toolchain.biber, False)
 
 def _resolved_pkg_files(ctx):
-    """Resolve pkg_files (label-keyed dict) to a list of (File, rel)
-    pairs. Each label must expand to exactly one file."""
+    """Resolve `pkg_files` to a list of (File, staged-path) pairs.
+
+    Each label key must expand to exactly one file (typically a
+    `filegroup` with a single src, or a plain file label).
+    """
     out = []
     for label, rel in ctx.attr.pkg_files.items():
         files = label.files.to_list()

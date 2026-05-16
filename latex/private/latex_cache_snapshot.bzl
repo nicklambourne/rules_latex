@@ -127,8 +127,11 @@ exec "$PYTHON" "{tool}" \\
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
 
 def _resolved_pkg_files(ctx):
-    """Resolve the pkg_files attribute (label -> staged path) to its
-    runtime form (File -> staged path)."""
+    """Resolve `pkg_files` to a {File: staged-path} dict.
+
+    Each label key must expand to exactly one file (typically a
+    `filegroup` with a single src, or a plain file label).
+    """
     out = {}
     for label, rel in ctx.attr.pkg_files.items():
         files = label.files.to_list()

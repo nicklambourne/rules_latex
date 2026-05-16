@@ -63,18 +63,21 @@ def _latex_test_impl(ctx):
     # Resolve biber. Same logic as latex_document's _resolve_biber but
     # inlined since this rule is otherwise self-contained.
     biber_file = None
-    use_system_biber = False
     if ctx.attr.biber:
         if ctx.attr.biber_strategy == "system":
-            use_system_biber = True
-        else:
-            if toolchain.biber == None:
-                fail(
-                    ("latex_test(biber = True) on {}, but the resolved " +
-                     "toolchain has no biber binary. See DESIGN.md §4.9 " +
-                     "for the linux/aarch64 workaround.").format(ctx.label),
-                )
-            biber_file = toolchain.biber
+            fail(
+                ("latex_test(biber_strategy = 'system') on {} is not " +
+                 "supported. The test sandbox scrubs PATH, so a system " +
+                 "biber wouldn't be findable. Use the toolchain biber " +
+                 "(default) or vendor your own.").format(ctx.label),
+            )
+        if toolchain.biber == None:
+            fail(
+                ("latex_test(biber = True) on {}, but the resolved " +
+                 "toolchain has no biber binary. See DESIGN.md §4.9 " +
+                 "for the linux/aarch64 workaround.").format(ctx.label),
+            )
+        biber_file = toolchain.biber
 
     pkg_files = _resolved_pkg_files(ctx)
 
@@ -133,7 +136,7 @@ set -euo pipefail
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-PYTHON="${{PYTHON:-python3}}"
+PYTHON="${PYTHON:-python3}"
 """
 
     if cache_args == "__IMPLICIT__":
