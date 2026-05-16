@@ -6,108 +6,52 @@ on:
       - "v[0-9]+.[0-9]+.[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+-*"
 
+# Permissions required by bazel-contrib/.github/release_ruleset:
+#   contents: write    - upload release files
+#   id-token: write    - sign attestations via OIDC
+#   attestations: write - upload signed attestations
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   release:
-    name: Build release archive and publish GitHub Release
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6.0.2
-        with:
-          fetch-depth: 0
+    # Reusable workflow from bazel-contrib that:
+    #   - runs `bazel test //...`
+    #   - runs .github/workflows/release_prep.sh which writes the
+    #     release archive(s) and the docs tarball
+    #   - generates SLSA build provenance attestations over the
+    #     release files (one .intoto.jsonl per archive)
+    #   - publishes a GitHub Release with everything attached
+    #
+    # See https://github.com/bazel-contrib/bazel-central-registry/discussions/2721
+    # for the BCR provenance design these attestations implement.
+    uses: bazel-contrib/.github/.github/workflows/release_ruleset.yaml@v7.5.0
+    with:
+      bazel_test_command: bazel test //... //tests/...
+      prerelease: false
+      release_files: |
+        rules_latex-*.tar.gz
+      # The reusable workflow generates release notes automatically.
+      # Our release_prep.sh prepends its own preamble (BCR submission
+      # snippet etc.) for module consumers.
+      generate_release_notes: true
 
-      - name: Determine version
-        id: version
-        run: |
-          tag="${GITHUB_REF#refs/tags/}"
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Verify MODULE.bazel version matches tag
-        run: |
-          mod_version="$(grep -oE 'version = "[^"]+"' MODULE.bazel | head -1 | sed -E 's/version = "(.+)"/\1/')"
-          if [[ "${mod_version}" != "${{ steps.version.outputs.version }}" ]]; then
-            echo "FAIL: MODULE.bazel version (${mod_version}) does not match tag (${{ steps.version.outputs.version }})." >&2
-            exit 1
-          fi
-          echo "MODULE.bazel version matches tag: ${mod_version}"
-
-      - name: Build release archive
-        id: archive
-        run: |
-          tag="${{ steps.version.outputs.tag }}"
-          version="${{ steps.version.outputs.version }}"
-          archive="rules_latex-${version}.tar.gz"
-          # Use git archive to get a clean snapshot at the tagged commit,
-          # respecting .gitattributes. Strip the leading prefix so users
-          # extracting the archive land directly in the repo root.
-          git archive --format=tar.gz \
-              --prefix="rules_latex-${version}/" \
-              -o "${archive}" \
-              "${tag}"
-          sha256="$(sha256sum "${archive}" | cut -d' ' -f1)"
-          {
-            echo "archive=${archive}"
-            echo "sha256=${sha256}"
-          } >> "$GITHUB_OUTPUT"
-          echo "Archive ${archive} sha256=${sha256}"
-
-      - name: Generate BCR integrity hint
-        id: bcr
-        run: |
-          version="${{ steps.version.outputs.version }}"
-          sha256="${{ steps.archive.outputs.sha256 }}"
-          # The Bazel Central Registry's source.json wants a base64'd
-          # sha256 prefixed with "sha256-". We provide it pre-formatted so
-          # the human opening the BCR PR can copy-paste.
-          integrity="sha256-$(printf '%s' "${sha256}" | xxd -r -p | base64 -w0)"
-          {
-            echo "integrity=${integrity}"
-            echo "url=https://github.com/${{ github.repository }}/releases/download/v${version}/rules_latex-${version}.tar.gz"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Publish GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tag="${{ steps.version.outputs.tag }}"
-          version="${{ steps.version.outputs.version }}"
-          archive="${{ steps.archive.outputs.archive }}"
-          sha256="${{ steps.archive.outputs.sha256 }}"
-          integrity="${{ steps.bcr.outputs.integrity }}"
-          url="${{ steps.bcr.outputs.url }}"
-
-          notes="$(mktemp)"
-          cat > "${notes}" <<EOF
-          ## rules_latex ${version}
-
-          Release archive sha256: \`${sha256}\`
-
-          ### Bzlmod consumption
-
-          \`\`\`python
-          bazel_dep(name = "rules_latex", version = "${version}")
-          \`\`\`
-
-          ### Bazel Central Registry submission
-
-          The BCR \`source.json\` fields for this release:
-
-          \`\`\`json
-          {
-            "url": "${url}",
-            "integrity": "${integrity}",
-            "strip_prefix": "rules_latex-${version}"
-          }
-          \`\`\`
-
-          See [\`CHANGELOG.md\`](https://github.com/${{ github.repository }}/blob/${tag}/CHANGELOG.md) for the user-facing changes in this release.
-          EOF
-
-          gh release create "${tag}" \
-            "${archive}" \
-            --title "rules_latex ${version}" \
-            --notes-file "${notes}"
+  # Auto-publish to the Bazel Central Registry once the release
+  # itself is up. The BCR_PUBLISH_TOKEN secret needs to be configured
+  # under repo settings (Classic PAT with repo + workflow scopes).
+  # If the secret is missing, the publish job will fail loudly; that
+  # failure doesn't break the release that already went out, just
+  # the BCR submission step.
+  publish-to-bcr:
+    needs: release
+    uses: ./.github/workflows/publish.yml
+    with:
+      tag_name: ${{ github.ref_name }}
+    secrets:
+      publish_token: ${{ secrets.BCR_PUBLISH_TOKEN }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write

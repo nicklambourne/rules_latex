@@ -25,3 +25,6 @@ MODULE.bazel.lock
 __pycache__/
 *.pyc
 
+# Release archives produced by release_prep.sh at release time.
+/rules_latex-*.tar.gz
+

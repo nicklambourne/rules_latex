@@ -1,10 +1,14 @@
 name: Publish to BCR
 
-# Manual-trigger only for now. Once we're ready to publish to the
-# Bazel Central Registry, switch this to `workflow_call` from the
-# release workflow (or add a `release` event filter), and configure
-# the BCR_PUBLISH_TOKEN secret per
-# https://github.com/bazel-contrib/publish-to-bcr#3-create-a-personal-access-token.
+# Triggered both by:
+#   1. workflow_dispatch (manual UI trigger) — for ad-hoc retries
+#      after release publication issues.
+#   2. workflow_call from the Release workflow — fires once the
+#      attestations and release are published. This is the
+#      happy-path automation.
+#
+# See https://github.com/bazel-contrib/publish-to-bcr for the design
+# of this reusable workflow.
 on:
   workflow_dispatch:
     inputs:
@@ -12,30 +16,39 @@ on:
         description: "Release tag to publish to BCR (e.g. v0.2.0)"
         required: true
         type: string
+  workflow_call:
+    inputs:
+      tag_name:
+        description: "Release tag to publish to BCR"
+        required: true
+        type: string
+    secrets:
+      publish_token:
+        description: PAT for opening the BCR PR
+        required: true
 
 permissions:
+  # Necessary for the publish-to-bcr reusable workflow.
   contents: write
   id-token: write
   attestations: write
 
 jobs:
   publish:
-    # Pin to a tagged release of publish-to-bcr rather than @main so a
-    # breaking change upstream doesn't silently affect our release.
+    # Pinned tag rather than @main so an upstream breaking change
+    # doesn't silently affect our release.
     uses: bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@v1.2.0
     with:
       tag_name: ${{ inputs.tag_name }}
-      # Fork of bazelbuild/bazel-central-registry. Maintained on
-      # nicklambourne so the BCR PR is opened from there.
+      # Fork of bazelbuild/bazel-central-registry. The PAT under
+      # BCR_PUBLISH_TOKEN must have push access here.
       registry_fork: nicklambourne/bazel-central-registry
-      # Attestations require the bazel-contrib release_ruleset workflow
-      # to produce them; our current release workflow doesn't, so we
-      # disable for now. Flip to true once we migrate the release
-      # workflow per
-      # https://github.com/bazel-contrib/.github/blob/master/.github/workflows/release_ruleset.yaml
-      attest: false
+      # Attestations now ride along with the release because the
+      # release workflow uses bazel-contrib/.github's
+      # release_ruleset reusable workflow (see release.yml). The
+      # publish workflow picks them up automatically.
+      attest: true
     secrets:
-      # Classic PAT with `repo` and `workflow` scopes, owned by the
-      # account that maintains the registry fork above. Stored under
-      # repo Settings > Secrets and variables > Actions. See README.
+      # Classic PAT with `repo` + `workflow` scopes, owned by the
+      # account that maintains the registry fork above.
       publish_token: ${{ secrets.BCR_PUBLISH_TOKEN }}

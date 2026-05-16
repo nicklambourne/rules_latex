@@ -5,10 +5,17 @@ every public `.bzl` and render them as Markdown. Those Markdown files
 are then bundled into a Material-themed MkDocs site published to
 GitHub Pages.
 
-The generated files are checked into `docs/api/` so they're easy to
-read in the GitHub UI and so a `.bzl` change shows up as a diff in
-the docs folder. CI re-runs Stardoc and asserts the committed copies
-match — see `.github/workflows/docs.yml`.
+We ALSO produce `starlark_doc_extract`-format binaryproto files for
+each public module. The BCR consumes these to render Stardoc-style
+reference pages on registry.bazel.build/modules/rules_latex/<version>
+(see https://blog.aspect.build/stardocs-on-bcr). The
+release_prep.sh script tars them up into a docs archive referenced
+from .bcr/source.template.json.
+
+The Markdown generated files are checked into `docs/site/api/` so
+they're easy to read in the GitHub UI; CI re-runs Stardoc and
+asserts the committed copies match. See
+`.github/workflows/docs.yml`.
 
 To regenerate the committed Markdown after editing a `.bzl` docstring:
 
@@ -75,6 +82,7 @@ _PUBLIC_MODULES = [
     ),
 ]
 
+# Markdown pages for the MkDocs site.
 [
     stardoc(
         name = "{}_md".format(page_name),
@@ -86,9 +94,28 @@ _PUBLIC_MODULES = [
     for page_name, input_bzl, lib_target in _PUBLIC_MODULES
 ]
 
+# binaryproto outputs consumed by the BCR's Stardoc renderer.
+# release_prep.sh tars the union of //...:*.binaryproto into a docs
+# archive that .bcr/source.template.json points at via `docs_url`.
+[
+    starlark_doc_extract(
+        name = "{}_proto".format(page_name),
+        src = input_bzl,
+        deps = [lib_target],
+    )
+    for page_name, input_bzl, lib_target in _PUBLIC_MODULES
+]
+
 filegroup(
     name = "all_api",
     srcs = ["{}_md".format(t[0]) for t in _PUBLIC_MODULES],
+)
+
+# Aggregate target for the BCR docs archive: bazel build //docs:all_protos
+# produces every starlark_doc_extract binaryproto.
+filegroup(
+    name = "all_protos",
+    srcs = ["{}_proto".format(t[0]) for t in _PUBLIC_MODULES],
 )
 
 # `bazel run //docs:regenerate` writes every generated .md back into
