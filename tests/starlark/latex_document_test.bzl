@@ -131,6 +131,47 @@ def _no_synctex_test_impl(ctx):
 no_synctex_test = analysistest.make(_no_synctex_test_impl)
 
 # -----------------------------------------------------------------------------
+# Test: pkg_files -> the override file appears in TectonicCompile's inputs
+#                    and is passed via --pkg-file
+# -----------------------------------------------------------------------------
+
+def _pkg_files_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    actions = analysistest.target_actions(env)
+    compile_actions = [a for a in actions if a.mnemonic == "TectonicCompile"]
+    asserts.equals(env, 1, len(compile_actions), "expected exactly one TectonicCompile action")
+    compile_action = compile_actions[0]
+
+    # The pkg_files file should be wired into the action's inputs.
+    input_paths = [f.path for f in compile_action.inputs.to_list()]
+    found_bib = False
+    for p in input_paths:
+        if p.endswith("_pkg_files_bib.bib"):
+            found_bib = True
+            break
+    asserts.true(
+        env,
+        found_bib,
+        "expected the pkg_files override file in TectonicCompile inputs, got: {}".format(input_paths),
+    )
+
+    # And the action's argv should include a --pkg-file flag.
+    argv = compile_action.argv or []
+    has_pkg_file_flag = False
+    for arg in argv:
+        if arg == "--pkg-file":
+            has_pkg_file_flag = True
+            break
+    asserts.true(
+        env,
+        has_pkg_file_flag,
+        "expected --pkg-file in TectonicCompile argv, got: {}".format(argv),
+    )
+    return analysistest.end(env)
+
+pkg_files_test = analysistest.make(_pkg_files_test_impl)
+
+# -----------------------------------------------------------------------------
 # Suite definition
 # -----------------------------------------------------------------------------
 
@@ -195,6 +236,21 @@ def latex_document_test_suite(name):
         tags = ["manual"],
     )
 
+    # Fake bib file for the pkg_files test. Genrule output rather than
+    # a real source so we can declare it inline in this file.
+    native.genrule(
+        name = "_pkg_files_bib",
+        outs = ["_pkg_files_bib.bib"],
+        cmd = "echo '% fake bib' > $@",
+    )
+    latex_document(
+        name = "_doc_pkg_files",
+        main = "_test_doc.tex",
+        srcs = [":_test_doc_tex"],
+        pkg_files = {":_pkg_files_bib": "refs.bib"},
+        tags = ["manual"],
+    )
+
     # --- analysistest cases -------------------------------------------
 
     implicit_pipeline_test(
@@ -213,6 +269,10 @@ def latex_document_test_suite(name):
         name = "no_synctex_test",
         target_under_test = ":_doc_no_synctex",
     )
+    pkg_files_test(
+        name = "pkg_files_test",
+        target_under_test = ":_doc_pkg_files",
+    )
 
     native.test_suite(
         name = name,
@@ -221,5 +281,6 @@ def latex_document_test_suite(name):
             ":checked_in_cache_test",
             ":synctex_output_test",
             ":no_synctex_test",
+            ":pkg_files_test",
         ],
     )

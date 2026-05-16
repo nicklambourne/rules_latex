@@ -70,11 +70,18 @@ def _latex_cache_snapshot_impl(ctx):
     launcher = ctx.actions.declare_file(ctx.label.name + ".sh")
 
     src_args = " \\\n        ".join([
-        '--src "$RUNFILES/{}"'.format(s.short_path)
+        '--src "{}"'.format(s.short_path)
         for s in all_srcs
     ])
+    pkg_file_args = " \\\n        ".join([
+        '--pkg-file "{src}={rel}"'.format(
+            src = src.short_path,
+            rel = rel,
+        )
+        for src, rel in _resolved_pkg_files(ctx).items()
+    ])
     biber_arg = (
-        '--biber "$RUNFILES/{}"'.format(biber_file.short_path) if biber_file else ""
+        '--biber "{}"'.format(biber_file.short_path) if biber_file else ""
     )
 
     script = """\
@@ -87,16 +94,16 @@ if [[ -z "${{BUILD_WORKSPACE_DIRECTORY:-}}" ]]; then
     exit 1
 fi
 
-RUNFILES="$(pwd)"
+# Bazel sets cwd to the runfiles root for `bazel run`. All file paths
+# below are short_path values, which are relative to that root, so
+# they resolve correctly without any chdir.
 PYTHON="${{PYTHON:-python3}}"
 
-# We deliberately don't pass --src-root: the tool computes the
-# deepest common ancestor of (main + all srcs), which handles both
-# single-package documents and cross-package latex_pkg deps.
-exec "$PYTHON" "$RUNFILES/{tool}" \\
-    --tectonic "$RUNFILES/{tectonic}" \\
-    --main "$RUNFILES/{main}" \\
+exec "$PYTHON" "{tool}" \\
+    --tectonic "{tectonic}" \\
+    --main "{main}" \\
     {src_args} \\
+    {pkg_file_args} \\
     --workspace "$BUILD_WORKSPACE_DIRECTORY" \\
     --output "{output}" \\
     {biber_arg}
@@ -107,16 +114,31 @@ exec "$PYTHON" "$RUNFILES/{tool}" \\
         tectonic = tectonic.short_path,
         main = main.short_path,
         src_args = src_args,
+        pkg_file_args = pkg_file_args,
         output = ctx.attr.output,
         biber_arg = biber_arg,
     )
     ctx.actions.write(launcher, script, is_executable = True)
 
-    runfiles_files = [tectonic, ctx.file._tool] + all_srcs
+    runfiles_files = [tectonic, ctx.file._tool, ctx.file._staging_lib] + all_srcs
     if biber_file:
         runfiles_files.append(biber_file)
     runfiles = ctx.runfiles(files = runfiles_files)
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
+
+def _resolved_pkg_files(ctx):
+    """Resolve the pkg_files attribute (label -> staged path) to its
+    runtime form (File -> staged path)."""
+    out = {}
+    for label, rel in ctx.attr.pkg_files.items():
+        files = label.files.to_list()
+        if len(files) != 1:
+            fail(
+                "pkg_files key {} expands to {} files; expected exactly one."
+                    .format(label, len(files)),
+            )
+        out[files[0]] = rel
+    return out
 
 latex_cache_snapshot = rule(
     implementation = _latex_cache_snapshot_impl,
@@ -153,8 +175,22 @@ latex_cache_snapshot = rule(
                   "against this snapshot.",
             default = False,
         ),
+        "pkg_files": attr.label_keyed_string_dict(
+            doc = "Map of label-of-input -> staged-relative-path. " +
+                  "Overrides the auto-staging path for the listed inputs, " +
+                  "letting you place a file anywhere under main.tex's " +
+                  "work directory. Typical use: stage a cross-package " +
+                  "`.bib` file as a sibling of main.tex so " +
+                  "`\\addbibresource{refs.bib}` works without `..` " +
+                  "(which tectonic refuses to hand to external tools).",
+            allow_files = True,
+        ),
         "_tool": attr.label(
-            default = "//tools:make_cache_snapshot.py",
+            default = "//tools:tectonic_populate_cache.py",
+            allow_single_file = True,
+        ),
+        "_staging_lib": attr.label(
+            default = "//tools:staging.py",
             allow_single_file = True,
         ),
     },

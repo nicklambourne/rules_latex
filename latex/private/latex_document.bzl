@@ -20,15 +20,34 @@ Three offline-mode strategies, in priority order:
    PopulateCache result is reused across builds and shared via the
    remote cache; only adding a new \\usepackage triggers a re-run.
 
-`biber` modes:
+### Staging contract (v0.3+)
+
+Both PopulateCache and TectonicCompile stage sources into a work
+directory using a **main-rooted layout** before invoking tectonic.
+Concretely:
+
+* main.tex lands at `<work>/<main.basename>`.
+* Sources under main's package land at the same relative path,
+  rooted at the work directory.
+* Cross-package sources land under their workspace-relative path
+  (e.g. `study/llb/lib/references/refs.bib` from a sibling package).
+* The `pkg_files` attribute lets users override placement of any
+  specific input, e.g. to stage a cross-package bib file as a sibling
+  of main.tex.
+
+Tectonic runs with cwd set to the work directory, so paths in
+main.tex like `\\input{sections/foo}` or `\\graphicspath{{./images/}}`
+resolve as the author would expect.
+
+### `biber` modes
 
 * `biber = False` (default) — no bibliography processor available.
 * `biber = True` — use the rules_latex-vendored biber from the
   toolchain. Fails at analysis time on platforms without an upstream
   biber binary (currently linux/aarch64).
-* `biber = "system"` — escape hatch: propagate $PATH into the action
-  so a system-installed biber is found. Less hermetic; intended for
-  air-gapped or unsupported-platform builds.
+* `biber_strategy = "system"` — escape hatch: propagate $PATH into
+  the action so a system-installed biber is found. Less hermetic;
+  intended for air-gapped or unsupported-platform builds.
 """
 
 load("//latex:providers.bzl", "LatexInfo")
@@ -67,77 +86,64 @@ def _resolve_biber(ctx, toolchain):
         )
     return (toolchain.biber, False)
 
-def _shell_setup_block(*, cache_setup, biber_setup, rename_setup):
-    """Stitch the action's prologue commands together.
+def _resolved_pkg_files(ctx):
+    """Resolve pkg_files (label-keyed dict) to a list of (File, rel)
+    pairs. Each label must expand to exactly one file."""
+    out = []
+    for label, rel in ctx.attr.pkg_files.items():
+        files = label.files.to_list()
+        if len(files) != 1:
+            fail(
+                "pkg_files key {} expands to {} files; expected exactly one."
+                    .format(label, len(files)),
+            )
+        out.append((files[0], rel))
+    return out
 
-    All three are bash snippets (possibly empty) that are concatenated
-    inside `ctx.actions.run_shell`. Centralising them here keeps the
-    main impl readable.
-    """
-    return "".join([
-        "set -eu\n",
-        'TECTONIC_CACHE_DIR="$(mktemp -d)"\n',
-        "export TECTONIC_CACHE_DIR\n",
-        'trap "rm -rf \\"$TECTONIC_CACHE_DIR\\"" EXIT\n',
-        biber_setup,
-        cache_setup,
-        rename_setup,
-    ])
-
-def _biber_setup_command(biber_file):
-    """Stage the biber binary onto PATH for the action.
-
-    Bazel's sandbox passes a scrubbed PATH; tectonic shells out to
-    `biber` by basename, so we need it findable. We symlink the
-    binary into a per-action scratch dir and prepend that to PATH.
-    """
-    return (
-        '_BIBER_DIR="$(mktemp -d)"\n' +
-        'ln -s "$PWD/{}" "$_BIBER_DIR/biber"\n'.format(biber_file.path) +
-        'export PATH="$_BIBER_DIR:${PATH:-/usr/bin:/bin}"\n'
-    )
-
-def _populate_cache_action(ctx, *, tectonic, biber_file, use_system_biber, main_in, srcs_depset, output_tarball):
+def _populate_cache_action(
+        ctx,
+        *,
+        tectonic,
+        biber_file,
+        use_system_biber,
+        main_in,
+        srcs_depset,
+        pkg_files,
+        output_tarball,
+        staging_lib,
+        tool):
     """Schedule an online tectonic compile that captures its cache.
 
-    Drives `//tools:make_cache_snapshot.py`. The output is a
+    Drives `//tools:tectonic_populate_cache.py`. The output is a
     deterministic, reproducible cache snapshot tarball; subsequent
     TectonicCompile actions consume it offline.
     """
-    tool = ctx.file._cache_snapshot_tool
-
     args = ctx.actions.args()
     args.add("--tectonic", tectonic.path)
     args.add("--main", main_in.path)
     args.add("--output", output_tarball.path)
-    # We deliberately don't pass --src-root: the tool computes the
-    # deepest common ancestor of (main + all srcs), which is the
-    # right thing whether sources live in a single package or span
-    # multiple (cross-package latex_pkg deps, shared image dirs etc).
 
-    # Each transitive source is passed via --src so the snapshot tool
-    # can stage them all into a working dir before invoking tectonic.
     for src in srcs_depset.to_list():
         args.add("--src", src.path)
+    for (f, rel) in pkg_files:
+        args.add("--pkg-file", "{}={}".format(f.path, rel))
     if biber_file:
         args.add("--biber", biber_file.path)
 
     inputs = depset(
-        direct = [main_in, tectonic, tool] +
-                 ([biber_file] if biber_file else []),
+        direct = (
+            [main_in, tectonic, tool, staging_lib] +
+            ([biber_file] if biber_file else []) +
+            [f for (f, _) in pkg_files]
+        ),
         transitive = [srcs_depset],
     )
 
-    # Environment for the action: the snapshot tool itself only needs
-    # a UTF-8 locale; biber path-prepending is done by the tool when
-    # --biber is set. If the user opted for system biber, we need
-    # PATH to propagate so the tool's subprocess can find it.
     env = {"LC_ALL": "C.UTF-8"}
     if use_system_biber:
-        env["PATH"] = ""  # populated by execution_requirements below
+        env["PATH"] = ""
 
-    # We invoke python3 directly so we don't have to ship the tool as
-    # a py_binary (which would drag in rules_python).
+    # Invoke python3 directly so we don't take a rules_python dep.
     ctx.actions.run_shell(
         command = (
             "set -eu\n" +
@@ -151,11 +157,94 @@ def _populate_cache_action(ctx, *, tectonic, biber_file, use_system_biber, main_
         progress_message = "Populating tectonic cache for %{label}",
         env = env,
         execution_requirements = {
-            # PopulateCache is the one online step. The action cache
-            # makes this a one-time cost per (sources × tectonic
-            # version × bundle version) tuple — subsequent builds
-            # reuse the cached output.
+            # The one online step in the implicit pipeline. Bazel's
+            # action cache makes this a one-time cost per (sources ×
+            # tectonic × bundle) tuple.
             "requires-network": "1",
+        },
+        use_default_shell_env = use_system_biber,
+    )
+
+def _compile_action(
+        ctx,
+        *,
+        tectonic,
+        biber_file,
+        use_system_biber,
+        main_in,
+        srcs_depset,
+        pkg_files,
+        offline_mode,
+        offline_source,
+        output,
+        synctex_output,
+        outfmt,
+        staging_lib,
+        tool):
+    """Schedule the TectonicCompile action.
+
+    Drives `//tools:tectonic_compile.py` which stages sources, runs
+    tectonic with cwd at the work directory, and copies the resulting
+    PDF (and optional .synctex.gz) to Bazel-declared output paths.
+    """
+    args = ctx.actions.args()
+    args.add("--tectonic", tectonic.path)
+    args.add("--main", main_in.path)
+    args.add("--outfmt", outfmt)
+    args.add("--output", output.path)
+
+    if offline_mode == "bundle":
+        args.add("--bundle", offline_source.path)
+    else:
+        # user_cache and implicit_pipeline both pass a cache tarball.
+        args.add("--cache-tarball", offline_source.path)
+
+    if ctx.attr.reproducible:
+        args.add("--reproducible")
+    if synctex_output:
+        args.add("--synctex-output", synctex_output.path)
+    for extra in ctx.attr.tectonic_args:
+        args.add("--tectonic-arg", extra)
+
+    for src in srcs_depset.to_list():
+        args.add("--src", src.path)
+    for (f, rel) in pkg_files:
+        args.add("--pkg-file", "{}={}".format(f.path, rel))
+    if biber_file:
+        args.add("--biber", biber_file.path)
+
+    inputs = depset(
+        direct = (
+            [main_in, tectonic, tool, staging_lib, offline_source] +
+            ([biber_file] if biber_file else []) +
+            [f for (f, _) in pkg_files]
+        ),
+        transitive = [srcs_depset],
+    )
+
+    outputs = [output]
+    if synctex_output:
+        outputs.append(synctex_output)
+
+    env = {"LC_ALL": "C.UTF-8"}
+
+    ctx.actions.run_shell(
+        command = (
+            "set -eu\n" +
+            ('PATH="${PATH:-/usr/bin:/bin}"\n' if use_system_biber else "") +
+            'exec python3 "{tool}" "$@"\n'.format(tool = tool.path)
+        ),
+        arguments = [args],
+        inputs = inputs,
+        outputs = outputs,
+        mnemonic = "TectonicCompile",
+        progress_message = "Compiling LaTeX %{label}",
+        env = env,
+        execution_requirements = {
+            # Fully hermetic in every mode: the cache (user-supplied,
+            # bundle, or implicitly populated) is content-addressed
+            # and present as an action input.
+            "requires-network": "",
         },
         use_default_shell_env = use_system_biber,
     )
@@ -180,15 +269,6 @@ def _latex_document_impl(ctx):
     outfmt = ctx.attr.outfmt
     output = ctx.actions.declare_file("{}.{}".format(ctx.label.name, outfmt))
 
-    # Tectonic always names its output after the input file (e.g.
-    # `hello.tex` → `hello.pdf`). When the target name differs from the
-    # input stem we ask tectonic to write into a private subdir of the
-    # action's outputs and then rename the result; otherwise we let
-    # tectonic write directly to the declared output's directory.
-    main_stem = main.basename[:-len("." + main.extension)] if main.extension else main.basename
-    needs_rename = main_stem != ctx.label.name
-    work_subdir = output.dirname + "/_" + ctx.label.name if needs_rename else output.dirname
-
     synctex_output = None
     if ctx.attr.synctex:
         synctex_output = ctx.actions.declare_file(
@@ -199,6 +279,11 @@ def _latex_document_impl(ctx):
     tectonic = toolchain.tectonic
     biber_file, use_system_biber = _resolve_biber(ctx, toolchain)
     user_cache = ctx.file.cache
+    pkg_files = _resolved_pkg_files(ctx)
+
+    populate_tool = ctx.file._populate_cache_tool
+    compile_tool = ctx.file._compile_tool
+    staging_lib = ctx.file._staging_lib
 
     # Decide which offline-mode strategy applies. Precedence: user
     # cache > toolchain bundle > implicit pipeline.
@@ -220,102 +305,27 @@ def _latex_document_impl(ctx):
             use_system_biber = use_system_biber,
             main_in = main,
             srcs_depset = all_srcs,
+            pkg_files = pkg_files,
             output_tarball = offline_source,
+            staging_lib = staging_lib,
+            tool = populate_tool,
         )
 
-    # --- TectonicCompile action --------------------------------------
-
-    args = ctx.actions.args()
-    args.add(tectonic.path)
-    args.add("-X")
-    args.add("compile")
-    args.add("--outfmt", outfmt)
-    args.add("--outdir", work_subdir)
-    args.add("--keep-logs")
-    if offline_mode == "bundle":
-        args.add("--bundle", offline_source.path)
-        args.add("--only-cached")
-    else:
-        # user_cache and implicit_pipeline both pre-populate
-        # TECTONIC_CACHE_DIR from a tar.gz, then run with --only-cached.
-        args.add("--only-cached")
-    if ctx.attr.reproducible:
-        args.add("-Z")
-        args.add("deterministic-mode")
-    if ctx.attr.synctex:
-        args.add("--synctex")
-    for extra in ctx.attr.tectonic_args:
-        args.add(extra)
-    args.add(main.path)
-
-    inputs = depset(
-        direct = [main, tectonic, offline_source] +
-                 ([biber_file] if biber_file else []),
-        transitive = [all_srcs],
-    )
-
-    env = {"LC_ALL": "C.UTF-8"}
-    if ctx.attr.reproducible:
-        env["SOURCE_DATE_EPOCH"] = "0"
-
-    # Cache-setup snippet: for the bundle path the cache is unused, for
-    # both tarball paths we extract it into the scratch cache dir.
-    if offline_mode in ("user_cache", "implicit_pipeline"):
-        cache_setup = 'tar -xzf "{}" -C "$TECTONIC_CACHE_DIR"\n'.format(
-            offline_source.path,
-        )
-    else:
-        cache_setup = ""
-
-    biber_setup = _biber_setup_command(biber_file) if biber_file else ""
-
-    # Rename-setup snippet: tectonic always names outputs after the
-    # input stem; when needs_rename we direct output to a private
-    # subdir and mv after.
-    if needs_rename:
-        rename_setup = 'mkdir -p "{work}"\n'.format(work = work_subdir)
-        rename_post = ' && mv "{work}/{stem}.{ext}" "{out}"'.format(
-            work = work_subdir,
-            stem = main_stem,
-            ext = outfmt,
-            out = output.path,
-        )
-        if synctex_output:
-            rename_post += ' && mv "{work}/{stem}.synctex.gz" "{out}"'.format(
-                work = work_subdir,
-                stem = main_stem,
-                out = synctex_output.path,
-            )
-    else:
-        rename_setup = ""
-        rename_post = ""
-
-    outputs = [output]
-    if synctex_output:
-        outputs.append(synctex_output)
-
-    ctx.actions.run_shell(
-        command = (
-            _shell_setup_block(
-                cache_setup = cache_setup,
-                biber_setup = biber_setup,
-                rename_setup = rename_setup,
-            ) +
-            '"$@"' + rename_post + "\n"
-        ),
-        arguments = [args],
-        inputs = inputs,
-        outputs = outputs,
-        mnemonic = "TectonicCompile",
-        progress_message = "Compiling LaTeX %{label}",
-        env = env,
-        execution_requirements = {
-            # TectonicCompile is fully hermetic in every mode: the
-            # cache (user-supplied, bundle, or implicitly populated)
-            # is content-addressed and present as an action input.
-            "requires-network": "",
-        },
-        use_default_shell_env = use_system_biber,
+    _compile_action(
+        ctx,
+        tectonic = tectonic,
+        biber_file = biber_file,
+        use_system_biber = use_system_biber,
+        main_in = main,
+        srcs_depset = all_srcs,
+        pkg_files = pkg_files,
+        offline_mode = offline_mode,
+        offline_source = offline_source,
+        output = output,
+        synctex_output = synctex_output,
+        outfmt = outfmt,
+        staging_lib = staging_lib,
+        tool = compile_tool,
     )
 
     output_groups = {
@@ -410,12 +420,32 @@ latex_document = rule(
             default = "toolchain",
             values = _BIBER_STRATEGIES,
         ),
+        "pkg_files": attr.label_keyed_string_dict(
+            doc = "Override the staged path of specific inputs. Map of " +
+                  "label -> relative path under main.tex's work directory. " +
+                  "The default main-rooted staging layout puts each src " +
+                  "at a sensible place automatically; use `pkg_files` " +
+                  "when the default would force you to write a long or " +
+                  "`..`-containing path in main.tex. The classic case is " +
+                  "a cross-package bib file: declare " +
+                  "`pkg_files = {\"//lib/refs:refs.bib\": \"refs.bib\"}` " +
+                  "and then write `\\\\addbibresource{refs.bib}` in main.tex.",
+            allow_files = True,
+        ),
         "tectonic_args": attr.string_list(
             doc = "Extra command-line arguments passed to tectonic. Use " +
                   "sparingly; prefer rule-level attributes when possible.",
         ),
-        "_cache_snapshot_tool": attr.label(
-            default = "//tools:make_cache_snapshot.py",
+        "_populate_cache_tool": attr.label(
+            default = "//tools:tectonic_populate_cache.py",
+            allow_single_file = True,
+        ),
+        "_compile_tool": attr.label(
+            default = "//tools:tectonic_compile.py",
+            allow_single_file = True,
+        ),
+        "_staging_lib": attr.label(
+            default = "//tools:staging.py",
             allow_single_file = True,
         ),
     },

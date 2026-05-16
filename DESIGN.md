@@ -82,21 +82,36 @@ The pinned Tectonic version and per-platform SHA256 hashes live in
 ### 4.3 Action model
 
 `latex_document` produces one output file (the PDF, by default).
-Internally it invokes:
+Internally it runs `tools/tectonic_compile.py`, which:
 
-    tectonic -X compile \
-        --outfmt <pdf|html|xdv|aux> \
-        --outdir <bazel-out-dir> \
-        [--bundle <bundle.tar> --only-cached] \
-        --keep-logs \
-        [user-supplied tectonic_args ...] \
-        <main.tex>
+1. Stages all srcs into a per-action work directory using the
+   main-rooted layout (see §4.11).
+2. Invokes Tectonic with cwd at the work directory and `main` passed
+   as a basename:
 
-Sources are gathered transitively from `srcs` plus every `LatexInfo` provider
-exposed by `deps`. The bundle, if present, is an action input so it
-participates in Bazel's content-based caching. When a bundle is supplied we
-also pass `--only-cached`, which causes Tectonic to refuse any network
-access.
+       tectonic -X compile \
+           --outfmt <pdf|html|xdv|aux> \
+           --outdir <work> \
+           [--bundle <bundle.tar> --only-cached | --only-cached] \
+           --keep-logs \
+           [user-supplied tectonic_args ...] \
+           <main.basename>
+
+3. Copies the produced PDF (and optional `.synctex.gz`) to the
+   Bazel-declared output paths.
+
+The same wrapper drives the `TectonicCompile` action in
+`latex_document`/`latex_test` and the user-facing
+`latex_cache_snapshot` command. `TectonicPopulateCache` uses the
+sibling `tools/tectonic_populate_cache.py`, which shares the
+staging logic but emits a deterministic cache tarball instead of a
+PDF.
+
+Sources are gathered transitively from `srcs` plus every `LatexInfo`
+provider exposed by `deps`. The bundle, if present, is an action
+input so it participates in Bazel's content-based caching. When a
+bundle is supplied we also pass `--only-cached`, which causes
+Tectonic to refuse any network access.
 
 ### 4.4 Network policy
 
@@ -410,6 +425,96 @@ The right time to do option (3) is when one of:
 * We have a half-week of capacity to invest in long-term durability.
 
 Until then, this is tracked as §5.8 with the full option matrix above.
+
+### 4.11 Source staging (main-rooted layout)
+
+`latex_document` does not run Tectonic against its source files at
+their natural execroot paths. Instead, both `TectonicPopulateCache`
+and `TectonicCompile` first **stage** sources into a per-action work
+directory, then invoke Tectonic with `cwd` set to that directory.
+
+The staging layout is **main-rooted**: paths inside `main.tex` resolve
+as if main were the centre of its own universe.
+
+* `main.tex` lands at `<work>/<main.basename>`.
+* A src that is a descendant of main's package directory is staged at
+  the same path relative to that package, rooted at the work
+  directory. Example: a src at
+  `study/honours/thesis/thesis/sections/intro.tex` with main at
+  `study/honours/thesis/thesis/main.tex` lands at
+  `<work>/sections/intro.tex`.
+* A src outside main's package is staged at its workspace-relative
+  path. Example: a src at `study/llb/lib/references/refs.bib` with
+  main in `study/llb/1700/notes/` lands at
+  `<work>/study/llb/lib/references/refs.bib`. The author writes
+  `\addbibresource{study/llb/lib/references/refs.bib}` — no `..`
+  needed.
+* Generated files (bazel-out paths) are normalised: the
+  `bazel-out/<config>/bin/` prefix is stripped so generated files
+  appear at the same path as a hand-written source from the same
+  package would.
+* The `pkg_files` attribute on `latex_document` (and on `latex_test`
+  and `latex_cache_snapshot`) lets the user override placement for
+  any specific input. Common use: stage a sibling-package `.bib` file
+  as a direct sibling of `main.tex` so the `\addbibresource` line
+  reads `{refs.bib}` instead of `{study/llb/lib/references/refs.bib}`.
+
+#### Why staging at all
+
+The pre-v0.3 design had `TectonicCompile` run Tectonic from the Bazel
+execroot with main passed as an execroot-relative path. Two problems:
+
+1. **Inconsistency with `TectonicPopulateCache`.** That action
+   already staged sources under a common-ancestor work dir (to be
+   able to capture a hermetic cache), so relative paths in main.tex
+   resolved differently between the two action paths. A document
+   could compile in PopulateCache mode but fail in Compile mode
+   (or vice versa) depending on which side of the cache it landed.
+
+2. **Tectonic refuses `..` in paths to external tools.** Specifically,
+   `biber` is invoked with the resolved path of every
+   `\addbibresource{...}` argument; Tectonic rejects paths
+   containing `..` for security reasons. A document with a bib in a
+   sibling package therefore could not use the natural
+   `\addbibresource{../sibling/refs.bib}` form.
+
+The main-rooted layout fixes both: cwd is always main's directory,
+sources are reachable without `..`, and the two action paths agree
+about the file layout.
+
+#### Why a Python wrapper
+
+The staging logic plus Tectonic's invocation plus output-file
+copy-back ends up being a few hundred lines, and embedding it in a
+shell snippet inside Starlark is a recipe for portability bugs (the
+old code had macOS / Linux divergences in argument quoting). We
+already shell out to `python3` for the cache-snapshot tool; the
+incremental cost of also driving the compile through a Python tool
+is one tool's worth of code that we mostly inherit from the existing
+snapshot script.
+
+The Python tools (`tools/tectonic_populate_cache.py`,
+`tools/tectonic_compile.py`) share `tools/staging.py`. None of them
+take a `rules_python` dependency; they're invoked via
+`python3 <tool>` from a shell wrapper, matching the
+"stdlib-only Python as a system utility" pattern used elsewhere in
+the repo (see tracking issue #2).
+
+#### Trade-off vs `bazel_latex`
+
+`bazel_latex` requires every `\usepackage{foo}` to be listed as an
+explicit Bazel target dep against `@bazel_latex//packages:foo` and
+sets up its execution so that all dep files appear in cwd. That's
+a different way of solving the same path-resolution problem.
+
+The rules_latex approach (staging + main-rooted layout) trades that
+explicitness for ergonomic source files: an author can write a
+document as they would for any LaTeX editor, with relative paths
+anchored at main's directory, and rules_latex makes those paths
+work without per-document manual wiring. The cost is that
+cross-package files end up at slightly verbose default paths
+(`study/llb/lib/references/refs.bib`); the `pkg_files` attribute
+mitigates that for the cases where it matters.
 
 ## 5. Open questions / future work
 

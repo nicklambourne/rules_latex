@@ -8,7 +8,9 @@ deprecation warning.
 
 The test logic itself is a small shell wrapper that:
 
-1. Invokes tectonic exactly the same way `latex_document` would.
+1. Invokes the same `tectonic_compile.py` tool that `latex_document` uses,
+   so source-staging behaviour is identical to a real build (including the
+   main-rooted layout introduced in v0.3).
 2. Greps the produced `.log` for patterns drawn from the rule's attributes.
 3. Exits non-zero if any patterns are matched (failure) or required patterns
    are missing (also failure).
@@ -32,6 +34,18 @@ _DEFAULT_FORBIDDEN_PATTERNS = [
 
 def _collect_transitive_srcs(deps):
     return [dep[LatexInfo].srcs for dep in deps if LatexInfo in dep]
+
+def _resolved_pkg_files(ctx):
+    out = []
+    for label, rel in ctx.attr.pkg_files.items():
+        files = label.files.to_list()
+        if len(files) != 1:
+            fail(
+                "pkg_files key {} expands to {} files; expected exactly one."
+                    .format(label, len(files)),
+            )
+        out.append((files[0], rel))
+    return out
 
 def _latex_test_impl(ctx):
     main = ctx.file.main
@@ -62,64 +76,108 @@ def _latex_test_impl(ctx):
                 )
             biber_file = toolchain.biber
 
+    pkg_files = _resolved_pkg_files(ctx)
+
     forbidden = list(_DEFAULT_FORBIDDEN_PATTERNS) if not ctx.attr.forbidden_patterns_replace else []
     forbidden.extend(ctx.attr.forbidden_patterns)
     required = list(ctx.attr.required_patterns)
 
     test_script = ctx.actions.declare_file(ctx.label.name + ".sh")
 
-    # The test driver runs tectonic and then checks the log. We embed the
-    # tectonic invocation directly rather than depending on a separate
-    # binary so the test stays self-contained.
+    # Cache strategy: per-document snapshot > toolchain bundle > implicit
+    # pipeline. The implicit pipeline path expects an implicit-cache
+    # tarball produced by `latex_document` to also live in runfiles —
+    # but a latex_test target doesn't have access to a sibling
+    # latex_document's intermediate outputs without an explicit
+    # dependency. So when neither cache nor bundle is set we run a
+    # one-shot online tectonic invocation (the implicit pipeline's
+    # PopulateCache step, inlined).
     #
-    # Three offline-mode variants share the action: a per-document cache
-    # snapshot (preferred when set), a toolchain-wide bundle, or pure
-    # online mode.
-    cache_setup = ""
-    bundle_args = ""
+    # This is consistent with latex_document's pre-v0.2 behaviour:
+    # without `cache` or a toolchain bundle, the first build is online
+    # and Bazel's action cache reuses the result. For tests this means
+    # `bazel test` may need network the first time, then runs hermetic.
     cache_snapshot = ctx.file.cache
+    cache_args = ""
     if cache_snapshot:
-        cache_setup = 'tar -xzf "$(pwd)/{}" -C "$WORK/cache"\n'.format(
-            cache_snapshot.short_path,
-        )
-        bundle_args = "--only-cached "
+        cache_args = '--cache-tarball "{}"'.format(cache_snapshot.short_path)
     elif toolchain.bundle:
-        bundle_args = '--bundle "$(pwd)/{}" --only-cached '.format(
-            toolchain.bundle.short_path,
-        )
+        cache_args = '--bundle "{}"'.format(toolchain.bundle.short_path)
+    else:
+        # No cache, no bundle: drive the populate-cache wrapper inline
+        # to create a one-shot cache, then feed it to the compile tool.
+        # `latex_document`'s implicit pipeline does this at action time;
+        # here we do it at test time.
+        cache_args = "__IMPLICIT__"
 
-    # Stage biber onto PATH inside the test's mktemp work dir so
-    # tectonic's biblatex subprocess finds `biber` by basename. Mirror
-    # the approach used inside latex_document.
-    biber_setup = ""
-    if biber_file:
-        biber_setup = (
-            'mkdir -p "$WORK/bin"\n' +
-            'ln -s "$(pwd)/{}" "$WORK/bin/biber"\n'.format(biber_file.short_path) +
-            'export PATH="$WORK/bin:${PATH:-/usr/bin:/bin}"\n'
-        )
-    elif use_system_biber:
-        # Whatever PATH the user runs the test with is propagated by
-        # `bazel test` by default; nothing to do here.
-        pass
+    biber_arg = (
+        '--biber "{}"'.format(biber_file.short_path) if biber_file else ""
+    )
 
-    script = """\
+    src_args = " \\\n    ".join([
+        '--src "{}"'.format(s.short_path)
+        for s in all_srcs.to_list()
+    ])
+    pkg_file_args = " \\\n    ".join([
+        '--pkg-file "{src}={rel}"'.format(
+            src = f.short_path,
+            rel = rel,
+        )
+        for (f, rel) in pkg_files
+    ])
+
+    script_prefix = """\
 #!/usr/bin/env bash
 set -euo pipefail
 
-TECTONIC="$(pwd)/{tectonic}"
-MAIN="$(pwd)/{main}"
 WORK="$(mktemp -d)"
-mkdir -p "$WORK/cache"
 trap 'rm -rf "$WORK"' EXIT
-{biber_setup}{cache_setup}
-TECTONIC_CACHE_DIR="$WORK/cache" \\
-LC_ALL=C.UTF-8 \\
-"$TECTONIC" -X compile --outfmt {outfmt} --outdir "$WORK" --keep-logs {bundle_args}"$MAIN"
 
-LOG="$WORK/{logname}"
+PYTHON="${{PYTHON:-python3}}"
+"""
+
+    if cache_args == "__IMPLICIT__":
+        compile_cache_args = '--cache-tarball "$WORK/cache.tar.gz"'
+        implicit_prime = """\
+# No cache or bundle supplied: prime one online, then compile against
+# it. Same logic as latex_document's implicit pipeline, but inlined
+# here because tests can't depend on a sibling latex_document's
+# intermediate cache output.
+"$PYTHON" "{populate_tool}" \\
+    --tectonic "{tectonic}" \\
+    --main "{main}" \\
+    --output "$WORK/cache.tar.gz" \\
+    {biber_arg} \\
+    {src_args} \\
+    {pkg_file_args}
+
+""".format(
+            populate_tool = ctx.file._populate_tool.short_path,
+            tectonic = tectonic.short_path,
+            main = main.short_path,
+            biber_arg = biber_arg,
+            src_args = src_args,
+            pkg_file_args = pkg_file_args,
+        )
+    else:
+        compile_cache_args = cache_args
+        implicit_prime = ""
+
+    script = script_prefix + implicit_prime + """\
+"$PYTHON" "{tool}" \\
+    --tectonic "{tectonic}" \\
+    --main "{main}" \\
+    --outfmt {outfmt} \\
+    --output "$WORK/output.{outfmt}" \\
+    --log-output "$WORK/output.log" \\
+    {compile_cache_args} \\
+    {biber_arg} \\
+    {src_args} \\
+    {pkg_file_args}
+
+LOG="$WORK/output.log"
 if [[ ! -f "$LOG" ]]; then
-    echo "FAIL: tectonic did not produce a log file at $LOG" >&2
+    echo "FAIL: tectonic_compile.py did not produce a log file" >&2
     exit 1
 fi
 
@@ -128,13 +186,14 @@ status=0
 {required_checks}
 exit $status
 """.format(
+        tool = ctx.file._compile_tool.short_path,
         tectonic = tectonic.short_path,
         main = main.short_path,
         outfmt = ctx.attr.outfmt,
-        logname = main.basename[:-len(".tex")] + ".log",
-        biber_setup = biber_setup,
-        cache_setup = cache_setup,
-        bundle_args = bundle_args,
+        compile_cache_args = compile_cache_args,
+        biber_arg = biber_arg,
+        src_args = src_args,
+        pkg_file_args = pkg_file_args,
         forbidden_checks = "\n".join([
             'if grep -F -e {pat} "$LOG" >/dev/null; then\n'.format(pat = repr(p)) +
             '    echo "FAIL: forbidden pattern found in log: {pat}" >&2\n'.format(pat = p) +
@@ -150,13 +209,15 @@ exit $status
     )
     ctx.actions.write(test_script, script, is_executable = True)
 
+    runfiles_files = (
+        [main, tectonic, ctx.file._compile_tool, ctx.file._populate_tool, ctx.file._staging_lib] +
+        ([toolchain.bundle] if toolchain.bundle and not cache_snapshot else []) +
+        ([cache_snapshot] if cache_snapshot else []) +
+        ([biber_file] if biber_file else []) +
+        [f for (f, _) in pkg_files]
+    )
     runfiles = ctx.runfiles(
-        files = (
-            [main, tectonic] +
-            ([toolchain.bundle] if toolchain.bundle and not cache_snapshot else []) +
-            ([cache_snapshot] if cache_snapshot else []) +
-            ([biber_file] if biber_file else [])
-        ),
+        files = runfiles_files,
         transitive_files = all_srcs,
     )
     return [DefaultInfo(executable = test_script, runfiles = runfiles)]
@@ -211,6 +272,11 @@ latex_test = rule(
             default = "toolchain",
             values = ["toolchain", "system"],
         ),
+        "pkg_files": attr.label_keyed_string_dict(
+            doc = "Same semantics as `latex_document.pkg_files`. Override " +
+                  "the staged path of specific inputs.",
+            allow_files = True,
+        ),
         "forbidden_patterns": attr.string_list(
             doc = "Substrings whose presence in the tectonic log file " +
                   "fails the test. Appended to a sensible default list " +
@@ -227,6 +293,18 @@ latex_test = rule(
             doc = "Substrings that MUST appear in the tectonic log file. " +
                   "Useful for asserting a particular package was loaded " +
                   "or a specific shipout happened.",
+        ),
+        "_compile_tool": attr.label(
+            default = "//tools:tectonic_compile.py",
+            allow_single_file = True,
+        ),
+        "_populate_tool": attr.label(
+            default = "//tools:tectonic_populate_cache.py",
+            allow_single_file = True,
+        ),
+        "_staging_lib": attr.label(
+            default = "//tools:staging.py",
+            allow_single_file = True,
         ),
     },
     toolchains = ["//latex/toolchain:toolchain_type"],

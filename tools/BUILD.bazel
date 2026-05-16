@@ -4,11 +4,19 @@
 
 package(default_visibility = ["//visibility:public"])
 
-# The cache snapshot script is exposed as a plain file rather than a
-# py_binary because:
-#   1. We don't want to take an `rules_python` dependency just for a
-#      stdlib-only script.
-#   2. `latex_cache_snapshot` constructs its own shell launcher anyway,
-#      and shelling out to `python3` keeps the rules invocation chain
-#      trivial.
-exports_files(["make_cache_snapshot.py"])
+# Three scripts and a shared library that drive the rules_latex
+# tectonic action paths:
+#
+#   - staging.py: shared layout logic (main-rooted staging).
+#   - tectonic_populate_cache.py: TectonicPopulateCache action wrapper
+#     and the worker behind `latex_cache_snapshot`.
+#   - tectonic_compile.py: TectonicCompile action wrapper.
+#
+# Exposed as plain files rather than py_binary because we deliberately
+# don't take a `rules_python` dependency for stdlib-only tools — see
+# tracking issue #2 for the trade-off.
+exports_files([
+    "staging.py",
+    "tectonic_populate_cache.py",
+    "tectonic_compile.py",
+])

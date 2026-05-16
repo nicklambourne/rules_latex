@@ -63,7 +63,7 @@ latex_cache_snapshot(
     name = "hello_snapshot",
     srcs = ["hello.tex"],
     main = "hello.tex",
-    output = "examples/hello/hello_cache.tar.gz",
+    output = "hello/hello_cache.tar.gz",
     deps = [":preamble"],
 )
 

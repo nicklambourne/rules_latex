@@ -6,6 +6,85 @@ that, expect breaking changes in any v0.x release.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-17
+
+### Changed (breaking)
+
+- **Main-rooted source staging.** Both `TectonicPopulateCache` and
+  `TectonicCompile` actions now stage sources into a temporary work
+  directory and run Tectonic with cwd set to the directory containing
+  the main `.tex` file. Relative paths in `main.tex` (in `\input`,
+  `\graphicspath`, `\addbibresource`, etc.) resolve against main's
+  directory, exactly as they would in an editor-driven local compile.
+
+  Previously, `TectonicCompile` ran tectonic from the Bazel execroot
+  with main passed as an execroot-relative path, while
+  `TectonicPopulateCache` staged sources under a common-ancestor work
+  dir. The two action paths therefore had different cwd conventions
+  and could disagree about whether a path resolved.
+
+  **Migration**: documents using `..` in `\graphicspath`,
+  `\input{../...}`, or `\addbibresource{../...}` need to update those
+  paths. The new layout makes cross-package sources reachable at
+  their workspace-relative path (e.g.
+  `_shared/logo/logo.png` instead of `../_shared/logo/logo.png`),
+  and the new `pkg_files` attribute lets you override placement of
+  specific inputs to keep `main.tex` clean.
+
+  See DESIGN.md §4.11 for the full staging contract.
+
+- **`make_cache_snapshot.py` replaced.** The old single-tool design
+  is split into:
+
+  - `tools/staging.py`: the shared layout library.
+  - `tools/tectonic_populate_cache.py`: TectonicPopulateCache and the
+    backing tool for `latex_cache_snapshot`.
+  - `tools/tectonic_compile.py`: TectonicCompile action wrapper.
+
+  Out-of-tree consumers that referenced `//tools:make_cache_snapshot.py`
+  directly need to migrate to the new layout.
+
+### Added
+
+- **`latex_document.pkg_files` attribute.** Map of label →
+  relative-path-under-main's-work-dir. Lets you stage a cross-package
+  source (typically a `.bib` file) at any path inside main's work
+  directory, including as a sibling of main.tex itself. The classic
+  use case is sharing one `references.bib` across multiple documents
+  in different packages:
+
+  ```python
+  latex_document(
+      name = "notes",
+      main = "notes/main.tex",
+      srcs = [...],
+      biber = True,
+      pkg_files = {"//lib/refs:refs.bib": "refs.bib"},
+  )
+  ```
+
+  Then `\addbibresource{refs.bib}` in `notes/main.tex` resolves
+  correctly. Without `pkg_files` the file would auto-stage at
+  `lib/refs/refs.bib` and need to be addressed by that full path
+  from `main.tex` (which is also valid).
+
+- **Same `pkg_files` attribute on `latex_test` and
+  `latex_cache_snapshot`.** Stay consistent across all three rules.
+
+### Fixed
+
+- Tectonic's bibliography subprocess (biber) refused paths
+  containing `..` with "relative parent paths are not supported for
+  the external tool". The new main-rooted staging avoids `..` paths
+  entirely, fixing biblatex compiles for documents whose `.bib` lives
+  in a sibling package.
+
+- `latex_test`'s `--keep-logs` output and tectonic invocation now go
+  through the same `tectonic_compile.py` wrapper as `latex_document`,
+  so log-path and staging behaviour is identical between the two
+  rules. Previously the test rule used its own inline shell snippet
+  with subtly different conventions.
+
 ## [0.2.0] - 2026-05-16
 
 ### Added
