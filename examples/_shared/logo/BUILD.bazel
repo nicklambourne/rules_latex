@@ -1,0 +1,14 @@
+"""Shared assets used across the example documents.
+
+Currently just the rules_latex logo. Exposed as a latex_pkg so any
+example can pull it in by depending on //_shared/logo:logo without
+duplicating the binary.
+"""
+
+load("@rules_latex//latex:defs.bzl", "latex_pkg")
+
+latex_pkg(
+    name = "logo",
+    srcs = ["logo.png"],
+    visibility = ["//visibility:public"],
+)

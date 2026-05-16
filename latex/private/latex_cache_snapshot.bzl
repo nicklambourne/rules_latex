@@ -77,8 +77,6 @@ def _latex_cache_snapshot_impl(ctx):
         '--biber "$RUNFILES/{}"'.format(biber_file.short_path) if biber_file else ""
     )
 
-    src_root = main.dirname
-
     script = """\
 #!/usr/bin/env bash
 set -euo pipefail
@@ -92,11 +90,13 @@ fi
 RUNFILES="$(pwd)"
 PYTHON="${{PYTHON:-python3}}"
 
+# We deliberately don't pass --src-root: the tool computes the
+# deepest common ancestor of (main + all srcs), which handles both
+# single-package documents and cross-package latex_pkg deps.
 exec "$PYTHON" "$RUNFILES/{tool}" \\
     --tectonic "$RUNFILES/{tectonic}" \\
     --main "$RUNFILES/{main}" \\
     {src_args} \\
-    --src-root "$RUNFILES/{src_root}" \\
     --workspace "$BUILD_WORKSPACE_DIRECTORY" \\
     --output "{output}" \\
     {biber_arg}
@@ -107,7 +107,6 @@ exec "$PYTHON" "$RUNFILES/{tool}" \\
         tectonic = tectonic.short_path,
         main = main.short_path,
         src_args = src_args,
-        src_root = src_root,
         output = ctx.attr.output,
         biber_arg = biber_arg,
     )

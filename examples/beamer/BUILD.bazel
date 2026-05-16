@@ -5,6 +5,8 @@ Demonstrates:
     which lives in TeX Live as the `beamer-theme-metropolis` package.
   * That tectonic resolves the theme files from the bundle without
     needing them enumerated in the BUILD.
+  * Cross-package image inclusion via a shared latex_pkg (the
+    rules_latex logo).
 """
 
 load("@rules_latex//latex:defs.bzl", "latex_document", "latex_test")
@@ -14,10 +16,12 @@ latex_document(
     srcs = ["slides.tex"],
     main = "slides.tex",
     visibility = ["//visibility:public"],
+    deps = ["//_shared/logo"],
 )
 
 latex_test(
     name = "slides_compile",
     srcs = ["slides.tex"],
     main = "slides.tex",
+    deps = ["//_shared/logo"],
 )

@@ -5,6 +5,7 @@ Demonstrates:
   * `\\input{}`-driven chapter structure (chapters live in a subdir).
   * biblatex + biber with a separate `references.bib` file.
   * Table of contents.
+  * Title-page logo via a cross-package latex_pkg.
 
 The compile is non-trivial: tectonic does multiple passes (TeX → biber
 → TeX) to resolve the ToC and citations.
@@ -21,6 +22,7 @@ latex_document(
     biber = True,
     main = "main.tex",
     visibility = ["//visibility:public"],
+    deps = ["//_shared/logo"],
 )
 
 latex_test(
@@ -31,4 +33,5 @@ latex_test(
     ] + glob(["chapters/*.tex"]),
     biber = True,
     main = "main.tex",
+    deps = ["//_shared/logo"],
 )

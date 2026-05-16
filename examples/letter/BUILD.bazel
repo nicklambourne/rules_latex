@@ -6,6 +6,7 @@ Demonstrates:
   * Vanilla `\\usepackage` use with `geometry` and `hyperref`. No
     package enumeration in the BUILD file thanks to the implicit
     cache pipeline.
+  * Cross-package image inclusion via the shared rules_latex logo.
 """
 
 load("@rules_latex//latex:defs.bzl", "latex_document", "latex_test")
@@ -15,10 +16,12 @@ latex_document(
     srcs = ["letter.tex"],
     main = "letter.tex",
     visibility = ["//visibility:public"],
+    deps = ["//_shared/logo"],
 )
 
 latex_test(
     name = "letter_compiles",
     srcs = ["letter.tex"],
     main = "letter.tex",
+    deps = ["//_shared/logo"],
 )

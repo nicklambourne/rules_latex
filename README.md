@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./assets/logo.svg" alt="rules_latex logo" width="200" />
+</p>
+
 # rules_latex
 
 [![CI](https://github.com/nicklambourne/rules_latex/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/nicklambourne/rules_latex/actions/workflows/ci.yml)

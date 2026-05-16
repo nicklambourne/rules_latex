@@ -109,8 +109,11 @@ def _populate_cache_action(ctx, *, tectonic, biber_file, use_system_biber, main_
     args = ctx.actions.args()
     args.add("--tectonic", tectonic.path)
     args.add("--main", main_in.path)
-    args.add("--src-root", main_in.dirname)
     args.add("--output", output_tarball.path)
+    # We deliberately don't pass --src-root: the tool computes the
+    # deepest common ancestor of (main + all srcs), which is the
+    # right thing whether sources live in a single package or span
+    # multiple (cross-package latex_pkg deps, shared image dirs etc).
 
     # Each transitive source is passed via --src so the snapshot tool
     # can stage them all into a working dir before invoking tectonic.

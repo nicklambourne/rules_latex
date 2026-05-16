@@ -1,5 +1,9 @@
 # rules_latex
 
+<p align="center">
+  <img src="assets/logo.svg" alt="rules_latex logo" width="180" />
+</p>
+
 Bazel rules for building LaTeX documents with the
 [Tectonic](https://tectonic-typesetting.github.io/) typesetting engine.
 

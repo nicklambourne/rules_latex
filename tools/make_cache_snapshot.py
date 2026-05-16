@@ -99,6 +99,39 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _compute_src_root(main: Path, srcs: list[Path], requested: Path | None) -> Path | None:
+    """Pick a directory containing every source.
+
+    If the caller passed ``--src-root`` (``requested``), respect it but
+    fail fast if any source escapes it. Otherwise compute the deepest
+    common ancestor of ``main`` plus every ``src``. Returning None
+    means "no rooted layout" and the caller flattens all sources into
+    one directory (the old behaviour preserved for callers that pass
+    ``--src-root ''``).
+    """
+    if requested is not None:
+        # Verify every src lives under the requested root. The actual
+        # relative-to checks happen in stage_sources but we surface a
+        # clearer message here.
+        for src in [main, *srcs]:
+            try:
+                src.relative_to(requested)
+            except ValueError:
+                raise SystemExit(
+                    f"--src {src} is not under --src-root {requested}. "
+                    "Pass --src-root to a common ancestor (or omit "
+                    "--src-root to auto-compute)."
+                )
+        return requested
+    # Auto-compute the deepest common ancestor.
+    paths = [main.resolve(), *(s.resolve() for s in srcs)]
+    common = Path(os.path.commonpath([str(p) for p in paths]))
+    # If the common ancestor is a file (e.g. only one input total), use its parent.
+    if common.is_file():
+        common = common.parent
+    return common
+
+
 def stage_sources(
     main: Path,
     srcs: list[Path],
@@ -113,9 +146,10 @@ def stage_sources(
     dir flat.
     """
     if src_root is not None:
+        resolved_root = src_root.resolve()
         for src in [main, *srcs]:
             try:
-                rel = src.relative_to(src_root)
+                rel = src.resolve().relative_to(resolved_root)
             except ValueError:
                 raise SystemExit(
                     f"--src {src} is not under --src-root {src_root}"
@@ -123,7 +157,7 @@ def stage_sources(
             dest = work_dir / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, dest)
-        return work_dir / main.relative_to(src_root)
+        return work_dir / main.resolve().relative_to(resolved_root)
 
     for src in srcs:
         shutil.copyfile(src, work_dir / src.name)
@@ -236,7 +270,10 @@ def main() -> int:
         cache_dir.mkdir()
 
         main_in_workdir = stage_sources(
-            args.main, args.srcs, args.src_root, work_dir
+            args.main,
+            args.srcs,
+            _compute_src_root(args.main, args.srcs, args.src_root),
+            work_dir,
         )
         run_tectonic(args.tectonic, main_in_workdir, cache_dir, biber=args.biber)
         pack_cache(cache_dir, output)
