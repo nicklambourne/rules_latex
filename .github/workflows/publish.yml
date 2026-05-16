@@ -22,7 +22,7 @@ jobs:
   publish:
     # Pin to a tagged release of publish-to-bcr rather than @main so a
     # breaking change upstream doesn't silently affect our release.
-    uses: bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@v0.1.4
+    uses: bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@v1.2.0
     with:
       tag_name: ${{ inputs.tag_name }}
       # Fork of bazelbuild/bazel-central-registry. Maintained on

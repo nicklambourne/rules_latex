@@ -22,9 +22,9 @@ jobs:
     name: Verify Stardoc output matches committed copy
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6.0.2
       - name: Set up Bazelisk
-        uses: bazel-contrib/setup-bazel@0.15.0
+        uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: true
           disk-cache: docs-${{ github.workflow }}
@@ -67,8 +67,8 @@ jobs:
     outputs:
       artifact: ${{ steps.upload.outputs.artifact_id }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6.0.2
+      - uses: actions/setup-python@v6.2.0
         with:
           python-version: "3.12"
       - name: Install MkDocs Material
@@ -85,7 +85,7 @@ jobs:
         # Only upload from master push (PRs and other branches just
         # verify the build works).
         if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5.0.0
         with:
           path: _site
 
@@ -100,4 +100,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5.0.0
