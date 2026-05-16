@@ -151,6 +151,13 @@ def _latex_document_impl(ctx):
         OutputGroupInfo(
             pdf = depset([output]) if outfmt == "pdf" else depset(),
         ),
+        # Propagate the document's transitive sources so live-preview
+        # rules (latex_serve) and other meta-tooling can discover them
+        # without re-declaring `main`/`srcs`/`deps`.
+        LatexInfo(
+            srcs = all_srcs,
+            search_paths = depset(),
+        ),
     ]
 
 latex_document = rule(
