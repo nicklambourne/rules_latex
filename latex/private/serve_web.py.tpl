@@ -1181,6 +1181,47 @@ refreshStatus();
 """
 
 
+class _NullWriter:
+    """File-like sink used to satisfy HEAD requests without
+    touching every response writer.
+
+    HTTP's HEAD method is GET-with-no-body: same status code,
+    same headers, body suppressed. We implement it by running the
+    GET handler unchanged and swapping ``self.wfile`` to this
+    sink right after ``end_headers()`` flushes the header buffer.
+    Subsequent ``self.wfile.write(...)`` / ``flush()`` calls then
+    no-op, regardless of which writer made them.
+
+    The alternative (a flag-per-writer audit) is fragile because
+    we have several response builders (``_send``,
+    ``_serve_pdf_with_range``, ``_serve_chunk``, ``_stream_events``)
+    each emitting its own header set. Replacing the underlying
+    stream catches them all in one place.
+
+    Needs to quack like a buffered binary file: ``write``,
+    ``flush``, ``close``, ``closed``. socketserver.StreamRequestHandler.finish()
+    inspects ``wfile.closed`` to decide whether to flush before
+    closing; without that attribute the request handler raises
+    AttributeError at end-of-request and Python's
+    ThreadingHTTPServer logs it loudly. Cosmetic but noisy.
+    """
+
+    closed: bool = False
+
+    def write(self, _data: object) -> int:
+        # http.server's writers expect an int back from .write().
+        return len(_data) if isinstance(_data, (bytes, bytearray, memoryview)) else 0
+
+    def writelines(self, _lines: object) -> None:
+        return
+
+    def flush(self) -> None:
+        return
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class Handler(BaseHTTPRequestHandler):
     # Class-level attributes set by run_server() before this is used.
     state: BuildState
@@ -1188,11 +1229,55 @@ class Handler(BaseHTTPRequestHandler):
     pdfjs_lib_bytes: bytes
     pdfjs_worker_bytes: bytes
     pdf_chunks_ctx: "PdfChunksContext | None" = None
+    # Per-request flag set by do_HEAD; consumed by end_headers
+    # (overridden below) to suppress body writes for HEAD.
+    _head_mode: bool = False
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
         # http.server is chatty by default; we already log builds
         # ourselves from the watcher thread. Suppress per-request lines.
         return
+
+    def do_HEAD(self) -> None:  # noqa: N802 (http.server API)
+        """Serve HEAD by running GET with the body suppressed.
+
+        HTTP/1.1 (RFC 7231 §4.3.2) requires that HEAD returns the
+        same status code and headers as GET on the same URI, but
+        with no message body. The straightforward way to achieve
+        that without auditing every response writer is:
+
+        1. Set ``_head_mode = True`` for this request.
+        2. Run ``do_GET`` unchanged — it computes the response and
+           calls ``end_headers()`` at the appropriate point.
+        3. Our ``end_headers()`` override (below) catches the
+           transition and swaps ``self.wfile`` to a ``_NullWriter``
+           so subsequent ``self.wfile.write(body)`` / ``flush()``
+           calls become no-ops.
+
+        Range requests (``HEAD /pdf`` with a ``Range`` header) are
+        supported per RFC 7233 §3.1: the response carries 206,
+        ``Content-Range``, and the correct ``Content-Length`` for
+        the requested slice — just no body bytes. The wfile-sink
+        approach picks this up for free because the
+        range-validation and header-computation paths run
+        identically.
+        """
+        self._head_mode = True
+        try:
+            self.do_GET()
+        finally:
+            self._head_mode = False
+
+    def end_headers(self) -> None:
+        """Override: after flushing the header buffer, swap
+        ``self.wfile`` to a sink if we're handling a HEAD
+        request. The header bytes still go to the real socket
+        (they were buffered before this call); only the body
+        writes that follow get discarded.
+        """
+        super().end_headers()
+        if self._head_mode:
+            self.wfile = _NullWriter()  # type: ignore[assignment]
 
     def _send(
         self,
@@ -1546,6 +1631,16 @@ class Handler(BaseHTTPRequestHandler):
         # this is mostly belt-and-braces.
         self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
+
+        # HEAD on a streaming endpoint: headers go through, body
+        # is suppressed by the wfile sink, and we MUST exit
+        # immediately or else we'd spin the listener loop forever
+        # writing keepalives to /dev/null. Returning here gives
+        # the HEAD client exactly the SSE headers it asked for
+        # and then closes the connection — which is the right
+        # semantics: HEAD can't deliver stream events.
+        if self._head_mode:
+            return
 
         q = self.state.add_listener()
         try:

@@ -73,10 +73,18 @@ sh_test(
     data = _TEST_DATA + ["test_post_build_hook.py"],
 )
 
+sh_test(
+    name = "test_http_head",
+    srcs = ["run_pytest.sh"],
+    args = ["tests/py/test_http_head.py"],
+    data = _TEST_DATA + ["test_http_head.py"],
+)
+
 test_suite(
     name = "py_tests",
     tests = [
         ":test_editor_detection",
+        ":test_http_head",
         ":test_pdf_chunks",
         ":test_post_build_hook",
         ":test_serve_cache",
