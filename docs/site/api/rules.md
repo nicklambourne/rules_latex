@@ -156,7 +156,7 @@ Watch a latex_document's sources and rebuild on every save.
 <pre>
 load("@rules_latex//latex:defs.bzl", "latex_serve_web")
 
-latex_serve_web(<a href="#latex_serve_web-name">name</a>, <a href="#latex_serve_web-document">document</a>, <a href="#latex_serve_web-poll_interval_ms">poll_interval_ms</a>, <a href="#latex_serve_web-port">port</a>)
+latex_serve_web(<a href="#latex_serve_web-name">name</a>, <a href="#latex_serve_web-document">document</a>, <a href="#latex_serve_web-open_on_start">open_on_start</a>, <a href="#latex_serve_web-poll_interval_ms">poll_interval_ms</a>, <a href="#latex_serve_web-port">port</a>)
 </pre>
 
 Browser-based live-preview server for a latex_document.
@@ -168,6 +168,7 @@ Browser-based live-preview server for a latex_document.
 | :------------- | :------------- | :------------- | :------------- | :------------- |
 | <a id="latex_serve_web-name"></a>name |  A unique name for this target.   | <a href="https://bazel.build/concepts/labels#target-names">Name</a> | required |  |
 | <a id="latex_serve_web-document"></a>document |  The latex_document (or any rule providing LatexInfo) to watch and rebuild.   | <a href="https://bazel.build/concepts/labels">Label</a> | required |  |
+| <a id="latex_serve_web-open_on_start"></a>open_on_start |  If True, open the preview automatically once the server starts. When the launching terminal belongs to a VS Code-family editor (VS Code, Cursor, VSCodium â detected via TERM_PROGRAM), the preview is opened as a Simple Browser tab in that editor via its CLI (`code --open-url`, `cursor --open-url`, `codium --open-url`). Otherwise it falls back to the system default web browser. JetBrains IDEs and other terminals without a Simple Browser equivalent fall back to the web-browser path. The plain http URL is always printed regardless, so users can copy/paste manually.   | Boolean | optional |  `False`  |
 | <a id="latex_serve_web-poll_interval_ms"></a>poll_interval_ms |  How often the watcher checks for source-file changes, in milliseconds.   | Integer | optional |  `250`  |
 | <a id="latex_serve_web-port"></a>port |  TCP port to bind the preview server to (localhost-only).   | Integer | optional |  `8765`  |
 
