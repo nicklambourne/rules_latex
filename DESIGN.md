@@ -53,7 +53,7 @@ Loaded from `@rules_latex//latex:defs.bzl`:
 - `latex_test(name, main, srcs, deps = [], outfmt = "pdf", cache = None, forbidden_patterns = [], forbidden_patterns_replace = False, required_patterns = [])`
 - `latex_cache_snapshot(name, main, srcs, deps = [], output)`
 - `latex_serve(name, document, poll_interval_ms = 250, open_pdf = True)`
-- `latex_serve_web(name, document, port = 8765, poll_interval_ms = 250)`
+- `latex_serve_web(name, document, port = 8765, poll_interval_ms = 80, debounce_ms = 250, debounce_max_ms = 1500)`
 - `LatexInfo` provider (for users authoring their own rules)
 
 The toolchain type is exported at `@rules_latex//latex:toolchain_type` for
@@ -230,6 +230,166 @@ a checked-in cache snapshot, the steady-state rebuild latency in the
 example workspace is in the 200–400 ms range — well within "feels live".
 The watcher itself is pure-stdlib Python so consumers don't need
 `rules_python` or `watchdog`.
+
+#### 4.7.1 Serve-time persistent cache (implicit-pipeline only)
+
+The zero-config workflow — `latex_document(...)` with no `cache=`
+attribute and no toolchain bundle — uses the implicit cache
+pipeline (§4.4). That pipeline's online-prime action
+(`TectonicPopulateCache`) is content-addressed on the full source
+set, so any source edit invalidates it and forces a fresh online
+prime on every keystroke save. For live preview that turns 2-3 s
+compiles into 30-90 s per-edit hangs — unacceptable.
+
+`latex_serve_web` works around this without changing the
+implicit-pipeline semantics: on startup it primes a persistent
+cache snapshot at
+`$BUILD_WORKSPACE_DIRECTORY/.cache/rules_latex/<doc-slug>/cache.tar.gz`,
+then passes its absolute path via the private build setting
+`--@rules_latex//latex:_serve_cache_override=<path>` on every
+`bazel build` it invokes. `latex_document` consults the flag and,
+when set, uses the snapshot as its cache source — bypassing the
+implicit pipeline entirely. The serve cache lives outside Bazel's
+input graph; an `--action_env=LATEX_SERVE_CACHE_NONCE=<mtime>`
+flag invalidates the compile action when the snapshot changes.
+Documents with `cache=` or a toolchain bundle (already hermetic
+and fast) ignore the override.
+
+A few corollaries:
+
+* **First-start cost is unchanged** (one online prime, ~30-90 s).
+  Subsequent starts and edits are offline and complete in ~2-3 s.
+* **Adding a new `\usepackage`** triggers a missing-resource
+  failure inside tectonic; the serve script's regex
+  (`tools/serve_cache.py:looks_like_missing_resource`) catches
+  this, re-primes the snapshot, and retries the build once. From
+  the user's perspective: their edit pauses for ~60 s the first
+  time it pulls in a new package, then everything's fast again.
+* **Lock-protected** (`flock(2)` on a per-document sidecar file)
+  so two simultaneous `bazel run //...:serve` invocations on a
+  fresh checkout don't race.
+* **`.gitignore` auto-managed**: the first prime appends
+  `.cache/rules_latex/` to the workspace's `.gitignore` if not
+  already there. Silent on read-only filesystems.
+* **Hermeticity trade-off acknowledged**: the snapshot file isn't
+  in Bazel's input graph, so a `bazel build` from a fresh
+  checkout (without a running serve) still takes the implicit
+  pipeline. The override is strictly a live-preview optimisation,
+  never engages in CI / batch builds.
+
+See `tools/serve_cache.py` for the cache-management implementation
+and `//latex:_serve_cache_override` for the rule-side wiring.
+
+#### 4.7.2 Action-level rebuild optimisations
+
+A handful of further hot-path optimisations apply to *every*
+`latex_document` rebuild (serve mode or not):
+
+* **Pre-extracted cache directory** (serve-mode only). When
+  `_serve_cache_override` points at a directory (vs a tarball),
+  `tectonic_compile.py --cache-dir` skips the per-action gzip
+  decompression + 300-file extract into a tmpdir and uses the
+  directory as `TECTONIC_CACHE_DIR` directly. Verified safe:
+  tectonic does not write back to its cache under `--only-cached`.
+  Saves ~100-500 ms per warm rebuild on macOS APFS.
+
+* **Hardlink-or-symlink staging**. `staging.stage_sources`
+  materialises staged files via `os.link` (then `os.symlink`,
+  then `shutil.copyfile` fallback) instead of unconditional copy.
+  The per-action staging tmpdir is torn down at action end so the
+  "self-contained snapshot" rationale for copy doesn't apply.
+  Saves ~5-50 ms per `stage_sources` call.
+
+* **Direct `ctx.actions.run`**. The `TectonicCompile` and
+  `TectonicPopulateCache` actions invoke `/usr/bin/env python3`
+  directly rather than going through `/bin/sh -c "exec python3 ..."`.
+  The shell wrapper is retained only for the
+  `biber_strategy = "system"` escape hatch, which needs in-process
+  `PATH` propagation. Saves ~5-15 ms per action.
+
+* **Persistent worker for `TectonicCompile`**. The compile action
+  declares `supports-workers = "1"` and uses Bazel's JSON worker
+  protocol (`requires-worker-protocol = "json"`). A single
+  `python3 tools/tectonic_compile.py --persistent_worker` process
+  is kept alive across actions; each compile is dispatched as a
+  `WorkRequest` over stdin. Eliminates the ~80-150 ms CPython
+  cold-start cost on every warm rebuild after the first.
+
+  The worker is opt-in per-action — Bazel falls back to the
+  fresh-process path under
+  `--strategy=TectonicCompile=local,sandboxed`. We chose JSON over
+  protobuf for the worker protocol to keep the stdlib-only
+  invariant; protobuf would require a `rules_python` dep that this
+  rule set deliberately avoids.
+
+  One subtle interaction: tectonic's progress notes (e.g.
+  `note: Running TeX ...`) are written to stdout by default. In
+  worker mode our process's stdout is the protocol channel, so
+  the wrapper captures tectonic's stdout via `subprocess.PIPE`
+  and forwards it to stderr before responding.
+
+#### 4.7.3 Content-addressed PDF chunk transport
+
+When the server detects that PDF.js can use a chunked transport
+(i.e. the PDF parses cleanly as a cross-reference-stream or
+classic-xref PDF, which covers everything tectonic produces), it
+exposes a manifest of the document's *indirect objects*, each
+identified by the SHA-256 of its byte range. The browser maintains
+a hash → bytes cache, and on every reload only fetches the chunks
+whose hashes it doesn't already have.
+
+Mechanism:
+
+* After each successful build, the watcher thread calls
+  `_compute_manifest_post_build`, which delegates to
+  `tools/pdf_chunks.compute_manifest`. The chunker parses the
+  PDF's xref table (handling both the modern FlateDecoded
+  cross-reference *stream* and the classic ASCII xref table),
+  enumerates the type-1 uncompressed objects, and writes each
+  object's bytes into
+  `.cache/rules_latex/<doc-slug>/chunks/<hash>`. Existing chunk
+  files with matching size are not rewritten (mtime is kept
+  stable for the GC).
+
+* The server exposes:
+    - `GET /pdf-manifest` — JSON `{pdfSize, ranges, skeletonRanges}`.
+    - `GET /chunk/<hash>` — raw chunk bytes with
+      `Cache-Control: public, max-age=31536000, immutable`.
+    - `GET /pdf` (with HTTP `Range`) — for skeleton bytes (PDF
+      header, gaps between objects, trailer) and as a whole-PDF
+      fallback for pre-manifest clients.
+
+* The browser subclasses PDF.js's `PDFDataRangeTransport` to
+  intercept the worker's byte-range fetches. For each requested
+  range it walks the manifest's chunks: bytes inside a known
+  chunk come from the in-memory hash cache (or a one-shot
+  `/chunk/<hash>` fetch), bytes outside any chunk come from a
+  `/pdf` Range request. A small background prefetcher warms the
+  cache after the initial render so subsequent page renders are
+  wire-free.
+
+* GC: chunks no longer in the current manifest *and* older than
+  five minutes are deleted after each successful build. The
+  five-minute floor preserves fast edit-undo round-trips: a
+  chunk that vanished from the manifest on edit N is still
+  available on edit N+1 if the user reverts within the window.
+
+Falls back to whole-PDF transport (the pre-chunking behaviour)
+on any parse failure. The fallback is fully transparent: the
+browser detects a 404 on `/pdf-manifest`, calls
+`pdfjsLib.getDocument("/pdf?t=...")` directly, and renders the
+PDF the old way.
+
+For ``examples/cv/`` (one-page, 24 KB PDF) a single-line edit
+keeps 14 of 20 chunks unchanged across the rebuild — about 50%
+bandwidth savings on the reload event. For multi-page
+documents like a thesis the savings are dramatically higher
+because most page-content streams don't shift when a single
+page is edited.
+
+See `tools/pdf_chunks.py` for the parser and
+`latex/private/serve_web.py.tpl` for the HTTP endpoints and
+client-side transport.
 
 `latex_serve_web` vendors PDF.js into the rule set via the
 `@rules_latex_pdfjs` repository (materialised by the `pdfjs` module

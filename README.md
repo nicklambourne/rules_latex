@@ -103,6 +103,14 @@ bazel build //:cv            # subsequent builds: ~1-5s (action-cache hit)
 bazel test //:cv_compiles
 ```
 
+Live preview with `latex_serve_web` primes a persistent cache
+snapshot on first run (under `.cache/rules_latex/` in the workspace,
+auto-added to `.gitignore`) and reuses it on every subsequent edit
+— so the edit-to-preview cycle is in the 2-3 s range regardless of
+whether you've checked in a `latex_cache_snapshot`. See
+[`DESIGN.md` §4.7.1](./DESIGN.md#471-serve-time-persistent-cache-implicit-pipeline-only)
+for the mechanism.
+
 For more, see the [examples](./examples/) directory — letter, CV,
 paper, thesis, and beamer slides — and the full [user guide](https://nicklambourne.github.io/rules_latex/).
 
