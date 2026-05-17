@@ -28,6 +28,8 @@ _PLACEHOLDERS = {
     "{{SYNCTEX_RELPATH}}": "test/doc.synctex.gz",
     "{{WATCHED_PATHS}}": "test/doc.tex",
     "{{POLL_INTERVAL}}": "250",
+    "{{DEBOUNCE_MS}}": "250",
+    "{{DEBOUNCE_MAX_MS}}": "1500",
     "{{PORT}}": "8765",
     "{{DOCUMENT_NAME}}": "doc",
     "{{PDFJS_LIB_RUNFILE}}": "_pdfjs/pdf.mjs",

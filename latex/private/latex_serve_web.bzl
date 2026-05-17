@@ -190,6 +190,8 @@ def _latex_serve_web_impl(ctx):
             "{{SYNCTEX_RELPATH}}": synctex_relpath,
             "{{WATCHED_PATHS}}": "\n".join(watched_paths),
             "{{POLL_INTERVAL}}": str(ctx.attr.poll_interval_ms),
+            "{{DEBOUNCE_MS}}": str(ctx.attr.debounce_ms),
+            "{{DEBOUNCE_MAX_MS}}": str(ctx.attr.debounce_max_ms),
             "{{PORT}}": str(ctx.attr.port),
             "{{DOCUMENT_NAME}}": ctx.attr.document.label.name,
             "{{PDFJS_LIB_RUNFILE}}": pdfjs_lib.short_path,
@@ -253,7 +255,10 @@ latex_serve_web = rule(
                   "third-party `watchdog`/inotify dependency), so this " +
                   "is the amortised cost of one stat() per watched file " +
                   "per interval. 80 ms keeps perceived save-to-preview " +
-                  "latency under 100 ms while staying cheap.",
+                  "latency under 100 ms while staying cheap. Independent " +
+                  "of `debounce_ms`: the poll interval is how fast we " +
+                  "*notice* a change; the debounce window is how long we " +
+                  "*wait* after a change before triggering a build.",
             default = 80,
         ),
         "open_on_start": attr.bool(
@@ -269,6 +274,29 @@ latex_serve_web = rule(
                   "to the web-browser path. The plain http URL is always " +
                   "printed regardless, so users can copy/paste manually.",
             default = False,
+        ),
+        "debounce_ms": attr.int(
+            doc = "How many milliseconds of source-idle to require " +
+                  "after a detected change before triggering a rebuild. " +
+                  "Coalesces bursts of writes (e.g. format-on-save then " +
+                  "user-save, or editors that write multiple files near-" +
+                  "simultaneously) into a single build. Set to 0 to " +
+                  "disable debouncing (rebuild on every poll-detected " +
+                  "change; reproduces pre-v0.3.3 behaviour). The default " +
+                  "of 250 ms is invisible to the user because the build " +
+                  "itself takes longer than the debounce window.",
+            default = 250,
+        ),
+        "debounce_max_ms": attr.int(
+            doc = "Safety net for the debouncer: never wait more than " +
+                  "this many milliseconds before firing a build, even " +
+                  "if changes keep arriving. Without this cap, a user " +
+                  "typing continuously into an editor with " +
+                  "fast-autosave-on-every-keystroke would never see a " +
+                  "rebuild. 1500 ms matches the upper bound where a " +
+                  "user typically expects 'okay, something should " +
+                  "happen now'.",
+            default = 1500,
         ),
         "_server_template": attr.label(
             default = "//latex/private:serve_web.py.tpl",

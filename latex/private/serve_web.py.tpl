@@ -43,7 +43,7 @@ import sys
 import threading
 import time
 import webbrowser
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -56,6 +56,8 @@ SYNCTEX_RELPATH = "{{SYNCTEX_RELPATH}}"
 WATCHED_PATHS_RAW = """\
 {{WATCHED_PATHS}}"""
 POLL_INTERVAL_MS = int("{{POLL_INTERVAL}}")
+DEBOUNCE_MS = int("{{DEBOUNCE_MS}}")
+DEBOUNCE_MAX_MS = int("{{DEBOUNCE_MAX_MS}}")
 PORT = int("{{PORT}}")
 DOCUMENT_NAME = "{{DOCUMENT_NAME}}"
 OPEN_ON_START = bool(int("{{OPEN_ON_START}}"))
@@ -515,18 +517,126 @@ def run_bazel_build(
     return (False, elapsed, f"BUILD FAILED ({elapsed:.2f}s)")
 
 
+@dataclass
+class _DebouncerState:
+    """Mutable FSM state used by the watcher loop. See
+    ``watcher_loop`` for the state-transition rules.
+
+    Lives in a dataclass (rather than a tuple or naked vars) so
+    the unit tests can construct it directly and step the FSM
+    deterministically — separating the time-driven loop from the
+    pure-function decision logic.
+    """
+
+    idle_deadline: float | None = None
+    deadline_max: float | None = None
+    pending_changes: list = field(default_factory=list)
+
+
+def _debouncer_step(
+    state: _DebouncerState,
+    fresh_changes: list,
+    now: float,
+    debounce_window: float,
+    debounce_max: float,
+) -> tuple[bool, bool]:
+    """Apply one watcher-loop tick to the FSM in ``state``.
+
+    Inputs:
+      * ``fresh_changes``: paths whose mtime changed since the
+        last poll. Empty when the poll detected no change.
+      * ``now``: the loop's notion of monotonic time (seconds).
+      * ``debounce_window``: how much idle to require before firing.
+      * ``debounce_max``: hard cap on the total debounce span.
+
+    Returns ``(should_fire, hit_hard_cap)``:
+
+      * ``should_fire`` — True iff this tick should kick off a
+        build. When True the caller should drain
+        ``state.pending_changes`` (it has the coalesced burst)
+        and reset the FSM via ``state.idle_deadline = None``
+        etc. — see ``watcher_loop`` for the canonical sequence.
+      * ``hit_hard_cap`` — True iff the fire was triggered by
+        the hard cap rather than the idle window expiring.
+        Surfaced so the loop can log the rare case.
+
+    Side effect: ``state`` is mutated in-place to reflect the
+    new pending-change set and (re-pushed) deadlines.
+    """
+    if fresh_changes:
+        # New burst or extension of an existing burst.
+        if state.idle_deadline is None:
+            state.deadline_max = now + debounce_max
+        state.idle_deadline = now + debounce_window
+        for p in fresh_changes:
+            if p not in state.pending_changes:
+                state.pending_changes.append(p)
+
+    if state.idle_deadline is None:
+        return (False, False)
+
+    ready_idle = now >= state.idle_deadline
+    ready_max = state.deadline_max is not None and now >= state.deadline_max
+    if not (ready_idle or ready_max):
+        return (False, False)
+
+    return (True, ready_max and not ready_idle)
+
+
 def watcher_loop(
     workspace: Path,
     state: BuildState,
     cache_ctx: "ServeCacheContext | None" = None,
 ) -> None:
-    """Background thread: detect source changes, run bazel build."""
+    """Background thread: detect source changes, debounce them, run
+    `bazel build`.
+
+    The watcher is a small state machine:
+
+    * IDLE — no pending changes. Polls the watched paths every
+      ``POLL_INTERVAL_MS``. On a detected change → DEBOUNCING.
+    * DEBOUNCING — at least one change has been seen since the
+      last build. Keeps polling; each fresh change pushes the
+      idle deadline out by ``DEBOUNCE_MS``. A hard cap
+      (``deadline_max``, set on entry to this state from
+      ``debounce_max_ms``) fires the build regardless of fresh
+      activity to bound worst-case wait time. When ``now >=
+      idle_deadline`` *or* ``now >= deadline_max``, transitions
+      to BUILDING and kicks off a build.
+    * BUILDING — a build is in flight (synchronous in this
+      thread). When the build completes the loop returns to the
+      top; any change detected during the build will look fresh
+      on the next poll and trigger a new DEBOUNCING window.
+
+    The decision logic is factored into ``_debouncer_step`` so it
+    can be unit-tested without driving the real wall-clock or
+    spawning ``bazel build``.
+
+    Why debouncing helps:
+
+    * Editors that write-then-rename (vim, neovim) produce two
+      mtime bumps for one logical save; without debouncing we'd
+      fire two builds.
+    * Editors with format-on-save (Prettier-like tooling for
+      LaTeX, or running ``texfmt`` in a hook) write the file
+      twice: format-edit, then user-save. Same problem.
+    * A user typing through a long word touches the buffer many
+      times if the editor auto-saves; we want one build at the
+      end of the word, not one per character.
+
+    With ``DEBOUNCE_MS = 0`` this collapses to the pre-v0.3.3
+    fire-on-every-poll behaviour (the FSM still runs but every
+    tick that sees a change immediately satisfies ``now >=
+    idle_deadline``).
+    """
     watched_paths = [
         workspace / rel
         for rel in WATCHED_PATHS_RAW.splitlines()
         if rel.strip()
     ]
-    interval = POLL_INTERVAL_MS / 1000.0
+    poll_interval = POLL_INTERVAL_MS / 1000.0
+    debounce_window = DEBOUNCE_MS / 1000.0
+    debounce_max = DEBOUNCE_MAX_MS / 1000.0
 
     # Initial build so the first browser page-load has something to
     # display.
@@ -535,17 +645,68 @@ def watcher_loop(
     state.record_build(success, elapsed, msg)
 
     last_mtimes = snapshot_mtimes(watched_paths)
+    fsm = _DebouncerState()
+
     while True:
-        time.sleep(interval)
+        time.sleep(poll_interval)
+        now = time.monotonic()
+
+        # Detect changes since the last poll.
         current = snapshot_mtimes(watched_paths)
-        changed = [p for p, m in current.items() if m != last_mtimes.get(p, 0.0)]
-        if not changed:
-            continue
+        fresh_changes = [
+            p for p, m in current.items()
+            if m != last_mtimes.get(p, 0.0)
+        ]
         last_mtimes = current
 
-        rels = ", ".join(str(p.relative_to(workspace)) for p in changed)
-        ts = time.strftime("%H:%M:%S")
-        print(f"[{ts}] changed: {rels}", flush=True)
+        was_idle = fsm.idle_deadline is None
+        if fresh_changes and was_idle:
+            ts = time.strftime("%H:%M:%S")
+            print(
+                f"[{ts}] changed: " +
+                ", ".join(
+                    str(p.relative_to(workspace))
+                    for p in fresh_changes
+                ),
+                flush=True,
+            )
+
+        should_fire, hit_hard_cap = _debouncer_step(
+            fsm,
+            fresh_changes,
+            now,
+            debounce_window,
+            debounce_max,
+        )
+        if not should_fire:
+            continue
+
+        # Transition: DEBOUNCING -> BUILDING. Snapshot the coalesced
+        # changes and clear the FSM *before* the build so changes
+        # that land during the build start a fresh debounce window
+        # naturally on the next iteration. We do NOT re-snapshot
+        # mtimes here: the last_mtimes captured at the top of this
+        # iteration is what we want preserved across the build, so
+        # post-build polls see in-flight saves as fresh changes.
+        coalesced = list(fsm.pending_changes)
+        fsm.idle_deadline = None
+        fsm.deadline_max = None
+        fsm.pending_changes.clear()
+
+        if hit_hard_cap:
+            print(
+                "  (debounce hard cap reached; firing build)",
+                flush=True,
+            )
+        if len(coalesced) > 1:
+            print(
+                "  (coalesced " + str(len(coalesced)) + " changes: " +
+                ", ".join(
+                    str(p.relative_to(workspace)) for p in coalesced
+                ) + ")",
+                flush=True,
+            )
+
         success, elapsed, msg = run_bazel_build(workspace, cache_ctx)
         print(f"  {msg}", flush=True)
         state.record_build(success, elapsed, msg)

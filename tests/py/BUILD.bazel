@@ -51,6 +51,13 @@ sh_test(
     data = _TEST_DATA + ["test_serve_cache.py"],
 )
 
+sh_test(
+    name = "test_watcher_debouncer",
+    srcs = ["run_pytest.sh"],
+    args = ["tests/py/test_watcher_debouncer.py"],
+    data = _TEST_DATA + ["test_watcher_debouncer.py"],
+)
+
 test_suite(
     name = "py_tests",
     tests = [
@@ -58,5 +65,6 @@ test_suite(
         ":test_serve_cache",
         ":test_staging",
         ":test_synctex_parser",
+        ":test_watcher_debouncer",
     ],
 )
