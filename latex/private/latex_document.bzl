@@ -304,16 +304,54 @@ def _compile_action(
             use_default_shell_env = True,
         )
     else:
+        # Persistent-worker support: Bazel will keep a python3
+        # process alive across actions, eliminating ~80-150 ms
+        # CPython cold-start per warm rebuild. The worker is
+        # opt-in per-action via `supports-workers`; users can
+        # bypass with `--strategy=TectonicCompile=local,sandboxed`
+        # if they need to debug.
+        #
+        # Worker-protocol details:
+        #
+        # * `arguments` must be a single param-file argument
+        #   (``@<path>``). Bazel inlines the param file's contents
+        #   as ``WorkRequest.arguments`` over stdin for each
+        #   request; the worker process's own argv contains only
+        #   ``--persistent_worker`` (and the leading param-file
+        #   token from the bootstrap argv, which the script
+        #   tolerates by inlining it before parsing).
+        # * The executable is a tiny per-target shell shim that
+        #   ``exec``s ``python3 <tool>`` — equivalent to
+        #   ``/usr/bin/env python3 <tool>`` but presents a single
+        #   executable to Bazel, which the worker strategy
+        #   requires (it identifies the worker by exec path).
+        # * ``requires-worker-protocol = "json"`` selects the
+        #   stdlib-friendly JSON flavour of the protocol; the
+        #   protobuf flavour would require an external dep.
+        args.use_param_file("@%s", use_always = True)
+        args.set_param_file_format("multiline")
+        shim = ctx.actions.declare_file(
+            "_{}_compile_shim.sh".format(ctx.label.name),
+        )
+        ctx.actions.write(
+            shim,
+            "#!/bin/sh\nexec python3 \"{tool}\" \"$@\"\n".format(
+                tool = tool.path,
+            ),
+            is_executable = True,
+        )
         ctx.actions.run(
-            executable = "/usr/bin/env",
-            arguments = ["python3", tool.path, args],
-            inputs = inputs,
+            executable = shim,
+            arguments = [args],
+            inputs = depset(direct = [shim], transitive = [inputs]),
             outputs = outputs,
             mnemonic = "TectonicCompile",
             progress_message = "Compiling LaTeX %{label}",
             env = env,
             execution_requirements = {
                 "requires-network": "",
+                "supports-workers": "1",
+                "requires-worker-protocol": "json",
             },
         )
 
