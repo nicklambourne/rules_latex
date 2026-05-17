@@ -541,15 +541,21 @@ async function renderDocument(url) {{
 async function renderAllPages(pdf) {{
   const prevScroll = {{ top: viewer.scrollTop, left: viewer.scrollLeft }};
   const fresh = document.createElement("div");
+  const dpr = window.devicePixelRatio || 1;
   for (let i = 1; i <= pdf.numPages; i++) {{
     const page = await pdf.getPage(i);
     const viewport = page.getViewport({{ scale }});
     const canvas = document.createElement("canvas");
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
+    // Render at devicePixelRatio for crisp output on HiDPI displays;
+    // CSS pins the displayed size to the un-scaled viewport dimensions.
+    canvas.width = Math.floor(viewport.width * dpr);
+    canvas.height = Math.floor(viewport.height * dpr);
+    canvas.style.width = `${{viewport.width}}px`;
+    canvas.style.height = `${{viewport.height}}px`;
     canvas.dataset.pageNumber = String(i);
     const ctx = canvas.getContext("2d");
-    await page.render({{ canvasContext: ctx, viewport }}).promise;
+    const transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
+    await page.render({{ canvasContext: ctx, viewport, transform }}).promise;
     canvasViewports.set(canvas, viewport);
     if (SYNCTEX_ENABLED) {{
       canvas.addEventListener("click", onCanvasClick);
