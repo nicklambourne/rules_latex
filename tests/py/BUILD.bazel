@@ -30,6 +30,13 @@ sh_test(
 )
 
 sh_test(
+    name = "test_editor_detection",
+    srcs = ["run_pytest.sh"],
+    args = ["tests/py/test_editor_detection.py"],
+    data = _TEST_DATA + ["test_editor_detection.py"],
+)
+
+sh_test(
     name = "test_staging",
     srcs = ["run_pytest.sh"],
     args = ["tests/py/test_staging.py"],
@@ -39,6 +46,7 @@ sh_test(
 test_suite(
     name = "py_tests",
     tests = [
+        ":test_editor_detection",
         ":test_staging",
         ":test_synctex_parser",
     ],

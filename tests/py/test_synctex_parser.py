@@ -32,6 +32,7 @@ _PLACEHOLDERS = {
     "{{DOCUMENT_NAME}}": "doc",
     "{{PDFJS_LIB_RUNFILE}}": "_pdfjs/pdf.mjs",
     "{{PDFJS_WORKER_RUNFILE}}": "_pdfjs/pdf.worker.mjs",
+    "{{OPEN_ON_START}}": "0",
 }
 
 

@@ -6,6 +6,23 @@ that, expect breaking changes in any v0.x release.
 
 ## [Unreleased]
 
+### Added
+
+- `latex_serve_web` now detects when it's being launched from a VS
+  Code-family editor's integrated terminal (via `TERM_PROGRAM` =
+  `vscode` / `cursor` / `vscodium`) and prints an
+  `<editor>://vscode.simpleBrowser/show?url=...` URI alongside the
+  plain http URL. Cmd/Ctrl-clicking that URI in the editor's terminal
+  opens the live preview as a Simple Browser tab in the same window —
+  no separate window or extension required.
+
+- New `open_on_start` attribute on `latex_serve_web` (default
+  `False`). When `True`, the preview is opened automatically once the
+  server is ready: in a Simple Browser tab via the editor CLI when an
+  editor is detected, otherwise in the system default web browser.
+  The plain http URL is always printed regardless, so users can copy/
+  paste manually if either auto-open path fails.
+
 ## [0.3.1] - 2026-05-17
 
 ### Fixed
