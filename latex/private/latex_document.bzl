@@ -147,27 +147,46 @@ def _populate_cache_action(
     if use_system_biber:
         env["PATH"] = ""
 
-    # Invoke python3 directly so we don't take a rules_python dep.
-    ctx.actions.run_shell(
-        command = (
-            "set -eu\n" +
-            ('PATH="${PATH:-/usr/bin:/bin}"\n' if use_system_biber else "") +
-            'exec python3 "{tool}" "$@"\n'.format(tool = tool.path)
-        ),
-        arguments = [args],
-        inputs = inputs,
-        outputs = [output_tarball],
-        mnemonic = "TectonicPopulateCache",
-        progress_message = "Populating tectonic cache for %{label}",
-        env = env,
-        execution_requirements = {
-            # The one online step in the implicit pipeline. Bazel's
-            # action cache makes this a one-time cost per (sources ×
-            # tectonic × bundle) tuple.
-            "requires-network": "1",
-        },
-        use_default_shell_env = use_system_biber,
-    )
+    # Skip the /bin/sh wrapper for the common (no system biber)
+    # path: it adds ~5-15 ms per action and only ever did anything
+    # for the `PATH=...` prefix that the system-biber escape hatch
+    # requires. `/usr/bin/env python3` reproduces the PATH-finding
+    # semantics of the old shell `exec python3` without spawning a
+    # shell.
+    if use_system_biber:
+        ctx.actions.run_shell(
+            command = (
+                "set -eu\n" +
+                'PATH="${PATH:-/usr/bin:/bin}"\n' +
+                'exec python3 "{tool}" "$@"\n'.format(tool = tool.path)
+            ),
+            arguments = [args],
+            inputs = inputs,
+            outputs = [output_tarball],
+            mnemonic = "TectonicPopulateCache",
+            progress_message = "Populating tectonic cache for %{label}",
+            env = env,
+            execution_requirements = {
+                # The one online step in the implicit pipeline. Bazel's
+                # action cache makes this a one-time cost per (sources ×
+                # tectonic × bundle) tuple.
+                "requires-network": "1",
+            },
+            use_default_shell_env = True,
+        )
+    else:
+        ctx.actions.run(
+            executable = "/usr/bin/env",
+            arguments = ["python3", tool.path, args],
+            inputs = inputs,
+            outputs = [output_tarball],
+            mnemonic = "TectonicPopulateCache",
+            progress_message = "Populating tectonic cache for %{label}",
+            env = env,
+            execution_requirements = {
+                "requires-network": "1",
+            },
+        )
 
 def _compile_action(
         ctx,
@@ -261,26 +280,42 @@ def _compile_action(
 
     env = {"LC_ALL": "C.UTF-8"}
 
-    ctx.actions.run_shell(
-        command = (
-            "set -eu\n" +
-            ('PATH="${PATH:-/usr/bin:/bin}"\n' if use_system_biber else "") +
-            'exec python3 "{tool}" "$@"\n'.format(tool = tool.path)
-        ),
-        arguments = [args],
-        inputs = inputs,
-        outputs = outputs,
-        mnemonic = "TectonicCompile",
-        progress_message = "Compiling LaTeX %{label}",
-        env = env,
-        execution_requirements = {
-            # Fully hermetic in every mode: the cache (user-supplied,
-            # bundle, or implicitly populated) is content-addressed
-            # and present as an action input.
-            "requires-network": "",
-        },
-        use_default_shell_env = use_system_biber,
-    )
+    # See `_populate_cache_action` for the rationale: shell wrapper
+    # only for `use_system_biber`, direct `ctx.actions.run` otherwise.
+    if use_system_biber:
+        ctx.actions.run_shell(
+            command = (
+                "set -eu\n" +
+                'PATH="${PATH:-/usr/bin:/bin}"\n' +
+                'exec python3 "{tool}" "$@"\n'.format(tool = tool.path)
+            ),
+            arguments = [args],
+            inputs = inputs,
+            outputs = outputs,
+            mnemonic = "TectonicCompile",
+            progress_message = "Compiling LaTeX %{label}",
+            env = env,
+            execution_requirements = {
+                # Fully hermetic in every mode: the cache (user-supplied,
+                # bundle, or implicitly populated) is content-addressed
+                # and present as an action input.
+                "requires-network": "",
+            },
+            use_default_shell_env = True,
+        )
+    else:
+        ctx.actions.run(
+            executable = "/usr/bin/env",
+            arguments = ["python3", tool.path, args],
+            inputs = inputs,
+            outputs = outputs,
+            mnemonic = "TectonicCompile",
+            progress_message = "Compiling LaTeX %{label}",
+            env = env,
+            execution_requirements = {
+                "requires-network": "",
+            },
+        )
 
 def _latex_document_impl(ctx):
     main = ctx.file.main
