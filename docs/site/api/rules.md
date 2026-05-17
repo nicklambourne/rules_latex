@@ -32,7 +32,7 @@ Load symbols from here:
 <pre>
 load("@rules_latex//latex:defs.bzl", "latex_cache_snapshot")
 
-latex_cache_snapshot(<a href="#latex_cache_snapshot-name">name</a>, <a href="#latex_cache_snapshot-deps">deps</a>, <a href="#latex_cache_snapshot-srcs">srcs</a>, <a href="#latex_cache_snapshot-biber">biber</a>, <a href="#latex_cache_snapshot-main">main</a>, <a href="#latex_cache_snapshot-output">output</a>)
+latex_cache_snapshot(<a href="#latex_cache_snapshot-name">name</a>, <a href="#latex_cache_snapshot-deps">deps</a>, <a href="#latex_cache_snapshot-srcs">srcs</a>, <a href="#latex_cache_snapshot-biber">biber</a>, <a href="#latex_cache_snapshot-main">main</a>, <a href="#latex_cache_snapshot-output">output</a>, <a href="#latex_cache_snapshot-pkg_files">pkg_files</a>)
 </pre>
 
 Bazel-run target that captures a tectonic cache snapshot.
@@ -48,6 +48,7 @@ Bazel-run target that captures a tectonic cache snapshot.
 | <a id="latex_cache_snapshot-biber"></a>biber |  If True, prime the cache with biber on PATH so the resulting snapshot contains bibliography-related files. Required when consumers compile biblatex documents against this snapshot.   | Boolean | optional |  `False`  |
 | <a id="latex_cache_snapshot-main"></a>main |  The top-level .tex file passed to tectonic. Must also appear in `srcs`.   | <a href="https://bazel.build/concepts/labels">Label</a> | required |  |
 | <a id="latex_cache_snapshot-output"></a>output |  Destination path for the snapshot tarball, relative to the workspace root.   | String | required |  |
+| <a id="latex_cache_snapshot-pkg_files"></a>pkg_files |  Map of label-of-input -> staged-relative-path. Overrides the auto-staging path for the listed inputs, letting you place a file anywhere under main.tex's work directory. Typical use: stage a cross-package `.bib` file as a sibling of main.tex so `\addbibresource{refs.bib}` works without `..` (which tectonic refuses to hand to external tools).   | <a href="https://bazel.build/rules/lib/core/dict">Dictionary: Label -> String</a> | optional |  `{}`  |
 
 
 <a id="latex_document"></a>
@@ -57,8 +58,8 @@ Bazel-run target that captures a tectonic cache snapshot.
 <pre>
 load("@rules_latex//latex:defs.bzl", "latex_document")
 
-latex_document(<a href="#latex_document-name">name</a>, <a href="#latex_document-deps">deps</a>, <a href="#latex_document-srcs">srcs</a>, <a href="#latex_document-biber">biber</a>, <a href="#latex_document-biber_strategy">biber_strategy</a>, <a href="#latex_document-cache">cache</a>, <a href="#latex_document-main">main</a>, <a href="#latex_document-outfmt">outfmt</a>, <a href="#latex_document-reproducible">reproducible</a>, <a href="#latex_document-synctex">synctex</a>,
-               <a href="#latex_document-tectonic_args">tectonic_args</a>)
+latex_document(<a href="#latex_document-name">name</a>, <a href="#latex_document-deps">deps</a>, <a href="#latex_document-srcs">srcs</a>, <a href="#latex_document-biber">biber</a>, <a href="#latex_document-biber_strategy">biber_strategy</a>, <a href="#latex_document-cache">cache</a>, <a href="#latex_document-main">main</a>, <a href="#latex_document-outfmt">outfmt</a>, <a href="#latex_document-pkg_files">pkg_files</a>,
+               <a href="#latex_document-reproducible">reproducible</a>, <a href="#latex_document-synctex">synctex</a>, <a href="#latex_document-tectonic_args">tectonic_args</a>)
 </pre>
 
 Compiles a LaTeX source tree using tectonic.
@@ -76,6 +77,7 @@ Compiles a LaTeX source tree using tectonic.
 | <a id="latex_document-cache"></a>cache |  Optional cache snapshot tarball (typically produced by `latex_cache_snapshot` and checked into the repository). When set, the action extracts the snapshot into the compile-time `TECTONIC_CACHE_DIR` and runs with `--only-cached`, giving a fully offline, hermetic build without pulling the full ~3 GB tectonic bundle or running an online prime. Takes precedence over the toolchain-level `tectonic.bundle()` and over the implicit cache pipeline.   | <a href="https://bazel.build/concepts/labels">Label</a> | optional |  `None`  |
 | <a id="latex_document-main"></a>main |  The top-level .tex file passed to tectonic. Must also appear in `srcs`.   | <a href="https://bazel.build/concepts/labels">Label</a> | required |  |
 | <a id="latex_document-outfmt"></a>outfmt |  Output format. Passed to `tectonic -X compile --outfmt`.   | String | optional |  `"pdf"`  |
+| <a id="latex_document-pkg_files"></a>pkg_files |  Override the staged path of specific inputs. Map of label -> relative path under main.tex's work directory. The default main-rooted staging layout puts each src at a sensible place automatically; use `pkg_files` when the default would force you to write a long or `..`-containing path in main.tex. The classic case is a cross-package bib file: declare `pkg_files = {"//lib/refs:refs.bib": "refs.bib"}` and then write `\\addbibresource{refs.bib}` in main.tex.   | <a href="https://bazel.build/rules/lib/core/dict">Dictionary: Label -> String</a> | optional |  `{}`  |
 | <a id="latex_document-reproducible"></a>reproducible |  When True, run tectonic in deterministic mode and set SOURCE_DATE_EPOCH=0, producing byte-identical output across runs given identical inputs. Off by default to keep PDF metadata (creation date) reflecting the actual build time. Mutually exclusive with `synctex`.   | Boolean | optional |  `False`  |
 | <a id="latex_document-synctex"></a>synctex |  When True, tectonic is invoked with --synctex and the resulting `<name>.synctex.gz` is exposed as an additional output (also surfaced via the `synctex` OutputGroup). Consumed by `latex_serve_web` for click-to-source reverse-sync in the browser. Mutually exclusive with `reproducible` because tectonic's deterministic mode disables SyncTeX output.   | Boolean | optional |  `False`  |
 | <a id="latex_document-tectonic_args"></a>tectonic_args |  Extra command-line arguments passed to tectonic. Use sparingly; prefer rule-level attributes when possible.   | List of strings | optional |  `[]`  |
@@ -178,7 +180,7 @@ Browser-based live-preview server for a latex_document.
 load("@rules_latex//latex:defs.bzl", "latex_test")
 
 latex_test(<a href="#latex_test-name">name</a>, <a href="#latex_test-deps">deps</a>, <a href="#latex_test-srcs">srcs</a>, <a href="#latex_test-biber">biber</a>, <a href="#latex_test-biber_strategy">biber_strategy</a>, <a href="#latex_test-cache">cache</a>, <a href="#latex_test-forbidden_patterns">forbidden_patterns</a>,
-           <a href="#latex_test-forbidden_patterns_replace">forbidden_patterns_replace</a>, <a href="#latex_test-main">main</a>, <a href="#latex_test-outfmt">outfmt</a>, <a href="#latex_test-required_patterns">required_patterns</a>)
+           <a href="#latex_test-forbidden_patterns_replace">forbidden_patterns_replace</a>, <a href="#latex_test-main">main</a>, <a href="#latex_test-outfmt">outfmt</a>, <a href="#latex_test-pkg_files">pkg_files</a>, <a href="#latex_test-required_patterns">required_patterns</a>)
 </pre>
 
 Compiles a LaTeX document and asserts on the resulting log.
@@ -198,6 +200,7 @@ Compiles a LaTeX document and asserts on the resulting log.
 | <a id="latex_test-forbidden_patterns_replace"></a>forbidden_patterns_replace |  If True, `forbidden_patterns` replaces the default list instead of extending it.   | Boolean | optional |  `False`  |
 | <a id="latex_test-main"></a>main |  The top-level .tex file passed to tectonic. Must also appear in `srcs`.   | <a href="https://bazel.build/concepts/labels">Label</a> | required |  |
 | <a id="latex_test-outfmt"></a>outfmt |  Output format. Passed to tectonic's --outfmt.   | String | optional |  `"pdf"`  |
+| <a id="latex_test-pkg_files"></a>pkg_files |  Same semantics as `latex_document.pkg_files`. Override the staged path of specific inputs.   | <a href="https://bazel.build/rules/lib/core/dict">Dictionary: Label -> String</a> | optional |  `{}`  |
 | <a id="latex_test-required_patterns"></a>required_patterns |  Substrings that MUST appear in the tectonic log file. Useful for asserting a particular package was loaded or a specific shipout happened.   | List of strings | optional |  `[]`  |
 
 
