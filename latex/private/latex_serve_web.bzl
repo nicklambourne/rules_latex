@@ -95,6 +95,7 @@ def _latex_serve_web_impl(ctx):
             "{{DOCUMENT_NAME}}": ctx.attr.document.label.name,
             "{{PDFJS_LIB_RUNFILE}}": pdfjs_lib.short_path,
             "{{PDFJS_WORKER_RUNFILE}}": pdfjs_worker.short_path,
+            "{{OPEN_ON_START}}": "1" if ctx.attr.open_on_start else "0",
         },
     )
 
@@ -136,6 +137,20 @@ latex_serve_web = rule(
             doc = "How often the watcher checks for source-file changes, " +
                   "in milliseconds.",
             default = 250,
+        ),
+        "open_on_start": attr.bool(
+            doc = "If True, open the preview automatically once the server " +
+                  "starts. When the launching terminal belongs to a " +
+                  "VS Code-family editor (VS Code, Cursor, VSCodium — " +
+                  "detected via TERM_PROGRAM), the preview is opened as a " +
+                  "Simple Browser tab in that editor via its CLI " +
+                  "(`code --open-url`, `cursor --open-url`, " +
+                  "`codium --open-url`). Otherwise it falls back to the " +
+                  "system default web browser. JetBrains IDEs and other " +
+                  "terminals without a Simple Browser equivalent fall back " +
+                  "to the web-browser path. The plain http URL is always " +
+                  "printed regardless, so users can copy/paste manually.",
+            default = False,
         ),
         "_server_template": attr.label(
             default = "//latex/private:serve_web.py.tpl",

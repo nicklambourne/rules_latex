@@ -33,17 +33,21 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 import queue
 import re
+import shutil
 import signal
 import subprocess
 import sys
 import threading
 import time
+import webbrowser
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import quote
 
 # Filled in by `latex_serve_web`:
 DOCUMENT_LABEL = "{{DOCUMENT_LABEL}}"
@@ -54,6 +58,7 @@ WATCHED_PATHS_RAW = """\
 POLL_INTERVAL_MS = int("{{POLL_INTERVAL}}")
 PORT = int("{{PORT}}")
 DOCUMENT_NAME = "{{DOCUMENT_NAME}}"
+OPEN_ON_START = bool(int("{{OPEN_ON_START}}"))
 
 # Paths to the vendored PDF.js files within the launcher's runfiles
 # tree. The server reads them once on startup and serves the bytes at
@@ -883,6 +888,119 @@ class Handler(BaseHTTPRequestHandler):
 
 
 # -----------------------------------------------------------------------------
+# Editor detection
+# -----------------------------------------------------------------------------
+#
+# When `bazel run //:doc_web` is invoked from inside a VS Code-family
+# editor's integrated terminal, we can print a special URL that opens
+# the preview as a tab in the same window (via the editor's built-in
+# Simple Browser). The URL scheme `<editor>://vscode.simpleBrowser/show`
+# is handled by Simple Browser's URI activation, which is shipped as a
+# built-in extension in VS Code and inherited by its forks.
+#
+# Detection is best-effort: we read TERM_PROGRAM (set by VS Code,
+# Cursor, and VSCodium in their integrated terminals) and bail out
+# silently if there's no match. The plain http:// URL is always printed
+# last so users have an unconditional fallback.
+
+
+@dataclass(frozen=True)
+class Editor:
+    """A VS Code-family editor we can hand a Simple Browser URL to.
+
+    `name` is human-readable (used in the printed hint). `scheme` is
+    the URI scheme registered by the editor for OS-level handoff; the
+    full URI is `<scheme>://vscode.simpleBrowser/show?url=<encoded>`.
+    `cli` is the command-line binary used by `open_on_start` to push
+    the URI into the running editor instance.
+    """
+
+    name: str
+    scheme: str
+    cli: str
+
+
+# Map TERM_PROGRAM values (lowercased) to editors. VS Code and its
+# common forks all set this on terminal startup. JetBrains IDEs set
+# TERMINAL_EMULATOR=JetBrains-JediTerm but have no Simple Browser
+# equivalent, so we don't list them here — users in JetBrains just see
+# the plain http URL like any other terminal.
+_EDITORS_BY_TERM_PROGRAM = {
+    "vscode": Editor(name="VS Code", scheme="vscode", cli="code"),
+    "cursor": Editor(name="Cursor", scheme="cursor", cli="cursor"),
+    "vscodium": Editor(name="VSCodium", scheme="vscodium", cli="codium"),
+}
+
+
+def detect_editor() -> Editor | None:
+    """Return the editor whose terminal we're running inside, or None.
+
+    Reads TERM_PROGRAM and matches case-insensitively. Returns None on
+    any mismatch so the caller can fall back to plain http output.
+    """
+    term_program = os.environ.get("TERM_PROGRAM", "").strip().lower()
+    if not term_program:
+        return None
+    return _EDITORS_BY_TERM_PROGRAM.get(term_program)
+
+
+def editor_preview_uri(editor: Editor, http_url: str) -> str:
+    """Build a Simple Browser URI for `editor` wrapping `http_url`."""
+    return "{}://vscode.simpleBrowser/show?url={}".format(
+        editor.scheme,
+        quote(http_url, safe=""),
+    )
+
+
+def open_in_editor(editor: Editor, http_url: str) -> bool:
+    """Push the preview URL into a running editor via its CLI.
+
+    Returns True on apparent success (CLI found and launched), False
+    otherwise. Failures are non-fatal — the user always has the plain
+    http URL to fall back on.
+    """
+    cli = shutil.which(editor.cli)
+    if not cli:
+        print(
+            "  note: {} CLI ({!r}) not on PATH; skipping auto-open.".format(
+                editor.name, editor.cli,
+            ),
+            file=sys.stderr,
+        )
+        return False
+    uri = editor_preview_uri(editor, http_url)
+    try:
+        subprocess.Popen(
+            [cli, "--open-url", uri],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        print(
+            "  warning: could not launch {}: {}".format(editor.name, exc),
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+def open_in_browser(http_url: str) -> bool:
+    """Open `http_url` in the user's default web browser.
+
+    Returns True if the stdlib opener thinks it succeeded. Failures are
+    non-fatal; the URL is always printed.
+    """
+    try:
+        return webbrowser.open(http_url, new=2)
+    except webbrowser.Error as exc:
+        print(
+            "  warning: could not open web browser: {}".format(exc),
+            file=sys.stderr,
+        )
+        return False
+
+
+# -----------------------------------------------------------------------------
 # Entry point
 # -----------------------------------------------------------------------------
 
@@ -935,7 +1053,7 @@ def main() -> int:
     ThreadingHTTPServer.allow_reuse_address = True
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
 
-    print(f"latex_serve_web: serving live preview at http://127.0.0.1:{PORT}/")
+    print(f"latex_serve_web: serving live preview for {DOCUMENT_LABEL}")
     print(f"  rebuild target: {DOCUMENT_LABEL}")
     print(f"  output pdf:     bazel-bin/{PDF_RELPATH}")
     print(
@@ -944,6 +1062,37 @@ def main() -> int:
     )
     print("  press Ctrl-C to stop.")
     print()
+
+    # URLs are printed *last* so they're the freshest thing on screen
+    # when the user comes back to the terminal — and the plain http URL
+    # is printed last of all so it's unconditionally available as a
+    # fallback. The editor-specific URI (if any) goes just above it.
+    http_url = f"http://127.0.0.1:{PORT}/"
+    editor = detect_editor()
+    if editor is not None:
+        print(f"  detected {editor.name} terminal; preview URLs:")
+        print(
+            f"    open in {editor.name} (Simple Browser): "
+            f"{editor_preview_uri(editor, http_url)}"
+        )
+        print(f"    open in browser:                       {http_url}")
+    else:
+        print(f"  preview URL: {http_url}")
+    print()
+
+    if OPEN_ON_START:
+        if editor is not None:
+            if open_in_editor(editor, http_url):
+                print(f"  → opened in {editor.name}.")
+            else:
+                # Editor CLI not available; fall back to the system
+                # browser so open_on_start still does *something*.
+                if open_in_browser(http_url):
+                    print("  → opened in default web browser.")
+        else:
+            if open_in_browser(http_url):
+                print("  → opened in default web browser.")
+        print()
 
     watcher = threading.Thread(
         target=watcher_loop,
