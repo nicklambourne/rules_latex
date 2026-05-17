@@ -135,6 +135,7 @@ def _latex_serve_web_impl(ctx):
             doc_info.tectonic,
             doc_info.main,
         ]
+
         # The source-side runfiles we will hand to the populate tool
         # via --src on serve startup. Stored as short_paths so the
         # serve_web.py.tpl substitution can resolve them against the
@@ -157,7 +158,9 @@ def _latex_serve_web_impl(ctx):
                      "cross-repo source {} which can't be staged from " +
                      "the workspace root at serve time; the serve-cache " +
                      "fast-path won't engage for this target.").format(
-                        ctx.label, ctx.attr.document.label, src.short_path,
+                        ctx.label,
+                        ctx.attr.document.label,
+                        src.short_path,
                     ),
                 )
                 enable_serve_cache = False

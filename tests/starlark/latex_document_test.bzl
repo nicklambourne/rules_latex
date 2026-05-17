@@ -193,6 +193,7 @@ def _serve_cache_override_test_impl(ctx):
         _has_action_with_mnemonic(actions, "TectonicCompile"),
         "expected TectonicCompile action",
     )
+
     # The override path must appear in the compile action's argv
     # as the cache tarball.
     compile_action = None
@@ -221,6 +222,7 @@ def _serve_cache_override_test_impl(ctx):
 serve_cache_override_test = analysistest.make(
     _serve_cache_override_test_impl,
     config_settings = {
+        # buildifier: disable=canonical-repository
         "@@//latex:_serve_cache_override": "/tmp/serve_cache_override_test_path.tar.gz",
     },
 )
@@ -275,6 +277,7 @@ def _serve_cache_override_dir_test_impl(ctx):
 serve_cache_override_dir_test = analysistest.make(
     _serve_cache_override_dir_test_impl,
     config_settings = {
+        # buildifier: disable=canonical-repository
         "@@//latex:_serve_cache_override": "/tmp/serve_cache_override_test_dir",
     },
 )
@@ -310,6 +313,7 @@ def _serve_cache_override_respects_user_cache_test_impl(ctx):
     )
     if compile_action == None:
         return analysistest.end(env)
+
     # The argv must reference the user's fake cache, NOT the
     # override path. We look for --cache-tarball and confirm its
     # value is not the override.
@@ -336,6 +340,7 @@ def _serve_cache_override_respects_user_cache_test_impl(ctx):
 serve_cache_override_respects_user_cache_test = analysistest.make(
     _serve_cache_override_respects_user_cache_test_impl,
     config_settings = {
+        # buildifier: disable=canonical-repository
         "@@//latex:_serve_cache_override": "/tmp/serve_cache_override_must_not_win.tar.gz",
     },
 )
