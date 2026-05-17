@@ -7,7 +7,7 @@
 [![CI](https://github.com/nicklambourne/rules_latex/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/nicklambourne/rules_latex/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/nicklambourne/rules_latex?label=release&sort=semver)](https://github.com/nicklambourne/rules_latex/releases)
 [![License](https://img.shields.io/github/license/nicklambourne/rules_latex)](./LICENSE)
-[![Bazel 8](https://img.shields.io/badge/bazel-8.0-43A047)](./.bazelversion)
+[![Bazel 8–9](https://img.shields.io/badge/bazel-8.0%20%E2%80%93%209.1-43A047)](./.bazelversion)
 
 Bazel rules for building LaTeX documents with the
 [Tectonic](https://tectonic-typesetting.github.io/) typesetting engine.
@@ -201,7 +201,7 @@ The Linux arm64 biber gap is documented in
 
 ## Compatibility
 
-- **Bazel**: 8.0+ (Bzlmod-only)
+- **Bazel**: 8.0+ (Bzlmod-only). CI tests against 8.0.0, 8.7.0, and 9.1.0 on every push and PR.
 - **Tectonic**: 0.16.9 (pinned)
 - **biber / biblatex**: 2.17 / 3.17 (paired by control-file format)
 - **TeX Live**: 2022 (frozen — see [DESIGN.md §4.10](./DESIGN.md#410-biberbiblatex-version-coupling-and-the-upstream-bundle-staleness))
