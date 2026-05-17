@@ -43,7 +43,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cache-tarball", type=Path, default=None,
         help="Extract this cache tarball into TECTONIC_CACHE_DIR before "
-        "running tectonic. Mutually exclusive with --bundle.",
+        "running tectonic. Mutually exclusive with --bundle and "
+        "--cache-dir.",
+    )
+    parser.add_argument(
+        "--cache-dir", type=Path, default=None,
+        help="Use this pre-extracted cache directory as "
+        "TECTONIC_CACHE_DIR directly, skipping the per-action "
+        "tarball decompression that --cache-tarball does. Used by "
+        "latex_serve_web's persistent-cache fast-path; the "
+        "directory is expected to be a complete tectonic cache "
+        "tree (the same shape an extract of --cache-tarball would "
+        "produce) and is consumed read-only. Mutually exclusive "
+        "with --cache-tarball and --bundle.",
     )
     parser.add_argument(
         "--bundle", type=Path, default=None,
@@ -181,13 +193,19 @@ def _extract_cache(tarball: Path, cache_dir: Path) -> None:
 def main() -> int:
     args = parse_args()
 
-    if args.cache_tarball is None and args.bundle is None:
+    cache_modes = [
+        x for x in (args.cache_tarball, args.bundle, args.cache_dir)
+        if x is not None
+    ]
+    if len(cache_modes) == 0:
         raise SystemExit(
-            "either --cache-tarball or --bundle must be supplied"
+            "exactly one of --cache-tarball, --cache-dir, or "
+            "--bundle must be supplied"
         )
-    if args.cache_tarball is not None and args.bundle is not None:
+    if len(cache_modes) > 1:
         raise SystemExit(
-            "--cache-tarball and --bundle are mutually exclusive"
+            "--cache-tarball, --cache-dir, and --bundle are "
+            "mutually exclusive"
         )
 
     pkg_files = _parse_pkg_files(args.pkg_files)
@@ -195,12 +213,25 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="rules_latex_compile_") as tmp:
         tmp_path = Path(tmp)
         work_dir = tmp_path / "work"
-        cache_dir = tmp_path / "cache"
         work_dir.mkdir()
-        cache_dir.mkdir()
 
-        if args.cache_tarball is not None:
-            _extract_cache(args.cache_tarball, cache_dir)
+        if args.cache_dir is not None:
+            # Fast path: hand tectonic a pre-extracted cache
+            # directly. Skips the per-action gzip decompression +
+            # 300+ file writes that --cache-tarball does on every
+            # warm rebuild. Tectonic doesn't modify
+            # TECTONIC_CACHE_DIR under --only-cached, so this is
+            # safe to share read-only across concurrent compiles.
+            cache_dir = args.cache_dir
+            if not cache_dir.is_dir():
+                raise SystemExit(
+                    f"--cache-dir {cache_dir} is not a directory"
+                )
+        else:
+            cache_dir = tmp_path / "cache"
+            cache_dir.mkdir()
+            if args.cache_tarball is not None:
+                _extract_cache(args.cache_tarball, cache_dir)
 
         main_in_workdir = stage_sources(
             args.main, args.srcs, pkg_files, work_dir,

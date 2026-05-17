@@ -27,6 +27,11 @@ def _latex_library_impl(ctx):
                 direct = [ctx.label.package] if ctx.label.package else [],
                 transitive = transitive_paths,
             ),
+            # latex_library doesn't compile anything itself, so it has
+            # no offline-mode strategy of its own. Consumers that need
+            # a strategy should read it from the latex_document they
+            # ultimately depend on.
+            offline_strategy = "",
         ),
     ]
 

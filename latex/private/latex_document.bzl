@@ -50,7 +50,8 @@ resolve as the author would expect.
   intended for air-gapped or unsupported-platform builds.
 """
 
-load("//latex:providers.bzl", "LatexInfo")
+load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
+load("//latex:providers.bzl", "LatexDocumentInfo", "LatexInfo")
 
 _OUTFMTS = ["pdf", "html", "xdv", "aux"]
 
@@ -179,6 +180,7 @@ def _compile_action(
         pkg_files,
         offline_mode,
         offline_source,
+        offline_source_path,
         output,
         synctex_output,
         outfmt,
@@ -189,7 +191,20 @@ def _compile_action(
     Drives `//tools:tectonic_compile.py` which stages sources, runs
     tectonic with cwd at the work directory, and copies the resulting
     PDF (and optional .synctex.gz) to Bazel-declared output paths.
+
+    Exactly one of ``offline_source`` (a ``File`` that is part of the
+    action's input set) or ``offline_source_path`` (a literal string
+    path that is NOT in the input set) must be set. The latter is
+    used only by the serve-time cache-override path; see the
+    ``//latex:_serve_cache_override`` build setting for the
+    hermeticity trade-off.
     """
+    if (offline_source == None) == (offline_source_path == None):
+        fail(
+            "_compile_action: exactly one of offline_source or " +
+            "offline_source_path must be set",
+        )
+
     args = ctx.actions.args()
     args.add("--tectonic", tectonic.path)
     args.add("--main", main_in.path)
@@ -198,6 +213,18 @@ def _compile_action(
 
     if offline_mode == "bundle":
         args.add("--bundle", offline_source.path)
+    elif offline_mode == "serve_cache_override":
+        # The cache file is not in the Bazel input graph; read it
+        # by absolute path at action execution time. We discriminate
+        # between a tarball (legacy override path) and a
+        # pre-extracted directory (fast path: skips per-action
+        # decompression) by the path suffix -- the serve script
+        # always names the extracted directory just `cache`, not
+        # `cache.tar.gz`.
+        if offline_source_path.endswith(".tar.gz") or offline_source_path.endswith(".tgz"):
+            args.add("--cache-tarball", offline_source_path)
+        else:
+            args.add("--cache-dir", offline_source_path)
     else:
         # user_cache and implicit_pipeline both pass a cache tarball.
         args.add("--cache-tarball", offline_source.path)
@@ -216,12 +243,15 @@ def _compile_action(
     if biber_file:
         args.add("--biber", biber_file.path)
 
+    direct_inputs = [main_in, tectonic, tool, staging_lib]
+    if offline_source != None:
+        direct_inputs.append(offline_source)
+    if biber_file:
+        direct_inputs.append(biber_file)
+    direct_inputs.extend([f for (f, _) in pkg_files])
+
     inputs = depset(
-        direct = (
-            [main_in, tectonic, tool, staging_lib, offline_source] +
-            ([biber_file] if biber_file else []) +
-            [f for (f, _) in pkg_files]
-        ),
+        direct = direct_inputs,
         transitive = [srcs_depset],
     )
 
@@ -288,14 +318,37 @@ def _latex_document_impl(ctx):
     compile_tool = ctx.file._compile_tool
     staging_lib = ctx.file._staging_lib
 
-    # Decide which offline-mode strategy applies. Precedence: user
-    # cache > toolchain bundle > implicit pipeline.
+    # Read the serve-time cache-override build setting. Non-empty
+    # only when `latex_serve_web` is driving the build; see
+    # //latex:_serve_cache_override for the design rationale.
+    serve_cache_override = (
+        ctx.attr._serve_cache_override[BuildSettingInfo].value
+    )
+
+    offline_source = None
+    offline_source_path = None
+
+    # Decide which offline-mode strategy applies. Precedence:
+    #   user cache > toolchain bundle > serve cache override > implicit pipeline.
+    #
+    # The serve-cache override sits below the explicit user / toolchain
+    # paths so it can never silently overrule a user's
+    # `cache = "..."` choice (which should remain fully hermetic in
+    # all contexts, including under `bazel run //...:serve_web`).
     if user_cache:
         offline_mode = "user_cache"
         offline_source = user_cache
     elif toolchain.bundle:
         offline_mode = "bundle"
         offline_source = toolchain.bundle
+    elif serve_cache_override:
+        # Serve-time fast path: read the snapshot at an absolute
+        # path that's not in the Bazel input graph. The compile
+        # action is invalidated by an --action_env nonce passed by
+        # latex_serve_web; see the build-setting comment in
+        # //latex:BUILD.bazel.
+        offline_mode = "serve_cache_override"
+        offline_source_path = serve_cache_override
     else:
         offline_mode = "implicit_pipeline"
         offline_source = ctx.actions.declare_file(
@@ -324,6 +377,7 @@ def _latex_document_impl(ctx):
         pkg_files = pkg_files,
         offline_mode = offline_mode,
         offline_source = offline_source,
+        offline_source_path = offline_source_path,
         output = output,
         synctex_output = synctex_output,
         outfmt = outfmt,
@@ -337,12 +391,34 @@ def _latex_document_impl(ctx):
     if synctex_output:
         output_groups["synctex"] = depset([synctex_output])
 
+    # Underlying offline strategy, ignoring any serve-time override.
+    # This is what gets surfaced on LatexInfo so consumers like
+    # `latex_serve_web` can decide whether to interpose their own
+    # cache management. The serve-time override is by definition
+    # ephemeral and only meaningful inside the running serve loop.
+    if user_cache:
+        intrinsic_strategy = "user_cache"
+    elif toolchain.bundle:
+        intrinsic_strategy = "bundle"
+    else:
+        intrinsic_strategy = "implicit"
+
     return [
         DefaultInfo(files = depset([output])),
         OutputGroupInfo(**output_groups),
         LatexInfo(
             srcs = all_srcs,
             search_paths = depset(),
+            offline_strategy = intrinsic_strategy,
+        ),
+        LatexDocumentInfo(
+            main = main,
+            tectonic = tectonic,
+            biber = biber_file,
+            use_system_biber = use_system_biber,
+            pkg_files = pkg_files,
+            populate_tool = populate_tool,
+            staging_lib = staging_lib,
         ),
     ]
 
@@ -450,6 +526,14 @@ latex_document = rule(
         "_staging_lib": attr.label(
             default = "//tools:staging.py",
             allow_single_file = True,
+        ),
+        "_serve_cache_override": attr.label(
+            doc = "Private build-setting dependency. Holds an absolute " +
+                  "filesystem path to a pre-primed tectonic cache snapshot " +
+                  "when set by `latex_serve_web`. Not intended for direct " +
+                  "use; see //latex:_serve_cache_override.",
+            default = "//latex:_serve_cache_override",
+            providers = [BuildSettingInfo],
         ),
     },
     toolchains = ["//latex/toolchain:toolchain_type"],

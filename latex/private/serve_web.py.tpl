@@ -66,6 +66,22 @@ OPEN_ON_START = bool(int("{{OPEN_ON_START}}"))
 PDFJS_LIB_RUNFILE = "{{PDFJS_LIB_RUNFILE}}"
 PDFJS_WORKER_RUNFILE = "{{PDFJS_WORKER_RUNFILE}}"
 
+# Serve-time cache management. Non-empty only when the document
+# takes the implicit-pipeline path; see latex/private/latex_serve_web.bzl
+# and tools/serve_cache.py for the full design.
+ENABLE_SERVE_CACHE = bool("{{ENABLE_SERVE_CACHE}}")
+SERVE_CACHE_RUNFILE = "{{SERVE_CACHE_RUNFILE}}"
+PRIME_MAIN_RUNFILE = "{{PRIME_MAIN_RUNFILE}}"
+PRIME_TECTONIC_RUNFILE = "{{PRIME_TECTONIC_RUNFILE}}"
+PRIME_POPULATE_TOOL_RUNFILE = "{{PRIME_POPULATE_TOOL_RUNFILE}}"
+PRIME_STAGING_LIB_RUNFILE = "{{PRIME_STAGING_LIB_RUNFILE}}"
+PRIME_BIBER_RUNFILE = "{{PRIME_BIBER_RUNFILE}}"
+PRIME_USE_SYSTEM_BIBER = bool("{{PRIME_USE_SYSTEM_BIBER}}")
+PRIME_SRCS_RAW = """\
+{{PRIME_SRCS}}"""
+PRIME_PKG_FILES_RAW = """\
+{{PRIME_PKG_FILES}}"""
+
 # Browser-side URLs for the same files. Centralised so the HTML
 # template is just a format string.
 PDFJS_LIB = "/_pdfjs/pdf.mjs"
@@ -257,6 +273,16 @@ class BuildState:
     client, plus a `current` snapshot for /status responses. The
     watcher pushes a `tick` to every queue on every successful build;
     handlers translate that into an SSE message.
+
+    Holds three caches that get invalidated on every successful
+    build:
+
+    * ``_synctex`` — parsed SyncTeX index for click-to-source.
+    * ``_pdf_manifest`` — content-addressed PDF chunk manifest
+      (for incremental PDF transfer; see ``Manifest`` in
+      ``tools/pdf_chunks.py``).
+    * The on-disk chunks directory; managed externally by the
+      watcher post-build hook.
     """
 
     def __init__(self) -> None:
@@ -295,6 +321,15 @@ class BuildState:
             # file on disk has just changed.
             self._synctex = None
             self._synctex_mtime = 0.0
+            # We do NOT invalidate _pdf_manifest here. The watcher
+            # thread updates it explicitly via update_manifest()
+            # after computing the chunk manifest off the new PDF.
+            # Until that runs, the previous manifest is still
+            # technically valid: chunks are content-addressed, so a
+            # client requesting a hash from the old manifest gets
+            # the same bytes it would get from the new one (if the
+            # hash also appears in the new manifest) or a 404 (if
+            # not). The browser handles both cases.
             listeners = list(self._listeners)
         # Notify outside the lock so a slow listener can't block the
         # build thread for more than the per-queue timeout.
@@ -356,10 +391,19 @@ def snapshot_mtimes(paths: list[Path]) -> dict[Path, float]:
     return result
 
 
-def run_bazel_build(workspace: Path) -> tuple[bool, float, str]:
+def run_bazel_build(
+    workspace: Path,
+    cache_ctx: "ServeCacheContext | None" = None,
+) -> tuple[bool, float, str]:
     """Run `bazel build <DOCUMENT_LABEL>` from the workspace root.
 
     Returns (success, elapsed_seconds, summary_message).
+
+    When ``cache_ctx`` is provided (i.e. the document takes the
+    implicit-pipeline path and ``latex_serve_web`` has primed a
+    persistent cache snapshot), the override flag and a cache-nonce
+    action-env are appended so the compile action consumes the
+    snapshot instead of the implicit populate-cache pipeline.
     """
     start = time.monotonic()
     cmd = [
@@ -368,6 +412,23 @@ def run_bazel_build(workspace: Path) -> tuple[bool, float, str]:
         "--watchfs",
         "--noshow_progress",
     ]
+    if cache_ctx is not None:
+        # Hand the compile action the *extracted* cache directory
+        # rather than the snapshot tarball: skips ~100-500 ms of
+        # gzip-decompression + 300+ file writes per warm rebuild
+        # on macOS. The compile action discriminates between the
+        # two by suffix (.tar.gz -> tarball, anything else ->
+        # directory). See latex/private/latex_document.bzl.
+        cmd.append(
+            "--@rules_latex//latex:_serve_cache_override={}".format(
+                cache_ctx.layout.extracted,
+            ),
+        )
+        cmd.append(
+            "--action_env=LATEX_SERVE_CACHE_NONCE={}".format(
+                cache_ctx.module.cache_nonce(cache_ctx.layout),
+            ),
+        )
     # When synctex is enabled the .synctex.gz file lives in a non-default
     # OutputGroup. Without --output_groups=+synctex bazel won't actually
     # materialise it in bazel-bin/, even though the target is up-to-date,
@@ -393,6 +454,60 @@ def run_bazel_build(workspace: Path) -> tuple[bool, float, str]:
     elapsed = time.monotonic() - start
     if result.returncode == 0:
         return (True, elapsed, f"built in {elapsed:.2f}s")
+    # Auto-recovery: if the failure looks like a missing cached
+    # resource and we have a cache to re-prime, do so and retry the
+    # build exactly once.
+    if cache_ctx is not None and cache_ctx.module.looks_like_missing_resource(
+        result.stderr.encode("utf-8", errors="replace"),
+    ):
+        print(
+            "latex_serve_web: build failed with what looks like a "
+            "missing cached resource; re-priming and retrying...",
+            file=sys.stderr,
+            flush=True,
+        )
+        try:
+            cache_ctx.module.invalidate_for_reprime(cache_ctx.layout)
+            cache_ctx.module.run_prime(cache_ctx.layout, cache_ctx.spec, workspace)
+        except Exception as e:
+            sys.stderr.write(f"latex_serve_web: re-prime failed: {e}\n")
+            sys.stderr.write(result.stderr)
+            sys.stderr.flush()
+            return (False, elapsed, f"BUILD FAILED ({elapsed:.2f}s)")
+        # Retry the build with the freshly-primed cache.
+        cmd_retry = list(cmd)
+        # Update the nonce because run_prime bumped the snapshot's
+        # mtime, and we want the compile action's cache key to
+        # change so it actually re-runs.
+        for i, arg in enumerate(cmd_retry):
+            if arg.startswith("--action_env=LATEX_SERVE_CACHE_NONCE="):
+                cmd_retry[i] = "--action_env=LATEX_SERVE_CACHE_NONCE={}".format(
+                    cache_ctx.module.cache_nonce(cache_ctx.layout),
+                )
+                break
+        retry_start = time.monotonic()
+        result = subprocess.run(
+            cmd_retry,
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+        )
+        retry_elapsed = time.monotonic() - retry_start
+        total_elapsed = time.monotonic() - start
+        if result.returncode == 0:
+            return (
+                True,
+                total_elapsed,
+                f"built in {total_elapsed:.2f}s (after re-prime; "
+                f"retry {retry_elapsed:.2f}s)",
+            )
+        sys.stderr.write(result.stderr)
+        sys.stderr.flush()
+        return (
+            False,
+            total_elapsed,
+            f"BUILD FAILED after re-prime ({total_elapsed:.2f}s)",
+        )
     # Surface stderr to the operator's console; the browser only sees
     # the summary string.
     sys.stderr.write(result.stderr)
@@ -400,7 +515,11 @@ def run_bazel_build(workspace: Path) -> tuple[bool, float, str]:
     return (False, elapsed, f"BUILD FAILED ({elapsed:.2f}s)")
 
 
-def watcher_loop(workspace: Path, state: BuildState) -> None:
+def watcher_loop(
+    workspace: Path,
+    state: BuildState,
+    cache_ctx: "ServeCacheContext | None" = None,
+) -> None:
     """Background thread: detect source changes, run bazel build."""
     watched_paths = [
         workspace / rel
@@ -411,7 +530,7 @@ def watcher_loop(workspace: Path, state: BuildState) -> None:
 
     # Initial build so the first browser page-load has something to
     # display.
-    success, elapsed, msg = run_bazel_build(workspace)
+    success, elapsed, msg = run_bazel_build(workspace, cache_ctx)
     print(f"latex_serve_web: initial build: {msg}", flush=True)
     state.record_build(success, elapsed, msg)
 
@@ -427,7 +546,7 @@ def watcher_loop(workspace: Path, state: BuildState) -> None:
         rels = ", ".join(str(p.relative_to(workspace)) for p in changed)
         ts = time.strftime("%H:%M:%S")
         print(f"[{ts}] changed: {rels}", flush=True)
-        success, elapsed, msg = run_bazel_build(workspace)
+        success, elapsed, msg = run_bazel_build(workspace, cache_ctx)
         print(f"  {msg}", flush=True)
         state.record_build(success, elapsed, msg)
 
@@ -1005,6 +1124,138 @@ def open_in_browser(http_url: str) -> bool:
 # -----------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class ServeCacheContext:
+    """Bundle of state used to plumb a persistent serve-time cache
+    snapshot into the inner build loop. Constructed on startup when
+    the document takes the implicit-pipeline path; ``None`` otherwise.
+
+    Holds:
+      * ``module``: the imported ``serve_cache`` Python module
+        (loaded from runfiles). Functions are accessed off the
+        module rather than being top-level imports so the template's
+        ``from __future__ import annotations`` doesn't force the
+        cache code to load when ENABLE_SERVE_CACHE is False.
+      * ``layout``: per-document filesystem layout (cache path,
+        sentinel, lock).
+      * ``spec``: arguments used to invoke
+        ``tools/tectonic_populate_cache.py`` when (re-)priming.
+    """
+
+    module: object
+    layout: object  # serve_cache.CacheLayout
+    spec: object    # serve_cache.PrimeSpec
+
+
+def _build_cache_context(workspace: Path, runfiles: Path) -> ServeCacheContext | None:
+    """Bootstrap the serve-time cache context.
+
+    Returns None when:
+      * ENABLE_SERVE_CACHE is False (the document has its own
+        cache=, or a toolchain bundle is in scope), or
+      * Any required runfile path is missing -- which would be a
+        rule-authoring bug, but we degrade to the legacy behaviour
+        rather than crashing.
+
+    On success this also kicks off the initial prime if no
+    snapshot is present yet. The prime is lock-protected, so
+    multiple concurrent serves of the same document play nice.
+    """
+    if not ENABLE_SERVE_CACHE:
+        return None
+
+    serve_cache_path = runfiles / SERVE_CACHE_RUNFILE
+    if not serve_cache_path.is_file():
+        sys.stderr.write(
+            f"latex_serve_web: serve_cache.py missing from runfiles at "
+            f"{serve_cache_path}; falling back to implicit pipeline (slow).\n",
+        )
+        return None
+
+    # Load the cache manager as a module from runfiles. We use
+    # importlib so the path is dynamic (it lives under the
+    # generated launcher's runfiles dir, which we don't know at
+    # template-expansion time).
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("serve_cache", serve_cache_path)
+    if spec is None or spec.loader is None:
+        sys.stderr.write(
+            f"latex_serve_web: failed to load serve_cache.py from {serve_cache_path}; "
+            "falling back to implicit pipeline (slow).\n",
+        )
+        return None
+    serve_cache = importlib.util.module_from_spec(spec)
+    # Install in sys.modules BEFORE exec_module: Python 3.12+'s
+    # @dataclass decorator looks up the host module via
+    # sys.modules to resolve forward type references, and crashes
+    # with AttributeError on NoneType if the module isn't there.
+    sys.modules["serve_cache"] = serve_cache
+    spec.loader.exec_module(serve_cache)
+
+    # Resolve runfile paths to absolute paths for tools, but pass
+    # document-source paths as workspace-relative strings (which
+    # for sources owned by the main workspace is exactly the
+    # short_path).
+    tectonic_path = runfiles / PRIME_TECTONIC_RUNFILE
+    populate_tool_path = runfiles / PRIME_POPULATE_TOOL_RUNFILE
+    biber_path = runfiles / PRIME_BIBER_RUNFILE if PRIME_BIBER_RUNFILE else None
+    # Document main path: the short_path for a source owned by the
+    # main workspace is the same as the workspace-relative path.
+    # (Cross-repo main files are filtered out at rule-analysis
+    # time; see latex_serve_web.bzl.)
+    main_ws_rel = PRIME_MAIN_RUNFILE
+
+    srcs: list[str] = []
+    for rel in PRIME_SRCS_RAW.splitlines():
+        rel = rel.strip()
+        if not rel:
+            continue
+        srcs.append(rel)
+
+    pkg_files: list[tuple[str, str]] = []
+    for line in PRIME_PKG_FILES_RAW.splitlines():
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        src_raw, rel_raw = line.split("=", 1)
+        pkg_files.append((src_raw, rel_raw))
+
+    prime_spec = serve_cache.PrimeSpec(
+        tectonic=tectonic_path,
+        populate_tool=populate_tool_path,
+        main=main_ws_rel,
+        srcs=tuple(srcs),
+        pkg_files=tuple(pkg_files),
+        biber=biber_path,
+        use_system_biber=PRIME_USE_SYSTEM_BIBER,
+    )
+
+    layout = serve_cache.derive_cache_layout(workspace, DOCUMENT_LABEL)
+
+    # QoL: keep .cache/rules_latex out of users' git index.
+    serve_cache.ensure_gitignore_excludes_cache(workspace)
+
+    if not serve_cache.is_primed(layout):
+        try:
+            serve_cache.run_prime(layout, prime_spec, workspace)
+        except serve_cache.PrimeFailure as e:
+            sys.stderr.write(
+                "latex_serve_web: initial serve-cache prime failed "
+                f"(exit code {e.returncode}). Falling back to the "
+                "implicit pipeline (per-edit online prime). The "
+                "live-preview will still work but rebuilds will be "
+                "slow until this is fixed.\n",
+            )
+            return None
+
+    return ServeCacheContext(
+        module=serve_cache,
+        layout=layout,
+        spec=prime_spec,
+    )
+
+
 def main() -> int:
     if len(sys.argv) < 3:
         print(
@@ -1040,6 +1291,11 @@ def main() -> int:
         )
         return 2
 
+    # Bootstrap the serve-time cache override (no-op for documents
+    # with `cache=` or a toolchain bundle). May block for 30-90 s
+    # on the first run while priming.
+    cache_ctx = _build_cache_context(workspace, runfiles)
+
     state = BuildState()
     Handler.state = state
     Handler.workspace = workspace
@@ -1056,6 +1312,8 @@ def main() -> int:
     print(f"latex_serve_web: serving live preview for {DOCUMENT_LABEL}")
     print(f"  rebuild target: {DOCUMENT_LABEL}")
     print(f"  output pdf:     bazel-bin/{PDF_RELPATH}")
+    if cache_ctx is not None:
+        print(f"  serve cache:    {cache_ctx.layout.extracted}/")
     print(
         f"  pdf.js sizes:   lib={len(Handler.pdfjs_lib_bytes)//1024} KiB, "
         f"worker={len(Handler.pdfjs_worker_bytes)//1024} KiB",
@@ -1096,7 +1354,7 @@ def main() -> int:
 
     watcher = threading.Thread(
         target=watcher_loop,
-        args=(workspace, state),
+        args=(workspace, state, cache_ctx),
         daemon=True,
         name="latex-serve-watcher",
     )

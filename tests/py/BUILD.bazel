@@ -17,6 +17,7 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 # __file__-relative paths.
 _TEST_DATA = [
     "//latex/private:serve_web.py.tpl",
+    "//tools:serve_cache.py",
     "//tools:staging.py",
     "//tools:tectonic_compile.py",
     "//tools:tectonic_populate_cache.py",
@@ -43,10 +44,18 @@ sh_test(
     data = _TEST_DATA + ["test_staging.py"],
 )
 
+sh_test(
+    name = "test_serve_cache",
+    srcs = ["run_pytest.sh"],
+    args = ["tests/py/test_serve_cache.py"],
+    data = _TEST_DATA + ["test_serve_cache.py"],
+)
+
 test_suite(
     name = "py_tests",
     tests = [
         ":test_editor_detection",
+        ":test_serve_cache",
         ":test_staging",
         ":test_synctex_parser",
     ],
