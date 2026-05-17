@@ -4,13 +4,20 @@
 
 package(default_visibility = ["//visibility:public"])
 
-# Three scripts and a shared library that drive the rules_latex
+# Five scripts and a shared library that drive the rules_latex
 # tectonic action paths:
 #
 #   - staging.py: shared layout logic (main-rooted staging).
 #   - tectonic_populate_cache.py: TectonicPopulateCache action wrapper
 #     and the worker behind `latex_cache_snapshot`.
 #   - tectonic_compile.py: TectonicCompile action wrapper.
+#   - serve_cache.py: serve-time persistent cache manager imported
+#     by the generated `latex_serve_web` server script. See
+#     latex/private/serve_web.py.tpl for how it's wired in.
+#   - pdf_chunks.py: cross-reference-stream-aware PDF chunker
+#     used by the serve script to content-address the compiled
+#     PDF's indirect objects, so the browser only re-fetches the
+#     chunks that actually changed between rebuilds.
 #
 # Exposed as plain files rather than py_binary because we deliberately
 # don't take a `rules_python` dependency for stdlib-only tools — see
@@ -19,4 +26,6 @@ exports_files([
     "staging.py",
     "tectonic_populate_cache.py",
     "tectonic_compile.py",
+    "serve_cache.py",
+    "pdf_chunks.py",
 ])

@@ -2,6 +2,8 @@
 #
 # Users typically `load("@rules_latex//latex:defs.bzl", ...)`.
 
+load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
+
 package(default_visibility = ["//visibility:public"])
 
 exports_files([
@@ -13,4 +15,29 @@ exports_files([
 alias(
     name = "toolchain_type",
     actual = "//latex/toolchain:toolchain_type",
+)
+
+# Private build setting: serve-time cache override.
+#
+# A back-channel between `latex_serve_web` and `latex_document`.
+# When set to a non-empty absolute path, `latex_document` uses that
+# tectonic cache snapshot instead of synthesising the implicit
+# populate-cache pipeline, *provided* the target does not specify
+# `cache = "..."` and the resolved toolchain has no bundle.
+#
+# `latex_serve_web` sets this on startup after priming the
+# snapshot at a persistent workspace-local location (typically
+# `.cache/rules_latex/<doc>/cache.tar.gz`). The setting is
+# underscore-prefixed because it is not part of the public API:
+# users should never set it on the command line.
+#
+# Hermeticity note: the path is read at action-execution time and
+# the file is NOT in Bazel's input graph. `latex_serve_web`
+# compensates by also passing `--action_env=LATEX_SERVE_CACHE_NONCE`
+# to invalidate the compile action when the snapshot is re-primed.
+# See latex/private/latex_document.bzl and serve_web.py.tpl for the
+# wiring.
+string_flag(
+    name = "_serve_cache_override",
+    build_setting_default = "",
 )

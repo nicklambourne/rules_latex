@@ -156,7 +156,7 @@ Watch a latex_document's sources and rebuild on every save.
 <pre>
 load("@rules_latex//latex:defs.bzl", "latex_serve_web")
 
-latex_serve_web(<a href="#latex_serve_web-name">name</a>, <a href="#latex_serve_web-document">document</a>, <a href="#latex_serve_web-open_on_start">open_on_start</a>, <a href="#latex_serve_web-poll_interval_ms">poll_interval_ms</a>, <a href="#latex_serve_web-port">port</a>)
+latex_serve_web(<a href="#latex_serve_web-name">name</a>, <a href="#latex_serve_web-debounce_max_ms">debounce_max_ms</a>, <a href="#latex_serve_web-debounce_ms">debounce_ms</a>, <a href="#latex_serve_web-document">document</a>, <a href="#latex_serve_web-open_on_start">open_on_start</a>, <a href="#latex_serve_web-poll_interval_ms">poll_interval_ms</a>, <a href="#latex_serve_web-port">port</a>)
 </pre>
 
 Browser-based live-preview server for a latex_document.
@@ -167,9 +167,11 @@ Browser-based live-preview server for a latex_document.
 | Name  | Description | Type | Mandatory | Default |
 | :------------- | :------------- | :------------- | :------------- | :------------- |
 | <a id="latex_serve_web-name"></a>name |  A unique name for this target.   | <a href="https://bazel.build/concepts/labels#target-names">Name</a> | required |  |
+| <a id="latex_serve_web-debounce_max_ms"></a>debounce_max_ms |  Safety net for the debouncer: never wait more than this many milliseconds before firing a build, even if changes keep arriving. Without this cap, a user typing continuously into an editor with fast-autosave-on-every-keystroke would never see a rebuild. 1500 ms matches the upper bound where a user typically expects 'okay, something should happen now'.   | Integer | optional |  `1500`  |
+| <a id="latex_serve_web-debounce_ms"></a>debounce_ms |  How many milliseconds of source-idle to require after a detected change before triggering a rebuild. Coalesces bursts of writes (e.g. format-on-save then user-save, or editors that write multiple files near-simultaneously) into a single build. Set to 0 to disable debouncing (rebuild on every poll-detected change; reproduces pre-v0.3.3 behaviour). The default of 250 ms is invisible to the user because the build itself takes longer than the debounce window.   | Integer | optional |  `250`  |
 | <a id="latex_serve_web-document"></a>document |  The latex_document (or any rule providing LatexInfo) to watch and rebuild.   | <a href="https://bazel.build/concepts/labels">Label</a> | required |  |
 | <a id="latex_serve_web-open_on_start"></a>open_on_start |  If True, open the preview automatically once the server starts. When the launching terminal belongs to a VS Code-family editor (VS Code, Cursor, VSCodium â detected via TERM_PROGRAM), the preview is opened as a Simple Browser tab in that editor via its CLI (`code --open-url`, `cursor --open-url`, `codium --open-url`). Otherwise it falls back to the system default web browser. JetBrains IDEs and other terminals without a Simple Browser equivalent fall back to the web-browser path. The plain http URL is always printed regardless, so users can copy/paste manually.   | Boolean | optional |  `False`  |
-| <a id="latex_serve_web-poll_interval_ms"></a>poll_interval_ms |  How often the watcher checks for source-file changes, in milliseconds.   | Integer | optional |  `250`  |
+| <a id="latex_serve_web-poll_interval_ms"></a>poll_interval_ms |  How often the watcher checks for source-file changes, in milliseconds. The watcher is a polling loop (no third-party `watchdog`/inotify dependency), so this is the amortised cost of one stat() per watched file per interval. 80 ms keeps perceived save-to-preview latency under 100 ms while staying cheap. Independent of `debounce_ms`: the poll interval is how fast we *notice* a change; the debounce window is how long we *wait* after a change before triggering a build.   | Integer | optional |  `80`  |
 | <a id="latex_serve_web-port"></a>port |  TCP port to bind the preview server to (localhost-only).   | Integer | optional |  `8765`  |
 
 
@@ -212,7 +214,7 @@ Compiles a LaTeX document and asserts on the resulting log.
 <pre>
 load("@rules_latex//latex:defs.bzl", "LatexInfo")
 
-LatexInfo(<a href="#LatexInfo-srcs">srcs</a>, <a href="#LatexInfo-search_paths">search_paths</a>)
+LatexInfo(<a href="#LatexInfo-srcs">srcs</a>, <a href="#LatexInfo-search_paths">search_paths</a>, <a href="#LatexInfo-offline_strategy">offline_strategy</a>)
 </pre>
 
 Information about a LaTeX source set or compiled document.
@@ -223,5 +225,6 @@ Information about a LaTeX source set or compiled document.
 | :------------- | :------------- |
 | <a id="LatexInfo-srcs"></a>srcs |  depset[File]: transitive set of LaTeX source files (.tex, .sty, .cls, .bib, images, etc.) that documents depending on this target need to see.    |
 | <a id="LatexInfo-search_paths"></a>search_paths |  depset[string]: directories (relative to the Bazel execroot) that downstream tectonic invocations should add to TEXINPUTS/BIBINPUTS/BSTINPUTS.    |
+| <a id="LatexInfo-offline_strategy"></a>offline_strategy |  string: which offline-mode strategy the target resolved to. One of "user_cache" (explicit `cache = "..."` attr), "bundle" (toolchain-level tectonic.bundle()), or "implicit" (implicit populate-cache pipeline). Set only by `latex_document`; other rules that provide `LatexInfo` (`latex_library`, `latex_pkg`) leave it as the empty string. Consumed by `latex_serve_web` to decide whether to interpose a persistent serve-time cache snapshot via the `//latex:_serve_cache_override` build setting.    |
 
 
