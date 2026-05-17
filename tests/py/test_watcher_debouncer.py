@@ -53,6 +53,7 @@ _PLACEHOLDERS = {
     "{{DOCUMENT_NAME}}": "doc",
     "{{PDFJS_LIB_RUNFILE}}": "_pdfjs/pdf.mjs",
     "{{PDFJS_WORKER_RUNFILE}}": "_pdfjs/pdf.worker.mjs",
+    "{{OPEN_ON_START}}": "0",
     "{{PDF_CHUNKS_RUNFILE}}": "_tools/pdf_chunks.py",
     "{{ENABLE_SERVE_CACHE}}": "",
     "{{SERVE_CACHE_RUNFILE}}": "",

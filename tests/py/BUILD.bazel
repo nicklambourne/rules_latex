@@ -17,6 +17,7 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 # __file__-relative paths.
 _TEST_DATA = [
     "//latex/private:serve_web.py.tpl",
+    "//tools:pdf_chunks.py",
     "//tools:serve_cache.py",
     "//tools:staging.py",
     "//tools:tectonic_compile.py",
@@ -58,10 +59,26 @@ sh_test(
     data = _TEST_DATA + ["test_watcher_debouncer.py"],
 )
 
+sh_test(
+    name = "test_pdf_chunks",
+    srcs = ["run_pytest.sh"],
+    args = ["tests/py/test_pdf_chunks.py"],
+    data = _TEST_DATA + ["test_pdf_chunks.py"],
+)
+
+sh_test(
+    name = "test_post_build_hook",
+    srcs = ["run_pytest.sh"],
+    args = ["tests/py/test_post_build_hook.py"],
+    data = _TEST_DATA + ["test_post_build_hook.py"],
+)
+
 test_suite(
     name = "py_tests",
     tests = [
         ":test_editor_detection",
+        ":test_pdf_chunks",
+        ":test_post_build_hook",
         ":test_serve_cache",
         ":test_staging",
         ":test_synctex_parser",

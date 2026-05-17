@@ -68,6 +68,13 @@ OPEN_ON_START = bool(int("{{OPEN_ON_START}}"))
 PDFJS_LIB_RUNFILE = "{{PDFJS_LIB_RUNFILE}}"
 PDFJS_WORKER_RUNFILE = "{{PDFJS_WORKER_RUNFILE}}"
 
+# Path (within runfiles) to the pure-Python PDF chunker. Loaded
+# lazily on first successful build to compute the content-addressed
+# manifest for incremental PDF transfer. See tools/pdf_chunks.py
+# for the parser, and the do_GET branches for /pdf-manifest and
+# /chunk/<hash> below for the wire shape consumed by the browser.
+PDF_CHUNKS_RUNFILE = "{{PDF_CHUNKS_RUNFILE}}"
+
 # Serve-time cache management. Non-empty only when the document
 # takes the implicit-pipeline path; see latex/private/latex_serve_web.bzl
 # and tools/serve_cache.py for the full design.
@@ -300,6 +307,13 @@ class BuildState:
         # demand the next time a /sync/reverse request comes in.
         self._synctex: SyncTeXIndex | None = None
         self._synctex_mtime: float = 0.0
+        # Content-addressed manifest for the current PDF. None
+        # before the first successful build, or when the chunker
+        # couldn't parse the PDF (cross-reference-stream-stream
+        # variants we don't support, malformed PDFs, etc.). The
+        # browser falls back to whole-PDF transport when this is
+        # None.
+        self._pdf_manifest: object | None = None  # tools.pdf_chunks.Manifest | None
 
     def add_listener(self) -> "queue.Queue[str]":
         q: queue.Queue[str] = queue.Queue(maxsize=8)
@@ -342,6 +356,21 @@ class BuildState:
             except queue.Full:
                 # Slow listener; drop it. It can reconnect.
                 pass
+
+    def update_manifest(self, manifest: object | None) -> None:
+        """Install a freshly-computed manifest. Thread-safe.
+
+        ``manifest`` is a ``tools.pdf_chunks.Manifest`` or ``None``
+        (the latter signals "PDF couldn't be parsed; fall back to
+        whole-PDF transport"). Called from the watcher thread
+        after each successful build.
+        """
+        with self._lock:
+            self._pdf_manifest = manifest
+
+    def get_manifest(self) -> object | None:
+        with self._lock:
+            return self._pdf_manifest
 
     def snapshot(self) -> dict[str, object]:
         with self._lock:
@@ -587,6 +616,7 @@ def watcher_loop(
     workspace: Path,
     state: BuildState,
     cache_ctx: "ServeCacheContext | None" = None,
+    pdf_chunks_ctx: "PdfChunksContext | None" = None,
 ) -> None:
     """Background thread: detect source changes, debounce them, run
     `bazel build`.
@@ -643,6 +673,8 @@ def watcher_loop(
     success, elapsed, msg = run_bazel_build(workspace, cache_ctx)
     print(f"latex_serve_web: initial build: {msg}", flush=True)
     state.record_build(success, elapsed, msg)
+    if success:
+        _compute_manifest_post_build(state, workspace, pdf_chunks_ctx)
 
     last_mtimes = snapshot_mtimes(watched_paths)
     fsm = _DebouncerState()
@@ -710,6 +742,8 @@ def watcher_loop(
         success, elapsed, msg = run_bazel_build(workspace, cache_ctx)
         print(f"  {msg}", flush=True)
         state.record_build(success, elapsed, msg)
+        if success:
+            _compute_manifest_post_build(state, workspace, pdf_chunks_ctx)
 
 
 # -----------------------------------------------------------------------------
@@ -804,17 +838,223 @@ let scale = 1.5;
 // can convert client coords back to PDF coords).
 const canvasViewports = new WeakMap();
 
+// -----------------------------------------------------------------------
+// Content-addressed PDF chunk cache
+// -----------------------------------------------------------------------
+//
+// Mirrors the server-side chunk store (see tools/pdf_chunks.py):
+// each PDF object is stored once under its SHA-256 hash. On every
+// reload we fetch the latest manifest, which lists object byte
+// ranges and hashes; chunks whose hashes the client already has
+// are served from this in-memory cache, and only new hashes are
+// fetched from /chunk/<hash>.
+//
+// The cache survives across reloads (it's module-scope) but is
+// reset by a page refresh. That's fine: the user's browser will
+// fetch /chunk/<hash> with `Cache-Control: public, max-age=...,
+// immutable` headers, so the second fetch comes from the
+// browser's HTTP cache and is nearly free.
+//
+// Cap the cache at a modest number of entries to bound memory
+// usage. LRU eviction would be ideal but is overkill: the bound
+// here is loose, and chunks evicted from this Map can still be
+// re-fetched (the server keeps them on disk and the browser's
+// HTTP cache reduces wire transfer to ~0).
+const CHUNK_CACHE_MAX_ENTRIES = 1000;
+const chunkCache = new Map();
+
+function rememberChunk(hash, bytes) {{
+  if (chunkCache.size >= CHUNK_CACHE_MAX_ENTRIES) {{
+    // Evict the oldest entry (Map preserves insertion order).
+    const oldestKey = chunkCache.keys().next().value;
+    if (oldestKey !== undefined) chunkCache.delete(oldestKey);
+  }}
+  chunkCache.set(hash, bytes);
+}}
+
+async function fetchChunk(hash) {{
+  const cached = chunkCache.get(hash);
+  if (cached) return cached;
+  const resp = await fetch(`/chunk/${{hash}}`);
+  if (!resp.ok) {{
+    throw new Error(`chunk ${{hash}} fetch failed: ${{resp.status}}`);
+  }}
+  const buf = new Uint8Array(await resp.arrayBuffer());
+  rememberChunk(hash, buf);
+  return buf;
+}}
+
+async function fetchPdfRange(begin, end) {{
+  // Fetch [begin, end) from /pdf using HTTP Range. Used for
+  // skeleton ranges (PDF header, gaps between objects, the
+  // trailer) — anything not covered by a content-addressed
+  // chunk.
+  const resp = await fetch("/pdf", {{
+    headers: {{ "Range": `bytes=${{begin}}-${{end - 1}}` }},
+  }});
+  if (!(resp.status === 206 || resp.status === 200)) {{
+    throw new Error(`/pdf range ${{begin}}-${{end - 1}} failed: ${{resp.status}}`);
+  }}
+  return new Uint8Array(await resp.arrayBuffer());
+}}
+
+// Custom PDFDataRangeTransport that serves byte ranges from the
+// content-addressed chunk cache where possible, falling back to
+// /pdf with HTTP Range for skeleton bytes (header/xref/trailer).
+class ChunkedTransport extends pdfjsLib.PDFDataRangeTransport {{
+  constructor(manifest) {{
+    // initialData is empty: PDF.js will request the ranges it
+    // needs via requestDataRange.
+    super(manifest.pdfSize, new Uint8Array(0));
+    this.manifest = manifest;
+    // Sort chunks by start offset for fast lookups; the server
+    // emits them sorted but defending against a future change is
+    // cheap.
+    this.sortedRanges = [...manifest.ranges].sort(
+      (a, b) => a.start - b.start
+    );
+    queueMicrotask(() => this.transportReady());
+  }}
+
+  async requestDataRange(begin, end) {{
+    // PDF.js's API has end inclusive in some places and exclusive
+    // in others; the spec the worker sends here is half-open
+    // [begin, end). Clamp to pdfSize for safety.
+    end = Math.min(end, this.manifest.pdfSize);
+    if (begin >= end) {{
+      this.onDataRange(begin, new Uint8Array(0));
+      return;
+    }}
+    try {{
+      const bytes = await this._assemble(begin, end);
+      this.onDataRange(begin, bytes);
+    }} catch (err) {{
+      console.error("ChunkedTransport: range fetch failed", err);
+      // PDF.js retries on failure. Don't call onDataRange; the
+      // request just times out. Better than throwing here, which
+      // would break the worker.
+    }}
+  }}
+
+  async _assemble(begin, end) {{
+    // Walk [begin, end), serving each sub-range from either the
+    // covering chunk or a /pdf Range fetch. Concatenate into one
+    // buffer for delivery.
+    const segments = [];
+    let cursor = begin;
+    // Find the first chunk whose end > begin (binary search would
+    // be overkill: 20-100 chunks per CV-sized PDF).
+    let i = 0;
+    while (i < this.sortedRanges.length && this.sortedRanges[i].end <= begin) {{
+      i++;
+    }}
+    while (cursor < end) {{
+      if (i < this.sortedRanges.length && this.sortedRanges[i].start < end) {{
+        const r = this.sortedRanges[i];
+        if (cursor < r.start) {{
+          // Skeleton gap before this chunk.
+          const gapEnd = Math.min(r.start, end);
+          segments.push(await fetchPdfRange(cursor, gapEnd));
+          cursor = gapEnd;
+        }} else {{
+          // Inside / overlapping the chunk. Fetch the whole
+          // chunk (it's content-addressed; we'll cache it) and
+          // slice out the requested sub-range.
+          const chunkBytes = await fetchChunk(r.hash);
+          const sliceStart = cursor - r.start;
+          const sliceEnd = Math.min(end, r.end) - r.start;
+          segments.push(chunkBytes.subarray(sliceStart, sliceEnd));
+          cursor = r.start + sliceEnd;
+          if (cursor >= r.end) i++;
+        }}
+      }} else {{
+        // Past the last chunk's end — pure skeleton.
+        segments.push(await fetchPdfRange(cursor, end));
+        cursor = end;
+      }}
+    }}
+    if (segments.length === 1) return segments[0];
+    // Concatenate segments into one buffer.
+    const total = segments.reduce((s, seg) => s + seg.length, 0);
+    const out = new Uint8Array(total);
+    let off = 0;
+    for (const seg of segments) {{
+      out.set(seg, off);
+      off += seg.length;
+    }}
+    return out;
+  }}
+}}
+
+// Background-prefetch every chunk in the manifest. Runs after
+// PDF.js's initial getDocument promise resolves so we don't
+// compete with the worker for bandwidth on the first render. By
+// the time the user starts scrolling, every chunk is in
+// `chunkCache` and PDF.js's per-page byte fetches are
+// instant. Best-effort: failures are silent and don't affect
+// rendering (PDF.js will fetch on-demand if a chunk's missing).
+async function prefetchChunks(manifest) {{
+  // Concurrency: keep it modest so we don't saturate localhost
+  // connections and starve user-initiated fetches.
+  const queue = manifest.ranges
+    .filter(r => !chunkCache.has(r.hash))
+    .map(r => r.hash);
+  const workerCount = 4;
+  async function worker() {{
+    while (queue.length) {{
+      const hash = queue.shift();
+      try {{
+        await fetchChunk(hash);
+      }} catch (e) {{ /* ignore */ }}
+    }}
+  }}
+  await Promise.all(
+    Array.from({{ length: workerCount }}, () => worker())
+  );
+}}
+
 function setStatus(cls, text) {{
   statusEl.className = cls;
   statusEl.textContent = text;
 }}
 
-async function renderDocument(url) {{
-  setStatus("building", "rendering…");
-  const bust = Date.now();
+async function fetchManifest() {{
+  // Returns a manifest object, or null if the server can't
+  // produce one (e.g. cross-reference-stream PDF the chunker
+  // doesn't understand, or chunking is disabled). On null we
+  // fall back to whole-PDF transport.
   try {{
-    const loadingTask = pdfjsLib.getDocument(`${{url}}?t=${{bust}}`);
-    const pdf = await loadingTask.promise;
+    const resp = await fetch("/pdf-manifest");
+    if (!resp.ok) return null;
+    return await resp.json();
+  }} catch (err) {{
+    return null;
+  }}
+}}
+
+async function renderDocument() {{
+  setStatus("building", "rendering…");
+  try {{
+    const manifest = await fetchManifest();
+    let pdf;
+    if (manifest && manifest.ranges && manifest.ranges.length > 0) {{
+      // Chunked path: serve byte ranges from the content-
+      // addressed cache (with HTTP-Range fallback for
+      // skeleton bytes).
+      const transport = new ChunkedTransport(manifest);
+      const loadingTask = pdfjsLib.getDocument({{ range: transport }});
+      pdf = await loadingTask.promise;
+      // Kick off prefetch in the background; don't await.
+      prefetchChunks(manifest).catch(() => {{}});
+    }} else {{
+      // Fallback: pull the whole PDF in one request. Used for
+      // documents the chunker couldn't parse, and for first-load
+      // before any manifest exists. Cache-busts via the query
+      // string so the browser fetches fresh bytes.
+      const bust = Date.now();
+      const loadingTask = pdfjsLib.getDocument(`/pdf?t=${{bust}}`);
+      pdf = await loadingTask.promise;
+    }}
     currentDoc = pdf;
     await renderAllPages(pdf);
   }} catch (err) {{
@@ -911,7 +1151,7 @@ function escapeHtml(s) {{
 const evtSrc = new EventSource("/events");
 evtSrc.onmessage = (e) => {{
   if (e.data === "reload") {{
-    renderDocument("/pdf");
+    renderDocument();
   }} else if (e.data === "build-failed" || e.data === "hello") {{
     refreshStatus();
   }}
@@ -933,7 +1173,7 @@ document.getElementById("zoom-reset").addEventListener("click", () => {{
   if (currentDoc) renderAllPages(currentDoc);
 }});
 
-renderDocument("/pdf");
+renderDocument();
 refreshStatus();
 </script>
 </body>
@@ -947,6 +1187,7 @@ class Handler(BaseHTTPRequestHandler):
     workspace: Path
     pdfjs_lib_bytes: bytes
     pdfjs_worker_bytes: bytes
+    pdf_chunks_ctx: "PdfChunksContext | None" = None
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
         # http.server is chatty by default; we already log builds
@@ -990,17 +1231,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.OK, html.encode("utf-8"), "text/html; charset=utf-8")
             return
         if path == "/pdf":
-            pdf_path = self.workspace / "bazel-bin" / PDF_RELPATH
-            try:
-                body = pdf_path.read_bytes()
-            except FileNotFoundError:
-                self._send(
-                    HTTPStatus.NOT_FOUND,
-                    b"PDF not built yet.",
-                    "text/plain; charset=utf-8",
-                )
-                return
-            self._send(HTTPStatus.OK, body, "application/pdf")
+            self._serve_pdf_with_range()
+            return
+        if path == "/pdf-manifest":
+            self._serve_pdf_manifest()
+            return
+        if path.startswith("/chunk/"):
+            self._serve_chunk(path[len("/chunk/"):])
             return
         if path == "/_pdfjs/pdf.mjs":
             # ESM Javascript MIME type per the WHATWG fetch spec.
@@ -1040,6 +1277,177 @@ class Handler(BaseHTTPRequestHandler):
             b"not found",
             "text/plain; charset=utf-8",
         )
+
+    # -------------------------------------------------------------
+    # PDF transport (chunked + Range-aware /pdf)
+    # -------------------------------------------------------------
+
+    def _serve_pdf_with_range(self) -> None:
+        """Serve ``/pdf`` with HTTP Range support.
+
+        The chunked transport path on the client side relies on
+        being able to fetch arbitrary byte ranges from ``/pdf``
+        for the parts of the PDF that aren't covered by any
+        chunk (the header, gaps between objects, the trailer).
+        Without Range support, every skeleton-range fetch would
+        pull the entire PDF.
+        """
+        pdf_path = self.workspace / "bazel-bin" / PDF_RELPATH
+        try:
+            file_size = pdf_path.stat().st_size
+        except FileNotFoundError:
+            self._send(
+                HTTPStatus.NOT_FOUND,
+                b"PDF not built yet.",
+                "text/plain; charset=utf-8",
+            )
+            return
+
+        range_header = self.headers.get("Range", "").strip()
+        if not range_header:
+            # No Range header: serve the whole PDF as before.
+            try:
+                body = pdf_path.read_bytes()
+            except OSError:
+                self._send(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    b"PDF read error",
+                    "text/plain; charset=utf-8",
+                )
+                return
+            self._send(HTTPStatus.OK, body, "application/pdf")
+            return
+
+        # Parse a single byte-range "bytes=start-end". We don't
+        # support multipart ranges — PDF.js doesn't request them.
+        m = re.match(
+            r"^bytes=(\d+)-(\d*)$",
+            range_header,
+        )
+        if not m:
+            self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+            self.send_header("Content-Range", f"bytes */{file_size}")
+            self.end_headers()
+            return
+        start = int(m.group(1))
+        end_str = m.group(2)
+        end = int(end_str) if end_str else (file_size - 1)
+        if start >= file_size or end < start:
+            self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+            self.send_header("Content-Range", f"bytes */{file_size}")
+            self.end_headers()
+            return
+        end = min(end, file_size - 1)
+        length = end - start + 1
+        try:
+            with open(pdf_path, "rb") as fp:
+                fp.seek(start)
+                body = fp.read(length)
+        except OSError:
+            self._send(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                b"PDF read error",
+                "text/plain; charset=utf-8",
+            )
+            return
+        self.send_response(HTTPStatus.PARTIAL_CONTENT)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header(
+            "Content-Range",
+            f"bytes {start}-{end}/{file_size}",
+        )
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_pdf_manifest(self) -> None:
+        """Return the JSON content-addressed manifest for the
+        current PDF, or 404 when no manifest is available (the
+        client then falls back to whole-PDF transport).
+        """
+        manifest = self.state.get_manifest()
+        if manifest is None:
+            self._send(
+                HTTPStatus.NOT_FOUND,
+                b"no manifest available",
+                "text/plain; charset=utf-8",
+            )
+            return
+        payload = {
+            "pdfSize": manifest.pdf_size,
+            "ranges": [
+                {
+                    "objectId": c.object_id,
+                    "start": c.start,
+                    "end": c.end,
+                    "hash": c.hash,
+                }
+                for c in manifest.chunks
+            ],
+            "skeletonRanges": [
+                [s, e] for s, e in manifest.skeleton_ranges
+            ],
+        }
+        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        self._send(HTTPStatus.OK, body, "application/json")
+
+    def _serve_chunk(self, hash_hex: str) -> None:
+        """Serve one content-addressed PDF chunk by SHA-256 hash.
+
+        Chunks are written by the watcher's post-build hook into
+        ``pdf_chunks_ctx.chunks_dir`` and served from there. We
+        validate the hash format strictly to avoid path
+        traversal: only 64 lowercase hex characters allowed.
+        """
+        if self.pdf_chunks_ctx is None:
+            self._send(
+                HTTPStatus.NOT_FOUND,
+                b"chunking disabled on this server",
+                "text/plain; charset=utf-8",
+            )
+            return
+        if len(hash_hex) != 64 or not all(
+            c in "0123456789abcdef" for c in hash_hex
+        ):
+            self._send(
+                HTTPStatus.BAD_REQUEST,
+                b"invalid chunk hash",
+                "text/plain; charset=utf-8",
+            )
+            return
+        chunk_path = self.pdf_chunks_ctx.chunks_dir / hash_hex
+        try:
+            body = chunk_path.read_bytes()
+        except FileNotFoundError:
+            self._send(
+                HTTPStatus.NOT_FOUND,
+                b"chunk not found",
+                "text/plain; charset=utf-8",
+            )
+            return
+        except OSError:
+            self._send(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                b"chunk read error",
+                "text/plain; charset=utf-8",
+            )
+            return
+        # Chunks are content-addressed by hash so they're
+        # immutable: cache them aggressively in the browser. We
+        # bypass _send here because it always emits
+        # ``Cache-Control: no-store``, which is the wrong header
+        # for immutable resources.
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header(
+            "Cache-Control",
+            "public, max-age=31536000, immutable",
+        )
+        self.end_headers()
+        self.wfile.write(body)
 
     def _handle_sync_reverse(self) -> None:
         """POST /sync/reverse — map a PDF click to a source location.
@@ -1417,6 +1825,201 @@ def _build_cache_context(workspace: Path, runfiles: Path) -> ServeCacheContext |
     )
 
 
+@dataclass(frozen=True)
+class PdfChunksContext:
+    """Bundle of state used to compute and serve content-addressed
+    PDF chunks. Constructed once on startup; may be ``None`` if
+    the chunker module can't be loaded (in which case the server
+    silently falls back to serving the whole PDF every time).
+
+    Holds:
+      * ``module``: the imported ``pdf_chunks`` Python module
+        (loaded from runfiles).
+      * ``chunks_dir``: per-document directory under
+        ``$BUILD_WORKSPACE_DIRECTORY/.cache/rules_latex/<slug>/chunks/``
+        where the chunk files are written. Persists across serve
+        sessions so a freshly-started serve immediately benefits
+        from chunks computed by the previous session.
+
+    The directory is independent of ``ServeCacheContext.layout``
+    even though it lives under the same parent: chunks apply to
+    *every* document type (implicit-pipeline, ``cache=``, toolchain
+    bundle), while the serve cache only applies to the implicit
+    pipeline.
+    """
+
+    module: object
+    chunks_dir: Path
+
+
+def _build_pdf_chunks_context(
+    workspace: Path,
+    runfiles: Path,
+) -> PdfChunksContext | None:
+    """Load ``tools/pdf_chunks.py`` from runfiles and prepare the
+    per-document chunks directory.
+
+    Returns ``None`` if the module can't be loaded for any reason.
+    Server falls back to whole-PDF transport in that case — every
+    save still triggers a build and the browser reloads the full
+    PDF; the user just doesn't get the chunking optimization.
+    """
+    chunks_lib = runfiles / PDF_CHUNKS_RUNFILE
+    if not chunks_lib.is_file():
+        sys.stderr.write(
+            "latex_serve_web: pdf_chunks.py missing from runfiles at "
+            f"{chunks_lib}; the PDF will be re-sent in full on every "
+            "rebuild.\n",
+        )
+        return None
+
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("pdf_chunks", chunks_lib)
+    if spec is None or spec.loader is None:
+        sys.stderr.write(
+            "latex_serve_web: failed to import pdf_chunks.py; "
+            "falling back to whole-PDF transport.\n",
+        )
+        return None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["pdf_chunks"] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as e:
+        sys.stderr.write(
+            f"latex_serve_web: pdf_chunks.py exec failed: {e}; "
+            "falling back to whole-PDF transport.\n",
+        )
+        return None
+
+    # Derive the chunks directory: same slug as serve_cache uses,
+    # but always under .cache/rules_latex/<slug>/chunks/ regardless
+    # of whether the serve cache is active. Slug derivation is
+    # duplicated here from serve_cache._slugify_label rather than
+    # taking a runtime dependency on serve_cache (which is itself
+    # conditionally loaded).
+    import hashlib
+    import re as _re
+
+    stripped = DOCUMENT_LABEL.lstrip("@/")
+    if stripped.startswith("@"):
+        stripped = stripped.lstrip("@")
+    if "//" in stripped:
+        _, _, stripped = stripped.partition("//")
+    sanitised = _re.sub(r"[^A-Za-z0-9_.-]", "_", stripped.replace(":", "_"))
+    digest = hashlib.sha1(DOCUMENT_LABEL.encode("utf-8")).hexdigest()[:6]
+    slug = f"{sanitised}_{digest}"
+    chunks_dir = workspace / ".cache" / "rules_latex" / slug / "chunks"
+    try:
+        chunks_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        sys.stderr.write(
+            f"latex_serve_web: could not create chunks dir "
+            f"{chunks_dir}: {e}; falling back to whole-PDF transport.\n",
+        )
+        return None
+
+    return PdfChunksContext(module=module, chunks_dir=chunks_dir)
+
+
+# Age (seconds) below which a chunk is considered "fresh" and not
+# eligible for GC even if it isn't in the current manifest. Lets
+# the user undo a recent edit without re-fetching the body chunk
+# that just got removed from the manifest.
+_CHUNK_GC_MIN_AGE_SECONDS = 5 * 60
+
+
+def _gc_chunks(
+    chunks_dir: Path,
+    keep_hashes: set,
+    *,
+    min_age_seconds: float = _CHUNK_GC_MIN_AGE_SECONDS,
+) -> int:
+    """Delete chunk files not in ``keep_hashes`` and older than
+    ``min_age_seconds``. Returns the number of files deleted.
+
+    Safe to call from the watcher thread after each successful
+    build. The min-age guard prevents thrashing when the user is
+    rapidly alternating between two versions of a document
+    (chunks just removed from the manifest will be re-added on
+    the next save).
+    """
+    deleted = 0
+    cutoff = time.time() - min_age_seconds
+    try:
+        for entry in chunks_dir.iterdir():
+            if not entry.is_file():
+                continue
+            name = entry.name
+            # Defensive: only touch files that look like SHA-256
+            # hex hashes. Skip the .tmp atomic-write sidecars and
+            # anything else.
+            if len(name) != 64 or not all(
+                c in "0123456789abcdef" for c in name
+            ):
+                continue
+            if name in keep_hashes:
+                continue
+            try:
+                st = entry.stat()
+            except OSError:
+                continue
+            if st.st_mtime > cutoff:
+                continue
+            try:
+                entry.unlink()
+                deleted += 1
+            except OSError:
+                pass
+    except OSError:
+        # chunks_dir may have been removed externally; ignore.
+        pass
+    return deleted
+
+
+def _compute_manifest_post_build(
+    state: BuildState,
+    workspace: Path,
+    pdf_chunks_ctx: PdfChunksContext | None,
+) -> None:
+    """Hook called from the watcher after each successful build.
+
+    Computes the chunk manifest for the freshly-produced PDF,
+    installs it on ``state``, and GCs stale chunks. Failures here
+    are non-fatal: the browser falls back to whole-PDF transport
+    automatically when the manifest is absent.
+    """
+    if pdf_chunks_ctx is None:
+        return
+    pdf_path = workspace / "bazel-bin" / PDF_RELPATH
+    if not pdf_path.is_file():
+        # Build "succeeded" but the PDF wasn't produced where we
+        # expected — likely a non-pdf outfmt (xdv/html/aux). The
+        # chunk manifest doesn't apply.
+        state.update_manifest(None)
+        return
+    try:
+        manifest = pdf_chunks_ctx.module.compute_manifest(
+            pdf_path,
+            pdf_chunks_ctx.chunks_dir,
+        )
+    except Exception as e:
+        # The parser is designed never to raise — it returns None
+        # on any parse failure. If we get here it's a real bug
+        # (e.g. OOM, IO error). Log and continue with no manifest.
+        sys.stderr.write(
+            f"latex_serve_web: PDF chunker raised unexpectedly: {e}; "
+            "browser will fall back to whole-PDF transport.\n",
+        )
+        state.update_manifest(None)
+        return
+    state.update_manifest(manifest)
+    if manifest is not None:
+        keep = {c.hash for c in manifest.chunks}
+        _gc_chunks(pdf_chunks_ctx.chunks_dir, keep)
+
+
 def main() -> int:
     if len(sys.argv) < 3:
         print(
@@ -1457,11 +2060,18 @@ def main() -> int:
     # on the first run while priming.
     cache_ctx = _build_cache_context(workspace, runfiles)
 
+    # Load the PDF chunker for content-addressed PDF transfer (see
+    # tools/pdf_chunks.py). On any failure to load we fall back to
+    # whole-PDF transport silently — chunking is purely an
+    # optimization, never a correctness requirement.
+    pdf_chunks_ctx = _build_pdf_chunks_context(workspace, runfiles)
+
     state = BuildState()
     Handler.state = state
     Handler.workspace = workspace
     Handler.pdfjs_lib_bytes = pdfjs_lib_path.read_bytes()
     Handler.pdfjs_worker_bytes = pdfjs_worker_path.read_bytes()
+    Handler.pdf_chunks_ctx = pdf_chunks_ctx
 
     # SO_REUSEADDR lets the user kill+restart the serve target quickly
     # without hitting "Address already in use" while the kernel holds
@@ -1475,6 +2085,8 @@ def main() -> int:
     print(f"  output pdf:     bazel-bin/{PDF_RELPATH}")
     if cache_ctx is not None:
         print(f"  serve cache:    {cache_ctx.layout.extracted}/")
+    if pdf_chunks_ctx is not None:
+        print(f"  chunks cache:   {pdf_chunks_ctx.chunks_dir}/")
     print(
         f"  pdf.js sizes:   lib={len(Handler.pdfjs_lib_bytes)//1024} KiB, "
         f"worker={len(Handler.pdfjs_worker_bytes)//1024} KiB",
@@ -1515,7 +2127,7 @@ def main() -> int:
 
     watcher = threading.Thread(
         target=watcher_loop,
-        args=(workspace, state, cache_ctx),
+        args=(workspace, state, cache_ctx, pdf_chunks_ctx),
         daemon=True,
         name="latex-serve-watcher",
     )

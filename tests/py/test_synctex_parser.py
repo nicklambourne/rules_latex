@@ -35,6 +35,7 @@ _PLACEHOLDERS = {
     "{{PDFJS_LIB_RUNFILE}}": "_pdfjs/pdf.mjs",
     "{{PDFJS_WORKER_RUNFILE}}": "_pdfjs/pdf.worker.mjs",
     "{{OPEN_ON_START}}": "0",
+    "{{PDF_CHUNKS_RUNFILE}}": "_tools/pdf_chunks.py",
     # Serve-cache plumbing (covered separately by test_serve_cache).
     # Empty values exercise the disabled-cache branch in the template.
     "{{ENABLE_SERVE_CACHE}}": "",

@@ -93,6 +93,7 @@ def _latex_serve_web_impl(ctx):
 
     pdfjs_lib = ctx.file._pdfjs_lib
     pdfjs_worker = ctx.file._pdfjs_worker
+    pdf_chunks_lib = ctx.file._pdf_chunks_lib
 
     # Decide whether to plumb in the serve-time cache override.
     # Only the implicit-pipeline path needs it; documents with
@@ -197,6 +198,7 @@ def _latex_serve_web_impl(ctx):
             "{{PDFJS_LIB_RUNFILE}}": pdfjs_lib.short_path,
             "{{PDFJS_WORKER_RUNFILE}}": pdfjs_worker.short_path,
             "{{OPEN_ON_START}}": "1" if ctx.attr.open_on_start else "0",
+            "{{PDF_CHUNKS_RUNFILE}}": pdf_chunks_lib.short_path,
             "{{ENABLE_SERVE_CACHE}}": "1" if enable_serve_cache else "",
             "{{SERVE_CACHE_RUNFILE}}": prime_serve_cache_path,
             "{{PRIME_MAIN_RUNFILE}}": prime_main_path,
@@ -228,7 +230,7 @@ exec "$PYTHON" "$RUNFILES/{server}" "$BUILD_WORKSPACE_DIRECTORY" "$RUNFILES" "$@
 
     runfiles = ctx.runfiles(
         files = (
-            [server_script, pdfjs_lib, pdfjs_worker] +
+            [server_script, pdfjs_lib, pdfjs_worker, pdf_chunks_lib] +
             serve_cache_runfiles
         ),
     )
@@ -312,6 +314,14 @@ latex_serve_web = rule(
         ),
         "_serve_cache_lib": attr.label(
             default = "//tools:serve_cache.py",
+            allow_single_file = True,
+        ),
+        "_pdf_chunks_lib": attr.label(
+            doc = "Pure-Python PDF chunker used to compute the " +
+                  "content-addressed manifest after each build. " +
+                  "Loaded dynamically from runfiles by the serve " +
+                  "script; see tools/pdf_chunks.py.",
+            default = "//tools:pdf_chunks.py",
             allow_single_file = True,
         ),
     },
