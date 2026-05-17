@@ -25,7 +25,8 @@ seconds.
 ## Prerequisites
 
 - **Bazel 8.0+** (Bzlmod must be enabled). `rules_latex` is Bzlmod-only
-  by design.
+  by design. CI runs the full test suite against Bazel 8.0.0, 8.7.0,
+  and 9.1.0 on every push and PR, on both Linux x86_64 and macOS arm64.
 - An internet connection on first build (for the package prime).
   Subsequent builds are fully offline.
 
