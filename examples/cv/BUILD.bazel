@@ -8,11 +8,27 @@ Demonstrates:
     workflow.
 """
 
-load("@rules_latex//latex:defs.bzl", "latex_document", "latex_serve_web", "latex_test")
+load(
+    "@rules_latex//latex:defs.bzl",
+    "latex_cache_snapshot",
+    "latex_document",
+    "latex_serve_web",
+    "latex_test",
+)
 
+# The CV uses a checked-in cache snapshot to avoid the implicit
+# online-prime pipeline. This keeps live-preview rebuilds well under
+# 5 s, instead of the 30-90 s "first build" cost you'd otherwise pay
+# on every source edit (the implicit pipeline content-addresses on
+# source contents, so editing the body of the .tex file invalidates
+# the cache).
+#
+# Refresh the snapshot with:
+#     bazel run //cv:cv_cache_snapshot
 latex_document(
     name = "cv",
     srcs = ["cv.tex"],
+    cache = "cv_cache.tar.gz",
     main = "cv.tex",
     synctex = True,
     visibility = ["//visibility:public"],
@@ -26,8 +42,20 @@ latex_serve_web(
     port = 8767,
 )
 
+# Developer command: refresh the cache snapshot. Run with:
+#     bazel run //cv:cv_cache_snapshot
+# (requires network access; only needs to be re-run when packages
+# referenced from cv.tex change.)
+latex_cache_snapshot(
+    name = "cv_cache_snapshot",
+    srcs = ["cv.tex"],
+    main = "cv.tex",
+    output = "cv/cv_cache.tar.gz",
+)
+
 latex_test(
     name = "cv_compiles",
     srcs = ["cv.tex"],
+    cache = "cv_cache.tar.gz",
     main = "cv.tex",
 )
