@@ -43,7 +43,7 @@ import sys
 import threading
 import time
 import webbrowser
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -56,6 +56,8 @@ SYNCTEX_RELPATH = "{{SYNCTEX_RELPATH}}"
 WATCHED_PATHS_RAW = """\
 {{WATCHED_PATHS}}"""
 POLL_INTERVAL_MS = int("{{POLL_INTERVAL}}")
+DEBOUNCE_MS = int("{{DEBOUNCE_MS}}")
+DEBOUNCE_MAX_MS = int("{{DEBOUNCE_MAX_MS}}")
 PORT = int("{{PORT}}")
 DOCUMENT_NAME = "{{DOCUMENT_NAME}}"
 OPEN_ON_START = bool(int("{{OPEN_ON_START}}"))
@@ -65,6 +67,29 @@ OPEN_ON_START = bool(int("{{OPEN_ON_START}}"))
 # /_pdfjs/pdf.mjs and /_pdfjs/pdf.worker.mjs.
 PDFJS_LIB_RUNFILE = "{{PDFJS_LIB_RUNFILE}}"
 PDFJS_WORKER_RUNFILE = "{{PDFJS_WORKER_RUNFILE}}"
+
+# Path (within runfiles) to the pure-Python PDF chunker. Loaded
+# lazily on first successful build to compute the content-addressed
+# manifest for incremental PDF transfer. See tools/pdf_chunks.py
+# for the parser, and the do_GET branches for /pdf-manifest and
+# /chunk/<hash> below for the wire shape consumed by the browser.
+PDF_CHUNKS_RUNFILE = "{{PDF_CHUNKS_RUNFILE}}"
+
+# Serve-time cache management. Non-empty only when the document
+# takes the implicit-pipeline path; see latex/private/latex_serve_web.bzl
+# and tools/serve_cache.py for the full design.
+ENABLE_SERVE_CACHE = bool("{{ENABLE_SERVE_CACHE}}")
+SERVE_CACHE_RUNFILE = "{{SERVE_CACHE_RUNFILE}}"
+PRIME_MAIN_RUNFILE = "{{PRIME_MAIN_RUNFILE}}"
+PRIME_TECTONIC_RUNFILE = "{{PRIME_TECTONIC_RUNFILE}}"
+PRIME_POPULATE_TOOL_RUNFILE = "{{PRIME_POPULATE_TOOL_RUNFILE}}"
+PRIME_STAGING_LIB_RUNFILE = "{{PRIME_STAGING_LIB_RUNFILE}}"
+PRIME_BIBER_RUNFILE = "{{PRIME_BIBER_RUNFILE}}"
+PRIME_USE_SYSTEM_BIBER = bool("{{PRIME_USE_SYSTEM_BIBER}}")
+PRIME_SRCS_RAW = """\
+{{PRIME_SRCS}}"""
+PRIME_PKG_FILES_RAW = """\
+{{PRIME_PKG_FILES}}"""
 
 # Browser-side URLs for the same files. Centralised so the HTML
 # template is just a format string.
@@ -257,6 +282,16 @@ class BuildState:
     client, plus a `current` snapshot for /status responses. The
     watcher pushes a `tick` to every queue on every successful build;
     handlers translate that into an SSE message.
+
+    Holds three caches that get invalidated on every successful
+    build:
+
+    * ``_synctex`` — parsed SyncTeX index for click-to-source.
+    * ``_pdf_manifest`` — content-addressed PDF chunk manifest
+      (for incremental PDF transfer; see ``Manifest`` in
+      ``tools/pdf_chunks.py``).
+    * The on-disk chunks directory; managed externally by the
+      watcher post-build hook.
     """
 
     def __init__(self) -> None:
@@ -272,6 +307,13 @@ class BuildState:
         # demand the next time a /sync/reverse request comes in.
         self._synctex: SyncTeXIndex | None = None
         self._synctex_mtime: float = 0.0
+        # Content-addressed manifest for the current PDF. None
+        # before the first successful build, or when the chunker
+        # couldn't parse the PDF (cross-reference-stream-stream
+        # variants we don't support, malformed PDFs, etc.). The
+        # browser falls back to whole-PDF transport when this is
+        # None.
+        self._pdf_manifest: object | None = None  # tools.pdf_chunks.Manifest | None
 
     def add_listener(self) -> "queue.Queue[str]":
         q: queue.Queue[str] = queue.Queue(maxsize=8)
@@ -295,6 +337,15 @@ class BuildState:
             # file on disk has just changed.
             self._synctex = None
             self._synctex_mtime = 0.0
+            # We do NOT invalidate _pdf_manifest here. The watcher
+            # thread updates it explicitly via update_manifest()
+            # after computing the chunk manifest off the new PDF.
+            # Until that runs, the previous manifest is still
+            # technically valid: chunks are content-addressed, so a
+            # client requesting a hash from the old manifest gets
+            # the same bytes it would get from the new one (if the
+            # hash also appears in the new manifest) or a 404 (if
+            # not). The browser handles both cases.
             listeners = list(self._listeners)
         # Notify outside the lock so a slow listener can't block the
         # build thread for more than the per-queue timeout.
@@ -305,6 +356,21 @@ class BuildState:
             except queue.Full:
                 # Slow listener; drop it. It can reconnect.
                 pass
+
+    def update_manifest(self, manifest: object | None) -> None:
+        """Install a freshly-computed manifest. Thread-safe.
+
+        ``manifest`` is a ``tools.pdf_chunks.Manifest`` or ``None``
+        (the latter signals "PDF couldn't be parsed; fall back to
+        whole-PDF transport"). Called from the watcher thread
+        after each successful build.
+        """
+        with self._lock:
+            self._pdf_manifest = manifest
+
+    def get_manifest(self) -> object | None:
+        with self._lock:
+            return self._pdf_manifest
 
     def snapshot(self) -> dict[str, object]:
         with self._lock:
@@ -356,10 +422,19 @@ def snapshot_mtimes(paths: list[Path]) -> dict[Path, float]:
     return result
 
 
-def run_bazel_build(workspace: Path) -> tuple[bool, float, str]:
+def run_bazel_build(
+    workspace: Path,
+    cache_ctx: "ServeCacheContext | None" = None,
+) -> tuple[bool, float, str]:
     """Run `bazel build <DOCUMENT_LABEL>` from the workspace root.
 
     Returns (success, elapsed_seconds, summary_message).
+
+    When ``cache_ctx`` is provided (i.e. the document takes the
+    implicit-pipeline path and ``latex_serve_web`` has primed a
+    persistent cache snapshot), the override flag and a cache-nonce
+    action-env are appended so the compile action consumes the
+    snapshot instead of the implicit populate-cache pipeline.
     """
     start = time.monotonic()
     cmd = [
@@ -368,6 +443,23 @@ def run_bazel_build(workspace: Path) -> tuple[bool, float, str]:
         "--watchfs",
         "--noshow_progress",
     ]
+    if cache_ctx is not None:
+        # Hand the compile action the *extracted* cache directory
+        # rather than the snapshot tarball: skips ~100-500 ms of
+        # gzip-decompression + 300+ file writes per warm rebuild
+        # on macOS. The compile action discriminates between the
+        # two by suffix (.tar.gz -> tarball, anything else ->
+        # directory). See latex/private/latex_document.bzl.
+        cmd.append(
+            "--@rules_latex//latex:_serve_cache_override={}".format(
+                cache_ctx.layout.extracted,
+            ),
+        )
+        cmd.append(
+            "--action_env=LATEX_SERVE_CACHE_NONCE={}".format(
+                cache_ctx.module.cache_nonce(cache_ctx.layout),
+            ),
+        )
     # When synctex is enabled the .synctex.gz file lives in a non-default
     # OutputGroup. Without --output_groups=+synctex bazel won't actually
     # materialise it in bazel-bin/, even though the target is up-to-date,
@@ -393,6 +485,60 @@ def run_bazel_build(workspace: Path) -> tuple[bool, float, str]:
     elapsed = time.monotonic() - start
     if result.returncode == 0:
         return (True, elapsed, f"built in {elapsed:.2f}s")
+    # Auto-recovery: if the failure looks like a missing cached
+    # resource and we have a cache to re-prime, do so and retry the
+    # build exactly once.
+    if cache_ctx is not None and cache_ctx.module.looks_like_missing_resource(
+        result.stderr.encode("utf-8", errors="replace"),
+    ):
+        print(
+            "latex_serve_web: build failed with what looks like a "
+            "missing cached resource; re-priming and retrying...",
+            file=sys.stderr,
+            flush=True,
+        )
+        try:
+            cache_ctx.module.invalidate_for_reprime(cache_ctx.layout)
+            cache_ctx.module.run_prime(cache_ctx.layout, cache_ctx.spec, workspace)
+        except Exception as e:
+            sys.stderr.write(f"latex_serve_web: re-prime failed: {e}\n")
+            sys.stderr.write(result.stderr)
+            sys.stderr.flush()
+            return (False, elapsed, f"BUILD FAILED ({elapsed:.2f}s)")
+        # Retry the build with the freshly-primed cache.
+        cmd_retry = list(cmd)
+        # Update the nonce because run_prime bumped the snapshot's
+        # mtime, and we want the compile action's cache key to
+        # change so it actually re-runs.
+        for i, arg in enumerate(cmd_retry):
+            if arg.startswith("--action_env=LATEX_SERVE_CACHE_NONCE="):
+                cmd_retry[i] = "--action_env=LATEX_SERVE_CACHE_NONCE={}".format(
+                    cache_ctx.module.cache_nonce(cache_ctx.layout),
+                )
+                break
+        retry_start = time.monotonic()
+        result = subprocess.run(
+            cmd_retry,
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+        )
+        retry_elapsed = time.monotonic() - retry_start
+        total_elapsed = time.monotonic() - start
+        if result.returncode == 0:
+            return (
+                True,
+                total_elapsed,
+                f"built in {total_elapsed:.2f}s (after re-prime; "
+                f"retry {retry_elapsed:.2f}s)",
+            )
+        sys.stderr.write(result.stderr)
+        sys.stderr.flush()
+        return (
+            False,
+            total_elapsed,
+            f"BUILD FAILED after re-prime ({total_elapsed:.2f}s)",
+        )
     # Surface stderr to the operator's console; the browser only sees
     # the summary string.
     sys.stderr.write(result.stderr)
@@ -400,36 +546,204 @@ def run_bazel_build(workspace: Path) -> tuple[bool, float, str]:
     return (False, elapsed, f"BUILD FAILED ({elapsed:.2f}s)")
 
 
-def watcher_loop(workspace: Path, state: BuildState) -> None:
-    """Background thread: detect source changes, run bazel build."""
+@dataclass
+class _DebouncerState:
+    """Mutable FSM state used by the watcher loop. See
+    ``watcher_loop`` for the state-transition rules.
+
+    Lives in a dataclass (rather than a tuple or naked vars) so
+    the unit tests can construct it directly and step the FSM
+    deterministically — separating the time-driven loop from the
+    pure-function decision logic.
+    """
+
+    idle_deadline: float | None = None
+    deadline_max: float | None = None
+    pending_changes: list = field(default_factory=list)
+
+
+def _debouncer_step(
+    state: _DebouncerState,
+    fresh_changes: list,
+    now: float,
+    debounce_window: float,
+    debounce_max: float,
+) -> tuple[bool, bool]:
+    """Apply one watcher-loop tick to the FSM in ``state``.
+
+    Inputs:
+      * ``fresh_changes``: paths whose mtime changed since the
+        last poll. Empty when the poll detected no change.
+      * ``now``: the loop's notion of monotonic time (seconds).
+      * ``debounce_window``: how much idle to require before firing.
+      * ``debounce_max``: hard cap on the total debounce span.
+
+    Returns ``(should_fire, hit_hard_cap)``:
+
+      * ``should_fire`` — True iff this tick should kick off a
+        build. When True the caller should drain
+        ``state.pending_changes`` (it has the coalesced burst)
+        and reset the FSM via ``state.idle_deadline = None``
+        etc. — see ``watcher_loop`` for the canonical sequence.
+      * ``hit_hard_cap`` — True iff the fire was triggered by
+        the hard cap rather than the idle window expiring.
+        Surfaced so the loop can log the rare case.
+
+    Side effect: ``state`` is mutated in-place to reflect the
+    new pending-change set and (re-pushed) deadlines.
+    """
+    if fresh_changes:
+        # New burst or extension of an existing burst.
+        if state.idle_deadline is None:
+            state.deadline_max = now + debounce_max
+        state.idle_deadline = now + debounce_window
+        for p in fresh_changes:
+            if p not in state.pending_changes:
+                state.pending_changes.append(p)
+
+    if state.idle_deadline is None:
+        return (False, False)
+
+    ready_idle = now >= state.idle_deadline
+    ready_max = state.deadline_max is not None and now >= state.deadline_max
+    if not (ready_idle or ready_max):
+        return (False, False)
+
+    return (True, ready_max and not ready_idle)
+
+
+def watcher_loop(
+    workspace: Path,
+    state: BuildState,
+    cache_ctx: "ServeCacheContext | None" = None,
+    pdf_chunks_ctx: "PdfChunksContext | None" = None,
+) -> None:
+    """Background thread: detect source changes, debounce them, run
+    `bazel build`.
+
+    The watcher is a small state machine:
+
+    * IDLE — no pending changes. Polls the watched paths every
+      ``POLL_INTERVAL_MS``. On a detected change → DEBOUNCING.
+    * DEBOUNCING — at least one change has been seen since the
+      last build. Keeps polling; each fresh change pushes the
+      idle deadline out by ``DEBOUNCE_MS``. A hard cap
+      (``deadline_max``, set on entry to this state from
+      ``debounce_max_ms``) fires the build regardless of fresh
+      activity to bound worst-case wait time. When ``now >=
+      idle_deadline`` *or* ``now >= deadline_max``, transitions
+      to BUILDING and kicks off a build.
+    * BUILDING — a build is in flight (synchronous in this
+      thread). When the build completes the loop returns to the
+      top; any change detected during the build will look fresh
+      on the next poll and trigger a new DEBOUNCING window.
+
+    The decision logic is factored into ``_debouncer_step`` so it
+    can be unit-tested without driving the real wall-clock or
+    spawning ``bazel build``.
+
+    Why debouncing helps:
+
+    * Editors that write-then-rename (vim, neovim) produce two
+      mtime bumps for one logical save; without debouncing we'd
+      fire two builds.
+    * Editors with format-on-save (Prettier-like tooling for
+      LaTeX, or running ``texfmt`` in a hook) write the file
+      twice: format-edit, then user-save. Same problem.
+    * A user typing through a long word touches the buffer many
+      times if the editor auto-saves; we want one build at the
+      end of the word, not one per character.
+
+    With ``DEBOUNCE_MS = 0`` this collapses to the pre-v0.3.3
+    fire-on-every-poll behaviour (the FSM still runs but every
+    tick that sees a change immediately satisfies ``now >=
+    idle_deadline``).
+    """
     watched_paths = [
         workspace / rel
         for rel in WATCHED_PATHS_RAW.splitlines()
         if rel.strip()
     ]
-    interval = POLL_INTERVAL_MS / 1000.0
+    poll_interval = POLL_INTERVAL_MS / 1000.0
+    debounce_window = DEBOUNCE_MS / 1000.0
+    debounce_max = DEBOUNCE_MAX_MS / 1000.0
 
     # Initial build so the first browser page-load has something to
     # display.
-    success, elapsed, msg = run_bazel_build(workspace)
+    success, elapsed, msg = run_bazel_build(workspace, cache_ctx)
     print(f"latex_serve_web: initial build: {msg}", flush=True)
     state.record_build(success, elapsed, msg)
+    if success:
+        _compute_manifest_post_build(state, workspace, pdf_chunks_ctx)
 
     last_mtimes = snapshot_mtimes(watched_paths)
+    fsm = _DebouncerState()
+
     while True:
-        time.sleep(interval)
+        time.sleep(poll_interval)
+        now = time.monotonic()
+
+        # Detect changes since the last poll.
         current = snapshot_mtimes(watched_paths)
-        changed = [p for p, m in current.items() if m != last_mtimes.get(p, 0.0)]
-        if not changed:
-            continue
+        fresh_changes = [
+            p for p, m in current.items()
+            if m != last_mtimes.get(p, 0.0)
+        ]
         last_mtimes = current
 
-        rels = ", ".join(str(p.relative_to(workspace)) for p in changed)
-        ts = time.strftime("%H:%M:%S")
-        print(f"[{ts}] changed: {rels}", flush=True)
-        success, elapsed, msg = run_bazel_build(workspace)
+        was_idle = fsm.idle_deadline is None
+        if fresh_changes and was_idle:
+            ts = time.strftime("%H:%M:%S")
+            print(
+                f"[{ts}] changed: " +
+                ", ".join(
+                    str(p.relative_to(workspace))
+                    for p in fresh_changes
+                ),
+                flush=True,
+            )
+
+        should_fire, hit_hard_cap = _debouncer_step(
+            fsm,
+            fresh_changes,
+            now,
+            debounce_window,
+            debounce_max,
+        )
+        if not should_fire:
+            continue
+
+        # Transition: DEBOUNCING -> BUILDING. Snapshot the coalesced
+        # changes and clear the FSM *before* the build so changes
+        # that land during the build start a fresh debounce window
+        # naturally on the next iteration. We do NOT re-snapshot
+        # mtimes here: the last_mtimes captured at the top of this
+        # iteration is what we want preserved across the build, so
+        # post-build polls see in-flight saves as fresh changes.
+        coalesced = list(fsm.pending_changes)
+        fsm.idle_deadline = None
+        fsm.deadline_max = None
+        fsm.pending_changes.clear()
+
+        if hit_hard_cap:
+            print(
+                "  (debounce hard cap reached; firing build)",
+                flush=True,
+            )
+        if len(coalesced) > 1:
+            print(
+                "  (coalesced " + str(len(coalesced)) + " changes: " +
+                ", ".join(
+                    str(p.relative_to(workspace)) for p in coalesced
+                ) + ")",
+                flush=True,
+            )
+
+        success, elapsed, msg = run_bazel_build(workspace, cache_ctx)
         print(f"  {msg}", flush=True)
         state.record_build(success, elapsed, msg)
+        if success:
+            _compute_manifest_post_build(state, workspace, pdf_chunks_ctx)
 
 
 # -----------------------------------------------------------------------------
@@ -524,17 +838,223 @@ let scale = 1.5;
 // can convert client coords back to PDF coords).
 const canvasViewports = new WeakMap();
 
+// -----------------------------------------------------------------------
+// Content-addressed PDF chunk cache
+// -----------------------------------------------------------------------
+//
+// Mirrors the server-side chunk store (see tools/pdf_chunks.py):
+// each PDF object is stored once under its SHA-256 hash. On every
+// reload we fetch the latest manifest, which lists object byte
+// ranges and hashes; chunks whose hashes the client already has
+// are served from this in-memory cache, and only new hashes are
+// fetched from /chunk/<hash>.
+//
+// The cache survives across reloads (it's module-scope) but is
+// reset by a page refresh. That's fine: the user's browser will
+// fetch /chunk/<hash> with `Cache-Control: public, max-age=...,
+// immutable` headers, so the second fetch comes from the
+// browser's HTTP cache and is nearly free.
+//
+// Cap the cache at a modest number of entries to bound memory
+// usage. LRU eviction would be ideal but is overkill: the bound
+// here is loose, and chunks evicted from this Map can still be
+// re-fetched (the server keeps them on disk and the browser's
+// HTTP cache reduces wire transfer to ~0).
+const CHUNK_CACHE_MAX_ENTRIES = 1000;
+const chunkCache = new Map();
+
+function rememberChunk(hash, bytes) {{
+  if (chunkCache.size >= CHUNK_CACHE_MAX_ENTRIES) {{
+    // Evict the oldest entry (Map preserves insertion order).
+    const oldestKey = chunkCache.keys().next().value;
+    if (oldestKey !== undefined) chunkCache.delete(oldestKey);
+  }}
+  chunkCache.set(hash, bytes);
+}}
+
+async function fetchChunk(hash) {{
+  const cached = chunkCache.get(hash);
+  if (cached) return cached;
+  const resp = await fetch(`/chunk/${{hash}}`);
+  if (!resp.ok) {{
+    throw new Error(`chunk ${{hash}} fetch failed: ${{resp.status}}`);
+  }}
+  const buf = new Uint8Array(await resp.arrayBuffer());
+  rememberChunk(hash, buf);
+  return buf;
+}}
+
+async function fetchPdfRange(begin, end) {{
+  // Fetch [begin, end) from /pdf using HTTP Range. Used for
+  // skeleton ranges (PDF header, gaps between objects, the
+  // trailer) — anything not covered by a content-addressed
+  // chunk.
+  const resp = await fetch("/pdf", {{
+    headers: {{ "Range": `bytes=${{begin}}-${{end - 1}}` }},
+  }});
+  if (!(resp.status === 206 || resp.status === 200)) {{
+    throw new Error(`/pdf range ${{begin}}-${{end - 1}} failed: ${{resp.status}}`);
+  }}
+  return new Uint8Array(await resp.arrayBuffer());
+}}
+
+// Custom PDFDataRangeTransport that serves byte ranges from the
+// content-addressed chunk cache where possible, falling back to
+// /pdf with HTTP Range for skeleton bytes (header/xref/trailer).
+class ChunkedTransport extends pdfjsLib.PDFDataRangeTransport {{
+  constructor(manifest) {{
+    // initialData is empty: PDF.js will request the ranges it
+    // needs via requestDataRange.
+    super(manifest.pdfSize, new Uint8Array(0));
+    this.manifest = manifest;
+    // Sort chunks by start offset for fast lookups; the server
+    // emits them sorted but defending against a future change is
+    // cheap.
+    this.sortedRanges = [...manifest.ranges].sort(
+      (a, b) => a.start - b.start
+    );
+    queueMicrotask(() => this.transportReady());
+  }}
+
+  async requestDataRange(begin, end) {{
+    // PDF.js's API has end inclusive in some places and exclusive
+    // in others; the spec the worker sends here is half-open
+    // [begin, end). Clamp to pdfSize for safety.
+    end = Math.min(end, this.manifest.pdfSize);
+    if (begin >= end) {{
+      this.onDataRange(begin, new Uint8Array(0));
+      return;
+    }}
+    try {{
+      const bytes = await this._assemble(begin, end);
+      this.onDataRange(begin, bytes);
+    }} catch (err) {{
+      console.error("ChunkedTransport: range fetch failed", err);
+      // PDF.js retries on failure. Don't call onDataRange; the
+      // request just times out. Better than throwing here, which
+      // would break the worker.
+    }}
+  }}
+
+  async _assemble(begin, end) {{
+    // Walk [begin, end), serving each sub-range from either the
+    // covering chunk or a /pdf Range fetch. Concatenate into one
+    // buffer for delivery.
+    const segments = [];
+    let cursor = begin;
+    // Find the first chunk whose end > begin (binary search would
+    // be overkill: 20-100 chunks per CV-sized PDF).
+    let i = 0;
+    while (i < this.sortedRanges.length && this.sortedRanges[i].end <= begin) {{
+      i++;
+    }}
+    while (cursor < end) {{
+      if (i < this.sortedRanges.length && this.sortedRanges[i].start < end) {{
+        const r = this.sortedRanges[i];
+        if (cursor < r.start) {{
+          // Skeleton gap before this chunk.
+          const gapEnd = Math.min(r.start, end);
+          segments.push(await fetchPdfRange(cursor, gapEnd));
+          cursor = gapEnd;
+        }} else {{
+          // Inside / overlapping the chunk. Fetch the whole
+          // chunk (it's content-addressed; we'll cache it) and
+          // slice out the requested sub-range.
+          const chunkBytes = await fetchChunk(r.hash);
+          const sliceStart = cursor - r.start;
+          const sliceEnd = Math.min(end, r.end) - r.start;
+          segments.push(chunkBytes.subarray(sliceStart, sliceEnd));
+          cursor = r.start + sliceEnd;
+          if (cursor >= r.end) i++;
+        }}
+      }} else {{
+        // Past the last chunk's end — pure skeleton.
+        segments.push(await fetchPdfRange(cursor, end));
+        cursor = end;
+      }}
+    }}
+    if (segments.length === 1) return segments[0];
+    // Concatenate segments into one buffer.
+    const total = segments.reduce((s, seg) => s + seg.length, 0);
+    const out = new Uint8Array(total);
+    let off = 0;
+    for (const seg of segments) {{
+      out.set(seg, off);
+      off += seg.length;
+    }}
+    return out;
+  }}
+}}
+
+// Background-prefetch every chunk in the manifest. Runs after
+// PDF.js's initial getDocument promise resolves so we don't
+// compete with the worker for bandwidth on the first render. By
+// the time the user starts scrolling, every chunk is in
+// `chunkCache` and PDF.js's per-page byte fetches are
+// instant. Best-effort: failures are silent and don't affect
+// rendering (PDF.js will fetch on-demand if a chunk's missing).
+async function prefetchChunks(manifest) {{
+  // Concurrency: keep it modest so we don't saturate localhost
+  // connections and starve user-initiated fetches.
+  const queue = manifest.ranges
+    .filter(r => !chunkCache.has(r.hash))
+    .map(r => r.hash);
+  const workerCount = 4;
+  async function worker() {{
+    while (queue.length) {{
+      const hash = queue.shift();
+      try {{
+        await fetchChunk(hash);
+      }} catch (e) {{ /* ignore */ }}
+    }}
+  }}
+  await Promise.all(
+    Array.from({{ length: workerCount }}, () => worker())
+  );
+}}
+
 function setStatus(cls, text) {{
   statusEl.className = cls;
   statusEl.textContent = text;
 }}
 
-async function renderDocument(url) {{
-  setStatus("building", "rendering…");
-  const bust = Date.now();
+async function fetchManifest() {{
+  // Returns a manifest object, or null if the server can't
+  // produce one (e.g. cross-reference-stream PDF the chunker
+  // doesn't understand, or chunking is disabled). On null we
+  // fall back to whole-PDF transport.
   try {{
-    const loadingTask = pdfjsLib.getDocument(`${{url}}?t=${{bust}}`);
-    const pdf = await loadingTask.promise;
+    const resp = await fetch("/pdf-manifest");
+    if (!resp.ok) return null;
+    return await resp.json();
+  }} catch (err) {{
+    return null;
+  }}
+}}
+
+async function renderDocument() {{
+  setStatus("building", "rendering…");
+  try {{
+    const manifest = await fetchManifest();
+    let pdf;
+    if (manifest && manifest.ranges && manifest.ranges.length > 0) {{
+      // Chunked path: serve byte ranges from the content-
+      // addressed cache (with HTTP-Range fallback for
+      // skeleton bytes).
+      const transport = new ChunkedTransport(manifest);
+      const loadingTask = pdfjsLib.getDocument({{ range: transport }});
+      pdf = await loadingTask.promise;
+      // Kick off prefetch in the background; don't await.
+      prefetchChunks(manifest).catch(() => {{}});
+    }} else {{
+      // Fallback: pull the whole PDF in one request. Used for
+      // documents the chunker couldn't parse, and for first-load
+      // before any manifest exists. Cache-busts via the query
+      // string so the browser fetches fresh bytes.
+      const bust = Date.now();
+      const loadingTask = pdfjsLib.getDocument(`/pdf?t=${{bust}}`);
+      pdf = await loadingTask.promise;
+    }}
     currentDoc = pdf;
     await renderAllPages(pdf);
   }} catch (err) {{
@@ -631,7 +1151,7 @@ function escapeHtml(s) {{
 const evtSrc = new EventSource("/events");
 evtSrc.onmessage = (e) => {{
   if (e.data === "reload") {{
-    renderDocument("/pdf");
+    renderDocument();
   }} else if (e.data === "build-failed" || e.data === "hello") {{
     refreshStatus();
   }}
@@ -653,12 +1173,53 @@ document.getElementById("zoom-reset").addEventListener("click", () => {{
   if (currentDoc) renderAllPages(currentDoc);
 }});
 
-renderDocument("/pdf");
+renderDocument();
 refreshStatus();
 </script>
 </body>
 </html>
 """
+
+
+class _NullWriter:
+    """File-like sink used to satisfy HEAD requests without
+    touching every response writer.
+
+    HTTP's HEAD method is GET-with-no-body: same status code,
+    same headers, body suppressed. We implement it by running the
+    GET handler unchanged and swapping ``self.wfile`` to this
+    sink right after ``end_headers()`` flushes the header buffer.
+    Subsequent ``self.wfile.write(...)`` / ``flush()`` calls then
+    no-op, regardless of which writer made them.
+
+    The alternative (a flag-per-writer audit) is fragile because
+    we have several response builders (``_send``,
+    ``_serve_pdf_with_range``, ``_serve_chunk``, ``_stream_events``)
+    each emitting its own header set. Replacing the underlying
+    stream catches them all in one place.
+
+    Needs to quack like a buffered binary file: ``write``,
+    ``flush``, ``close``, ``closed``. socketserver.StreamRequestHandler.finish()
+    inspects ``wfile.closed`` to decide whether to flush before
+    closing; without that attribute the request handler raises
+    AttributeError at end-of-request and Python's
+    ThreadingHTTPServer logs it loudly. Cosmetic but noisy.
+    """
+
+    closed: bool = False
+
+    def write(self, _data: object) -> int:
+        # http.server's writers expect an int back from .write().
+        return len(_data) if isinstance(_data, (bytes, bytearray, memoryview)) else 0
+
+    def writelines(self, _lines: object) -> None:
+        return
+
+    def flush(self) -> None:
+        return
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -667,11 +1228,56 @@ class Handler(BaseHTTPRequestHandler):
     workspace: Path
     pdfjs_lib_bytes: bytes
     pdfjs_worker_bytes: bytes
+    pdf_chunks_ctx: "PdfChunksContext | None" = None
+    # Per-request flag set by do_HEAD; consumed by end_headers
+    # (overridden below) to suppress body writes for HEAD.
+    _head_mode: bool = False
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
         # http.server is chatty by default; we already log builds
         # ourselves from the watcher thread. Suppress per-request lines.
         return
+
+    def do_HEAD(self) -> None:  # noqa: N802 (http.server API)
+        """Serve HEAD by running GET with the body suppressed.
+
+        HTTP/1.1 (RFC 7231 §4.3.2) requires that HEAD returns the
+        same status code and headers as GET on the same URI, but
+        with no message body. The straightforward way to achieve
+        that without auditing every response writer is:
+
+        1. Set ``_head_mode = True`` for this request.
+        2. Run ``do_GET`` unchanged — it computes the response and
+           calls ``end_headers()`` at the appropriate point.
+        3. Our ``end_headers()`` override (below) catches the
+           transition and swaps ``self.wfile`` to a ``_NullWriter``
+           so subsequent ``self.wfile.write(body)`` / ``flush()``
+           calls become no-ops.
+
+        Range requests (``HEAD /pdf`` with a ``Range`` header) are
+        supported per RFC 7233 §3.1: the response carries 206,
+        ``Content-Range``, and the correct ``Content-Length`` for
+        the requested slice — just no body bytes. The wfile-sink
+        approach picks this up for free because the
+        range-validation and header-computation paths run
+        identically.
+        """
+        self._head_mode = True
+        try:
+            self.do_GET()
+        finally:
+            self._head_mode = False
+
+    def end_headers(self) -> None:
+        """Override: after flushing the header buffer, swap
+        ``self.wfile`` to a sink if we're handling a HEAD
+        request. The header bytes still go to the real socket
+        (they were buffered before this call); only the body
+        writes that follow get discarded.
+        """
+        super().end_headers()
+        if self._head_mode:
+            self.wfile = _NullWriter()  # type: ignore[assignment]
 
     def _send(
         self,
@@ -710,17 +1316,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.OK, html.encode("utf-8"), "text/html; charset=utf-8")
             return
         if path == "/pdf":
-            pdf_path = self.workspace / "bazel-bin" / PDF_RELPATH
-            try:
-                body = pdf_path.read_bytes()
-            except FileNotFoundError:
-                self._send(
-                    HTTPStatus.NOT_FOUND,
-                    b"PDF not built yet.",
-                    "text/plain; charset=utf-8",
-                )
-                return
-            self._send(HTTPStatus.OK, body, "application/pdf")
+            self._serve_pdf_with_range()
+            return
+        if path == "/pdf-manifest":
+            self._serve_pdf_manifest()
+            return
+        if path.startswith("/chunk/"):
+            self._serve_chunk(path[len("/chunk/"):])
             return
         if path == "/_pdfjs/pdf.mjs":
             # ESM Javascript MIME type per the WHATWG fetch spec.
@@ -760,6 +1362,177 @@ class Handler(BaseHTTPRequestHandler):
             b"not found",
             "text/plain; charset=utf-8",
         )
+
+    # -------------------------------------------------------------
+    # PDF transport (chunked + Range-aware /pdf)
+    # -------------------------------------------------------------
+
+    def _serve_pdf_with_range(self) -> None:
+        """Serve ``/pdf`` with HTTP Range support.
+
+        The chunked transport path on the client side relies on
+        being able to fetch arbitrary byte ranges from ``/pdf``
+        for the parts of the PDF that aren't covered by any
+        chunk (the header, gaps between objects, the trailer).
+        Without Range support, every skeleton-range fetch would
+        pull the entire PDF.
+        """
+        pdf_path = self.workspace / "bazel-bin" / PDF_RELPATH
+        try:
+            file_size = pdf_path.stat().st_size
+        except FileNotFoundError:
+            self._send(
+                HTTPStatus.NOT_FOUND,
+                b"PDF not built yet.",
+                "text/plain; charset=utf-8",
+            )
+            return
+
+        range_header = self.headers.get("Range", "").strip()
+        if not range_header:
+            # No Range header: serve the whole PDF as before.
+            try:
+                body = pdf_path.read_bytes()
+            except OSError:
+                self._send(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    b"PDF read error",
+                    "text/plain; charset=utf-8",
+                )
+                return
+            self._send(HTTPStatus.OK, body, "application/pdf")
+            return
+
+        # Parse a single byte-range "bytes=start-end". We don't
+        # support multipart ranges — PDF.js doesn't request them.
+        m = re.match(
+            r"^bytes=(\d+)-(\d*)$",
+            range_header,
+        )
+        if not m:
+            self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+            self.send_header("Content-Range", f"bytes */{file_size}")
+            self.end_headers()
+            return
+        start = int(m.group(1))
+        end_str = m.group(2)
+        end = int(end_str) if end_str else (file_size - 1)
+        if start >= file_size or end < start:
+            self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+            self.send_header("Content-Range", f"bytes */{file_size}")
+            self.end_headers()
+            return
+        end = min(end, file_size - 1)
+        length = end - start + 1
+        try:
+            with open(pdf_path, "rb") as fp:
+                fp.seek(start)
+                body = fp.read(length)
+        except OSError:
+            self._send(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                b"PDF read error",
+                "text/plain; charset=utf-8",
+            )
+            return
+        self.send_response(HTTPStatus.PARTIAL_CONTENT)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header(
+            "Content-Range",
+            f"bytes {start}-{end}/{file_size}",
+        )
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_pdf_manifest(self) -> None:
+        """Return the JSON content-addressed manifest for the
+        current PDF, or 404 when no manifest is available (the
+        client then falls back to whole-PDF transport).
+        """
+        manifest = self.state.get_manifest()
+        if manifest is None:
+            self._send(
+                HTTPStatus.NOT_FOUND,
+                b"no manifest available",
+                "text/plain; charset=utf-8",
+            )
+            return
+        payload = {
+            "pdfSize": manifest.pdf_size,
+            "ranges": [
+                {
+                    "objectId": c.object_id,
+                    "start": c.start,
+                    "end": c.end,
+                    "hash": c.hash,
+                }
+                for c in manifest.chunks
+            ],
+            "skeletonRanges": [
+                [s, e] for s, e in manifest.skeleton_ranges
+            ],
+        }
+        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        self._send(HTTPStatus.OK, body, "application/json")
+
+    def _serve_chunk(self, hash_hex: str) -> None:
+        """Serve one content-addressed PDF chunk by SHA-256 hash.
+
+        Chunks are written by the watcher's post-build hook into
+        ``pdf_chunks_ctx.chunks_dir`` and served from there. We
+        validate the hash format strictly to avoid path
+        traversal: only 64 lowercase hex characters allowed.
+        """
+        if self.pdf_chunks_ctx is None:
+            self._send(
+                HTTPStatus.NOT_FOUND,
+                b"chunking disabled on this server",
+                "text/plain; charset=utf-8",
+            )
+            return
+        if len(hash_hex) != 64 or not all(
+            c in "0123456789abcdef" for c in hash_hex
+        ):
+            self._send(
+                HTTPStatus.BAD_REQUEST,
+                b"invalid chunk hash",
+                "text/plain; charset=utf-8",
+            )
+            return
+        chunk_path = self.pdf_chunks_ctx.chunks_dir / hash_hex
+        try:
+            body = chunk_path.read_bytes()
+        except FileNotFoundError:
+            self._send(
+                HTTPStatus.NOT_FOUND,
+                b"chunk not found",
+                "text/plain; charset=utf-8",
+            )
+            return
+        except OSError:
+            self._send(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                b"chunk read error",
+                "text/plain; charset=utf-8",
+            )
+            return
+        # Chunks are content-addressed by hash so they're
+        # immutable: cache them aggressively in the browser. We
+        # bypass _send here because it always emits
+        # ``Cache-Control: no-store``, which is the wrong header
+        # for immutable resources.
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header(
+            "Cache-Control",
+            "public, max-age=31536000, immutable",
+        )
+        self.end_headers()
+        self.wfile.write(body)
 
     def _handle_sync_reverse(self) -> None:
         """POST /sync/reverse — map a PDF click to a source location.
@@ -858,6 +1631,16 @@ class Handler(BaseHTTPRequestHandler):
         # this is mostly belt-and-braces.
         self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
+
+        # HEAD on a streaming endpoint: headers go through, body
+        # is suppressed by the wfile sink, and we MUST exit
+        # immediately or else we'd spin the listener loop forever
+        # writing keepalives to /dev/null. Returning here gives
+        # the HEAD client exactly the SSE headers it asked for
+        # and then closes the connection — which is the right
+        # semantics: HEAD can't deliver stream events.
+        if self._head_mode:
+            return
 
         q = self.state.add_listener()
         try:
@@ -1005,6 +1788,333 @@ def open_in_browser(http_url: str) -> bool:
 # -----------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class ServeCacheContext:
+    """Bundle of state used to plumb a persistent serve-time cache
+    snapshot into the inner build loop. Constructed on startup when
+    the document takes the implicit-pipeline path; ``None`` otherwise.
+
+    Holds:
+      * ``module``: the imported ``serve_cache`` Python module
+        (loaded from runfiles). Functions are accessed off the
+        module rather than being top-level imports so the template's
+        ``from __future__ import annotations`` doesn't force the
+        cache code to load when ENABLE_SERVE_CACHE is False.
+      * ``layout``: per-document filesystem layout (cache path,
+        sentinel, lock).
+      * ``spec``: arguments used to invoke
+        ``tools/tectonic_populate_cache.py`` when (re-)priming.
+    """
+
+    module: object
+    layout: object  # serve_cache.CacheLayout
+    spec: object    # serve_cache.PrimeSpec
+
+
+def _build_cache_context(workspace: Path, runfiles: Path) -> ServeCacheContext | None:
+    """Bootstrap the serve-time cache context.
+
+    Returns None when:
+      * ENABLE_SERVE_CACHE is False (the document has its own
+        cache=, or a toolchain bundle is in scope), or
+      * Any required runfile path is missing -- which would be a
+        rule-authoring bug, but we degrade to the legacy behaviour
+        rather than crashing.
+
+    On success this also kicks off the initial prime if no
+    snapshot is present yet. The prime is lock-protected, so
+    multiple concurrent serves of the same document play nice.
+    """
+    if not ENABLE_SERVE_CACHE:
+        return None
+
+    serve_cache_path = runfiles / SERVE_CACHE_RUNFILE
+    if not serve_cache_path.is_file():
+        sys.stderr.write(
+            f"latex_serve_web: serve_cache.py missing from runfiles at "
+            f"{serve_cache_path}; falling back to implicit pipeline (slow).\n",
+        )
+        return None
+
+    # Load the cache manager as a module from runfiles. We use
+    # importlib so the path is dynamic (it lives under the
+    # generated launcher's runfiles dir, which we don't know at
+    # template-expansion time).
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("serve_cache", serve_cache_path)
+    if spec is None or spec.loader is None:
+        sys.stderr.write(
+            f"latex_serve_web: failed to load serve_cache.py from {serve_cache_path}; "
+            "falling back to implicit pipeline (slow).\n",
+        )
+        return None
+    serve_cache = importlib.util.module_from_spec(spec)
+    # Install in sys.modules BEFORE exec_module: Python 3.12+'s
+    # @dataclass decorator looks up the host module via
+    # sys.modules to resolve forward type references, and crashes
+    # with AttributeError on NoneType if the module isn't there.
+    sys.modules["serve_cache"] = serve_cache
+    spec.loader.exec_module(serve_cache)
+
+    # Resolve runfile paths to absolute paths for tools, but pass
+    # document-source paths as workspace-relative strings (which
+    # for sources owned by the main workspace is exactly the
+    # short_path).
+    tectonic_path = runfiles / PRIME_TECTONIC_RUNFILE
+    populate_tool_path = runfiles / PRIME_POPULATE_TOOL_RUNFILE
+    biber_path = runfiles / PRIME_BIBER_RUNFILE if PRIME_BIBER_RUNFILE else None
+    # Document main path: the short_path for a source owned by the
+    # main workspace is the same as the workspace-relative path.
+    # (Cross-repo main files are filtered out at rule-analysis
+    # time; see latex_serve_web.bzl.)
+    main_ws_rel = PRIME_MAIN_RUNFILE
+
+    srcs: list[str] = []
+    for rel in PRIME_SRCS_RAW.splitlines():
+        rel = rel.strip()
+        if not rel:
+            continue
+        srcs.append(rel)
+
+    pkg_files: list[tuple[str, str]] = []
+    for line in PRIME_PKG_FILES_RAW.splitlines():
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        src_raw, rel_raw = line.split("=", 1)
+        pkg_files.append((src_raw, rel_raw))
+
+    prime_spec = serve_cache.PrimeSpec(
+        tectonic=tectonic_path,
+        populate_tool=populate_tool_path,
+        main=main_ws_rel,
+        srcs=tuple(srcs),
+        pkg_files=tuple(pkg_files),
+        biber=biber_path,
+        use_system_biber=PRIME_USE_SYSTEM_BIBER,
+    )
+
+    layout = serve_cache.derive_cache_layout(workspace, DOCUMENT_LABEL)
+
+    # QoL: keep .cache/rules_latex out of users' git index.
+    serve_cache.ensure_gitignore_excludes_cache(workspace)
+
+    if not serve_cache.is_primed(layout):
+        try:
+            serve_cache.run_prime(layout, prime_spec, workspace)
+        except serve_cache.PrimeFailure as e:
+            sys.stderr.write(
+                "latex_serve_web: initial serve-cache prime failed "
+                f"(exit code {e.returncode}). Falling back to the "
+                "implicit pipeline (per-edit online prime). The "
+                "live-preview will still work but rebuilds will be "
+                "slow until this is fixed.\n",
+            )
+            return None
+
+    return ServeCacheContext(
+        module=serve_cache,
+        layout=layout,
+        spec=prime_spec,
+    )
+
+
+@dataclass(frozen=True)
+class PdfChunksContext:
+    """Bundle of state used to compute and serve content-addressed
+    PDF chunks. Constructed once on startup; may be ``None`` if
+    the chunker module can't be loaded (in which case the server
+    silently falls back to serving the whole PDF every time).
+
+    Holds:
+      * ``module``: the imported ``pdf_chunks`` Python module
+        (loaded from runfiles).
+      * ``chunks_dir``: per-document directory under
+        ``$BUILD_WORKSPACE_DIRECTORY/.cache/rules_latex/<slug>/chunks/``
+        where the chunk files are written. Persists across serve
+        sessions so a freshly-started serve immediately benefits
+        from chunks computed by the previous session.
+
+    The directory is independent of ``ServeCacheContext.layout``
+    even though it lives under the same parent: chunks apply to
+    *every* document type (implicit-pipeline, ``cache=``, toolchain
+    bundle), while the serve cache only applies to the implicit
+    pipeline.
+    """
+
+    module: object
+    chunks_dir: Path
+
+
+def _build_pdf_chunks_context(
+    workspace: Path,
+    runfiles: Path,
+) -> PdfChunksContext | None:
+    """Load ``tools/pdf_chunks.py`` from runfiles and prepare the
+    per-document chunks directory.
+
+    Returns ``None`` if the module can't be loaded for any reason.
+    Server falls back to whole-PDF transport in that case — every
+    save still triggers a build and the browser reloads the full
+    PDF; the user just doesn't get the chunking optimization.
+    """
+    chunks_lib = runfiles / PDF_CHUNKS_RUNFILE
+    if not chunks_lib.is_file():
+        sys.stderr.write(
+            "latex_serve_web: pdf_chunks.py missing from runfiles at "
+            f"{chunks_lib}; the PDF will be re-sent in full on every "
+            "rebuild.\n",
+        )
+        return None
+
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("pdf_chunks", chunks_lib)
+    if spec is None or spec.loader is None:
+        sys.stderr.write(
+            "latex_serve_web: failed to import pdf_chunks.py; "
+            "falling back to whole-PDF transport.\n",
+        )
+        return None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["pdf_chunks"] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as e:
+        sys.stderr.write(
+            f"latex_serve_web: pdf_chunks.py exec failed: {e}; "
+            "falling back to whole-PDF transport.\n",
+        )
+        return None
+
+    # Derive the chunks directory: same slug as serve_cache uses,
+    # but always under .cache/rules_latex/<slug>/chunks/ regardless
+    # of whether the serve cache is active. Slug derivation is
+    # duplicated here from serve_cache._slugify_label rather than
+    # taking a runtime dependency on serve_cache (which is itself
+    # conditionally loaded).
+    import hashlib
+    import re as _re
+
+    stripped = DOCUMENT_LABEL.lstrip("@/")
+    if stripped.startswith("@"):
+        stripped = stripped.lstrip("@")
+    if "//" in stripped:
+        _, _, stripped = stripped.partition("//")
+    sanitised = _re.sub(r"[^A-Za-z0-9_.-]", "_", stripped.replace(":", "_"))
+    digest = hashlib.sha1(DOCUMENT_LABEL.encode("utf-8")).hexdigest()[:6]
+    slug = f"{sanitised}_{digest}"
+    chunks_dir = workspace / ".cache" / "rules_latex" / slug / "chunks"
+    try:
+        chunks_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        sys.stderr.write(
+            f"latex_serve_web: could not create chunks dir "
+            f"{chunks_dir}: {e}; falling back to whole-PDF transport.\n",
+        )
+        return None
+
+    return PdfChunksContext(module=module, chunks_dir=chunks_dir)
+
+
+# Age (seconds) below which a chunk is considered "fresh" and not
+# eligible for GC even if it isn't in the current manifest. Lets
+# the user undo a recent edit without re-fetching the body chunk
+# that just got removed from the manifest.
+_CHUNK_GC_MIN_AGE_SECONDS = 5 * 60
+
+
+def _gc_chunks(
+    chunks_dir: Path,
+    keep_hashes: set,
+    *,
+    min_age_seconds: float = _CHUNK_GC_MIN_AGE_SECONDS,
+) -> int:
+    """Delete chunk files not in ``keep_hashes`` and older than
+    ``min_age_seconds``. Returns the number of files deleted.
+
+    Safe to call from the watcher thread after each successful
+    build. The min-age guard prevents thrashing when the user is
+    rapidly alternating between two versions of a document
+    (chunks just removed from the manifest will be re-added on
+    the next save).
+    """
+    deleted = 0
+    cutoff = time.time() - min_age_seconds
+    try:
+        for entry in chunks_dir.iterdir():
+            if not entry.is_file():
+                continue
+            name = entry.name
+            # Defensive: only touch files that look like SHA-256
+            # hex hashes. Skip the .tmp atomic-write sidecars and
+            # anything else.
+            if len(name) != 64 or not all(
+                c in "0123456789abcdef" for c in name
+            ):
+                continue
+            if name in keep_hashes:
+                continue
+            try:
+                st = entry.stat()
+            except OSError:
+                continue
+            if st.st_mtime > cutoff:
+                continue
+            try:
+                entry.unlink()
+                deleted += 1
+            except OSError:
+                pass
+    except OSError:
+        # chunks_dir may have been removed externally; ignore.
+        pass
+    return deleted
+
+
+def _compute_manifest_post_build(
+    state: BuildState,
+    workspace: Path,
+    pdf_chunks_ctx: PdfChunksContext | None,
+) -> None:
+    """Hook called from the watcher after each successful build.
+
+    Computes the chunk manifest for the freshly-produced PDF,
+    installs it on ``state``, and GCs stale chunks. Failures here
+    are non-fatal: the browser falls back to whole-PDF transport
+    automatically when the manifest is absent.
+    """
+    if pdf_chunks_ctx is None:
+        return
+    pdf_path = workspace / "bazel-bin" / PDF_RELPATH
+    if not pdf_path.is_file():
+        # Build "succeeded" but the PDF wasn't produced where we
+        # expected — likely a non-pdf outfmt (xdv/html/aux). The
+        # chunk manifest doesn't apply.
+        state.update_manifest(None)
+        return
+    try:
+        manifest = pdf_chunks_ctx.module.compute_manifest(
+            pdf_path,
+            pdf_chunks_ctx.chunks_dir,
+        )
+    except Exception as e:
+        # The parser is designed never to raise — it returns None
+        # on any parse failure. If we get here it's a real bug
+        # (e.g. OOM, IO error). Log and continue with no manifest.
+        sys.stderr.write(
+            f"latex_serve_web: PDF chunker raised unexpectedly: {e}; "
+            "browser will fall back to whole-PDF transport.\n",
+        )
+        state.update_manifest(None)
+        return
+    state.update_manifest(manifest)
+    if manifest is not None:
+        keep = {c.hash for c in manifest.chunks}
+        _gc_chunks(pdf_chunks_ctx.chunks_dir, keep)
+
+
 def main() -> int:
     if len(sys.argv) < 3:
         print(
@@ -1040,11 +2150,23 @@ def main() -> int:
         )
         return 2
 
+    # Bootstrap the serve-time cache override (no-op for documents
+    # with `cache=` or a toolchain bundle). May block for 30-90 s
+    # on the first run while priming.
+    cache_ctx = _build_cache_context(workspace, runfiles)
+
+    # Load the PDF chunker for content-addressed PDF transfer (see
+    # tools/pdf_chunks.py). On any failure to load we fall back to
+    # whole-PDF transport silently — chunking is purely an
+    # optimization, never a correctness requirement.
+    pdf_chunks_ctx = _build_pdf_chunks_context(workspace, runfiles)
+
     state = BuildState()
     Handler.state = state
     Handler.workspace = workspace
     Handler.pdfjs_lib_bytes = pdfjs_lib_path.read_bytes()
     Handler.pdfjs_worker_bytes = pdfjs_worker_path.read_bytes()
+    Handler.pdf_chunks_ctx = pdf_chunks_ctx
 
     # SO_REUSEADDR lets the user kill+restart the serve target quickly
     # without hitting "Address already in use" while the kernel holds
@@ -1056,6 +2178,10 @@ def main() -> int:
     print(f"latex_serve_web: serving live preview for {DOCUMENT_LABEL}")
     print(f"  rebuild target: {DOCUMENT_LABEL}")
     print(f"  output pdf:     bazel-bin/{PDF_RELPATH}")
+    if cache_ctx is not None:
+        print(f"  serve cache:    {cache_ctx.layout.extracted}/")
+    if pdf_chunks_ctx is not None:
+        print(f"  chunks cache:   {pdf_chunks_ctx.chunks_dir}/")
     print(
         f"  pdf.js sizes:   lib={len(Handler.pdfjs_lib_bytes)//1024} KiB, "
         f"worker={len(Handler.pdfjs_worker_bytes)//1024} KiB",
@@ -1096,7 +2222,7 @@ def main() -> int:
 
     watcher = threading.Thread(
         target=watcher_loop,
-        args=(workspace, state),
+        args=(workspace, state, cache_ctx, pdf_chunks_ctx),
         daemon=True,
         name="latex-serve-watcher",
     )

@@ -18,6 +18,10 @@ def _latex_pkg_impl(ctx):
         LatexInfo(
             srcs = depset(direct = ctx.files.srcs),
             search_paths = depset(direct = [ctx.label.package] if ctx.label.package else []),
+            # latex_pkg doesn't compile anything itself, so it has no
+            # offline-mode strategy of its own. Consumers that need
+            # one should read it from a downstream latex_document.
+            offline_strategy = "",
         ),
     ]
 
