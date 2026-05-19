@@ -119,7 +119,7 @@ def _latex_test_impl(ctx):
 
     ctan_args = ""
     if ctx.attr.ctan_packages:
-        ctan_args = " \\" + " \\".join([
+        ctan_args = " \" + " \".join([
             '--ctan-package "{}"'.format(pkg)
             for pkg in ctx.attr.ctan_packages
         ])
