@@ -117,6 +117,11 @@ def _latex_test_impl(ctx):
         '--biber "{}"'.format(biber_file.short_path) if biber_file else ""
     )
 
+    ctan_args = " \\" + " \\".join([
+        '--ctan-package "{}"'.format(pkg)
+        for pkg in ctx.attr.ctan_packages
+    ])
+
     src_args = " \\\n    ".join([
         '--src "{}"'.format(s.short_path)
         for s in all_srcs.to_list()
@@ -151,6 +156,7 @@ PYTHON="${PYTHON:-python3}"
     --main "{main}" \\
     --output "$WORK/cache.tar.gz" \\
     {biber_arg} \\
+    {ctan_args} \\
     {src_args} \\
     {pkg_file_args}
 
@@ -159,6 +165,7 @@ PYTHON="${PYTHON:-python3}"
             tectonic = tectonic.short_path,
             main = main.short_path,
             biber_arg = biber_arg,
+            ctan_args = ctan_args,
             src_args = src_args,
             pkg_file_args = pkg_file_args,
         )
@@ -274,6 +281,13 @@ latex_test = rule(
                   "when the test runs.",
             default = "toolchain",
             values = ["toolchain", "system"],
+        ),
+        "ctan_packages": attr.string_list(
+            doc = "Names of CTAN packages to fetch and make available to the " +
+                  "document. Each entry is a CTAN package name (e.g. 'fancyhdr'). " +
+                  "Packages are downloaded from CTAN mirrors in TDS format during " +
+                  "the test's inline cache population step.",
+            default = [],
         ),
         "pkg_files": attr.label_keyed_string_dict(
             doc = "Same semantics as `latex_document.pkg_files`. Override " +

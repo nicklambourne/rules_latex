@@ -35,6 +35,7 @@ LaTeX install. `bazel build //:cv` works on a fresh machine.
 | Package management              | Explicit Bazel labels per `.sty`  | Implicit, by Tectonic at compile time |
 | Module system                   | WORKSPACE + Bzlmod                | Bzlmod-only                    |
 | Bibliography (`biblatex`/biber) | System install, manual flags      | Vendored biber toolchain       |
+| Newer-than-bundle CTAN packages | Manual vendoring                  | `ctan_packages = [...]`        |
 | Reproducible builds             | Possible, manual                  | `reproducible = True` attr     |
 | Live preview                    | None                              | `latex_serve` / `latex_serve_web` |
 | In-browser SyncTeX              | None                              | Click PDF → jump to source     |
@@ -83,6 +84,7 @@ latex_document(
     srcs = ["cv.tex"],
     deps = [":preamble"],
     # biber = True              # for biblatex documents
+    # ctan_packages = ["..."]   # for packages not in the 2022 bundle
     # reproducible = True       # byte-identical PDF across builds
     # synctex = True            # click PDF → jump to source in serve_web
     # cache = "cv_cache.tar.gz" # for fully air-gapped builds
@@ -104,7 +106,8 @@ bazel test //:cv_compiles
 ```
 
 For more, see the [examples](./examples/) directory — letter, CV,
-paper, thesis, and beamer slides — and the full [user guide](https://nicklambourne.github.io/rules_latex/).
+paper, thesis, beamer slides, and a CTAN-overlay paper — and the
+full [user guide](https://nicklambourne.github.io/rules_latex/).
 
 ## Rules
 
@@ -138,6 +141,31 @@ A vendored biber binary (pinned to 2.17 to match the bundle's biblatex
 upstream ships no prebuilt biber — set `biber_strategy = "system"` to
 fall back to a distro-installed binary. See
 [DESIGN.md §4.9](./DESIGN.md#49-biber).
+
+### CTAN packages outside the bundle
+
+```python
+latex_document(
+    name = "thesis",
+    main = "thesis.tex",
+    srcs = ["thesis.tex", "references.bib"],
+    ctan_packages = ["biblatex-apa"],   # not in the 2022 bundle
+    biber = True,
+)
+```
+
+Tectonic's bundle is frozen at TeX Live 2022 and ships only the five
+core biblatex citation styles. The `ctan_packages` attribute fetches
+modern packages — APA / Chicago / IEEE citation styles, recent
+`tcolorbox` releases, niche contrib packages — directly from
+`mirrors.ctan.org` in TDS format and folds them into the implicit
+cache pipeline. No extra targets, no manual vendoring, no waiting
+for an upstream bundle refresh.
+
+For most documents you don't need this attribute: the bundle covers
+~95% of real-world LaTeX. See the [CTAN packages user
+guide](https://nicklambourne.github.io/rules_latex/getting-started/ctan-packages/)
+for when to reach for it (and when not to).
 
 ### Live preview
 
@@ -195,6 +223,7 @@ The Linux arm64 biber gap is documented in
 | SyncTeX reverse-sync | Stable since v0.2.0 |
 | Implicit cache pipeline | Stable since v0.2.0 |
 | Self-hosted PDF.js | Stable since v0.2.0 |
+| `ctan_packages` (post-2022 packages) | New in v0.4.0 |
 | Modern biblatex (3.18+) | Blocked on upstream bundle refresh ([#1](https://github.com/nicklambourne/rules_latex/issues/1)) |
 | Linux arm64 biber | Pending v0.3 (build from source) |
 | SyncTeX forward-sync | Future (`DESIGN.md` §5.6) |

@@ -1,0 +1,75 @@
+"""Integration tests for CTAN package support in rules_latex.
+
+These tests verify that ctan_packages works correctly with the
+implicit cache pipeline, including:
+
+  * Fetching a simple CTAN package (lipsum)
+  * Fetching a bibliography reference style that is NOT in the tectonic
+    bundle and using it with biber
+"""
+
+load(
+    "//latex:defs.bzl",
+    "latex_document",
+    "latex_test",
+    "latex_cache_snapshot",
+)
+
+# ---------------------------------------------------------------------------
+# Test 1: Simple CTAN package (lipsum)
+# ---------------------------------------------------------------------------
+
+latex_document(
+    name = "lipsum_doc",
+    main = "lipsum_test.tex",
+    srcs = ["lipsum_test.tex"],
+    ctan_packages = ["lipsum"],
+    tags = ["manual"],
+)
+
+latex_test(
+    name = "lipsum_compiles_test",
+    main = "lipsum_test.tex",
+    srcs = ["lipsum_test.tex"],
+    ctan_packages = ["lipsum"],
+)
+
+# ---------------------------------------------------------------------------
+# Test 2: CTAN bibliography style not in bundle + biber
+# ---------------------------------------------------------------------------
+
+latex_test(
+    name = "biblatex_apa_compiles_test",
+    main = "biblatex_apa_test.tex",
+    srcs = [
+        "biblatex_apa_test.tex",
+        "references.bib",
+    ],
+    ctan_packages = [
+        "biblatex-apa",
+    ],
+    biber = True,
+    # Verify that the APA style was loaded by looking for "apa" in log
+    required_patterns = ["apa"],
+)
+
+# ---------------------------------------------------------------------------
+# Test 3: Cache snapshot with CTAN packages (manual - requires running bazel run)
+latex_cache_snapshot(
+    name = "lipsum_cache",
+    main = "lipsum_test.tex",
+    srcs = ["lipsum_test.tex"],
+    ctan_packages = ["lipsum"],
+    output = "lipsum_cache.tar.gz",
+    tags = ["manual"],
+)
+
+test_suite(
+    name = "ctan_tests",
+    tests = [
+        ":lipsum_compiles_test",
+        ":biblatex_apa_compiles_test",
+    ],
+)
+
+

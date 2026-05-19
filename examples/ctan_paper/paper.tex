@@ -1,0 +1,54 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[american]{babel}
+\usepackage{csquotes}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[hidelinks]{hyperref}
+
+% APA 7th edition citation style. NOT in Tectonic's 2022 bundle —
+% pulled from CTAN at build time via the `ctan_packages` attribute
+% in BUILD.bazel.
+\usepackage[style=apa,backend=biber]{biblatex}
+\addbibresource{references.bib}
+
+\title{Language Games and the Limits of Description}
+\author{A. Reader \\ \texttt{a.reader@example.edu}}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This short note revisits the role of language games
+in late Wittgensteinian philosophy~\parencite{wittgenstein1953}
+and contrasts it with the linguistic-turn reading proposed by
+\textcite{rorty1979} and elaborated in subsequent secondary
+literature~\parencite{kripke1982,mcdowell1994}.
+\end{abstract}
+
+\section{Introduction}
+
+Wittgenstein's \emph{Philosophical Investigations} reframes meaning
+as use rather than reference~\parencite{wittgenstein1953}. The shift
+recasts large parts of the philosophy-of-language project: not as
+an attempt to specify the truth-conditions of sentences, but as a
+description of the practices in which sentences earn their grip.
+
+\textcite{rorty1979} reads this as the decisive break with
+representationalist epistemology, situating Wittgenstein alongside
+Heidegger and Dewey as the central twentieth-century post-Cartesian.
+\textcite{kripke1982} dissents, recovering a sceptical reading on
+which the rule-following passages threaten the very notion of
+determinate meaning. \textcite{mcdowell1994} navigates between the
+two, defending a quietist response that accepts the descriptive
+reorientation without conceding the sceptical conclusion.
+
+\section{The Argument}
+
+\dots
+
+\printbibliography
+
+\end{document}

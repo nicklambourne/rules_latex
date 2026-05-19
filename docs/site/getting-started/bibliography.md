@@ -77,6 +77,36 @@ default bundle. If you specifically need biblatex 3.18+ features,
 self-host a newer bundle (see [the bundle staleness
 discussion](https://github.com/nicklambourne/rules_latex/issues/1)).
 
+## Citation styles not in the bundle
+
+The bundle ships only the five core biblatex styles: `numeric`,
+`alphabetic`, `authoryear`, `authortitle`, and `verbose`. Anything
+else — APA, Chicago, IEEE, Nature, Vancouver, etc. — lives in
+separate CTAN packages.
+
+You don't need to vendor those styles. Use the
+[`ctan_packages`](ctan-packages.md) attribute to fetch them at build
+time:
+
+```python
+latex_document(
+    name = "thesis",
+    main = "thesis.tex",
+    srcs = ["thesis.tex", "references.bib"],
+    ctan_packages = ["biblatex-apa"],   # APA 7th edition style
+    biber = True,
+)
+```
+
+Then in `thesis.tex`:
+
+```latex
+\usepackage[style=apa]{biblatex}
+```
+
+See the [CTAN packages](ctan-packages.md) page for the full
+treatment.
+
 ## Platform support
 
 | Platform        | Toolchain biber? | Note |

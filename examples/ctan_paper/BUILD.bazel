@@ -1,0 +1,45 @@
+"""A paper using a CTAN bibliography style not in the Tectonic bundle.
+
+Demonstrates:
+  * `ctan_packages = ["biblatex-apa"]` to pull a modern APA citation
+    style (post-2022, not in the frozen tlextras bundle) from CTAN
+    in TDS format at build time.
+  * Composition of `ctan_packages` with `biber = True` — a common
+    pairing because the citation styles users actually want
+    (APA, Chicago, IEEE, ...) almost all live outside the bundle.
+
+When you don't need this:
+  * The five core biblatex styles (numeric / alphabetic / authoryear
+    / authortitle / verbose) ship with the bundle. See //paper for
+    the numeric variant.
+  * Anything that compiles with `\\usepackage{...}` lines that all
+    resolve cleanly without `ctan_packages` — that's the ~95% case.
+"""
+
+load("@rules_latex//latex:defs.bzl", "latex_document", "latex_test")
+
+latex_document(
+    name = "ctan_paper",
+    srcs = [
+        "paper.tex",
+        "references.bib",
+    ],
+    biber = True,
+    ctan_packages = ["biblatex-apa"],
+    main = "paper.tex",
+    visibility = ["//visibility:public"],
+)
+
+latex_test(
+    name = "ctan_paper_compiles",
+    srcs = [
+        "paper.tex",
+        "references.bib",
+    ],
+    biber = True,
+    ctan_packages = ["biblatex-apa"],
+    main = "paper.tex",
+    # Confirms biblatex-apa actually loaded (not just silently
+    # falling back to a default style).
+    required_patterns = ["apa"],
+)

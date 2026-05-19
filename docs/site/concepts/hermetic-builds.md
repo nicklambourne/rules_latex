@@ -105,6 +105,23 @@ You can mix freely across a workspace: some documents with checked-in
 snapshots, others using the implicit pipeline, others using the full
 bundle. Each `latex_document` resolves independently.
 
+## CTAN packages compatibility
+
+The [`ctan_packages`](../getting-started/ctan-packages.md) attribute
+fetches missing CTAN packages at build time. Its compatibility with
+each offline mode is:
+
+| Mode | `ctan_packages` support | Notes |
+|---|---|---|
+| (1) Per-document snapshot | :material-check: | Snapshot must be regenerated after changing `ctan_packages` |
+| (2) Full bundle | :material-close: | Bundle mode skips `PopulateCache`, so there's no online step in which to fetch CTAN packages — fails at analysis time |
+| (3) Implicit pipeline | :material-check: | The intended pairing — CTAN download happens in the same online step as the bundle prime |
+
+Documents that need both bundle mode and CTAN packages should
+generate a per-document snapshot (mode 1) and reference it via
+`cache = ...`. The snapshot bakes in both the bundle subset *and*
+the CTAN packages, and the compile action then runs fully offline.
+
 ## Hermeticity claims
 
 In all four modes:

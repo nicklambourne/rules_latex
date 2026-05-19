@@ -84,6 +84,11 @@ def _latex_cache_snapshot_impl(ctx):
         '--biber "{}"'.format(biber_file.short_path) if biber_file else ""
     )
 
+    ctan_args = "  \\\\" + "  \\\\".join([
+        '--ctan-package "{}"'.format(pkg)
+        for pkg in ctx.attr.ctan_packages
+    ])
+
     script = """\
 #!/usr/bin/env bash
 set -euo pipefail
@@ -104,6 +109,7 @@ exec "$PYTHON" "{tool}" \\
     --main "{main}" \\
     {src_args} \\
     {pkg_file_args} \\
+    {ctan_args} \\
     --workspace "$BUILD_WORKSPACE_DIRECTORY" \\
     --output "{output}" \\
     {biber_arg}
@@ -115,6 +121,7 @@ exec "$PYTHON" "{tool}" \\
         main = main.short_path,
         src_args = src_args,
         pkg_file_args = pkg_file_args,
+        ctan_args = ctan_args,
         output = ctx.attr.output,
         biber_arg = biber_arg,
     )
@@ -177,6 +184,13 @@ latex_cache_snapshot = rule(
                   "Required when consumers compile biblatex documents " +
                   "against this snapshot.",
             default = False,
+        ),
+        "ctan_packages": attr.string_list(
+            doc = "Names of CTAN packages to download and include in the " +
+                  "cache snapshot. Each entry is a CTAN package name " +
+                  "(e.g. 'fancyhdr'). Packages are downloaded from CTAN " +
+                  "mirrors in TDS format during the snapshot generation.",
+            default = [],
         ),
         "pkg_files": attr.label_keyed_string_dict(
             doc = "Map of label-of-input -> staged-relative-path. " +

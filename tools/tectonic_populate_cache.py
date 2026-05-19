@@ -20,12 +20,15 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import os
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.request
+import zipfile
 from pathlib import Path
 
 # Allow this script to be run directly (bazel build) or from runfiles
@@ -96,6 +99,15 @@ def parse_args() -> argparse.Namespace:
             "cache priming."
         ),
     )
+    parser.add_argument(
+        "--ctan-package",
+        dest="ctan_packages",
+        action="append",
+        default=[],
+        help="CTAN package name to download and include in the cache snapshot. "
+        "May be repeated. Packages are downloaded in TDS format from "
+        "mirrors.ctan.org and made available to tectonic via TEXMFHOME."
+    )
     return parser.parse_args()
 
 
@@ -116,11 +128,137 @@ def _parse_pkg_files(raw_entries: list[str]) -> list[PkgFile]:
     return out
 
 
+def download_ctan_package(package: str, dest_dir: Path) -> None:
+    """Download a single CTAN package in TDS format.
+
+    Tries the TDS .zip first (structured tex/latex/contrib tree),
+    then falls back to the raw package .zip and normalizes it into
+    a compatible TDS layout under dest_dir.
+    """
+    urls = [
+        f"https://mirrors.ctan.org/install/macros/latex/contrib/{package}.tds.zip",
+        f"https://mirrors.ctan.org/macros/latex/contrib/{package}.zip",
+        f"https://mirrors.ctan.org/macros/latex/contrib/biblatex-contrib/{package}.zip",
+        f"https://mirrors.ctan.org/macros/latex/contrib/biblatex-contrib/{package}/{package}.zip",
+    ]
+
+    archive = dest_dir / f"{package}.zip"
+
+    last_error = None
+    for url in urls:
+        try:
+            print(f"Downloading CTAN package {package} from {url}...", file=sys.stderr)
+            urllib.request.urlretrieve(url, archive)
+            print(f"Downloaded {archive.stat().st_size} bytes for {package}", file=sys.stderr)
+            break
+        except urllib.error.HTTPError as e:
+            last_error = e
+            if e.code == 404:
+                print(f"  not found at {url}, trying next...", file=sys.stderr)
+                continue
+            raise
+    else:
+        raise SystemExit(
+            f"Failed to download CTAN package {package} from any mirror. "
+            f"Last error: {last_error}"
+        )
+
+    # Extract to a staging area first
+    extract_tmp = dest_dir / f"_{package}_extract"
+    extract_tmp.mkdir()
+    with zipfile.ZipFile(archive, "r") as zf:
+        zf.extractall(extract_tmp)
+
+    # Clean up the archive
+    archive.unlink()
+
+    # Normalize the extracted contents into a TDS tree under dest_dir
+    _normalize_ctan_tree(extract_tmp, dest_dir, package)
+
+    # Remove the temporary extraction directory
+    shutil.rmtree(str(extract_tmp), ignore_errors=True)
+
+
+def _normalize_ctan_tree(src: Path, dest: Path, package: str) -> None:
+    """Move extracted CTAN package contents into a proper TDS tree.
+
+    If the extracted contents already contain tex/, doc/, source/
+    directories, merge them directly into dest (which is a TDS root).
+    Otherwise, inspect the file types and place them appropriately:
+      - .sty/.cls -> tex/latex/contrib/<package>/
+      - .bbx/.cbx/.lbx/.dbx -> tex/latex/biblatex/{bbx,cbx,lbx,dbx}/
+      - other files -> tex/latex/contrib/<package>/
+    """
+    # If there's a single top-level directory, use its contents
+    entries = [e for e in src.iterdir()]
+    if len(entries) == 1 and entries[0].is_dir():
+        src = entries[0]
+
+    # Check if this already has a TDS-like structure
+    tds_dirs = ["tex", "doc", "source", "fonts", "bibtex"]
+    has_tds = any((src / d).is_dir() for d in tds_dirs)
+
+    if has_tds:
+        # Already TDS-structured: merge each top-level dir into dest
+        for item in src.iterdir():
+            if item.is_dir():
+                target = dest / item.name
+                if target.exists():
+                    _merge_dirs(item, target)
+                else:
+                    shutil.move(str(item), str(target))
+            elif item.is_file():
+                shutil.move(str(item), str(dest / item.name))
+        return
+
+    # Flat / unknown layout: categorize files
+    biblatex_dirs = {
+        ".bbx": "tex/latex/biblatex/bbx",
+        ".cbx": "tex/latex/biblatex/cbx",
+        ".lbx": "tex/latex/biblatex/lbx",
+        ".dbx": "tex/latex/biblatex/dbx",
+    }
+
+    has_biblatex = any(
+        f.suffix in biblatex_dirs for f in src.iterdir() if f.is_file()
+    )
+
+    for item in src.iterdir():
+        if item.is_file():
+            if has_biblatex and item.suffix in biblatex_dirs:
+                target_dir = dest / biblatex_dirs[item.suffix]
+                target_dir.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(item), str(target_dir / item.name))
+            else:
+                # Generic contrib placement
+                contrib_dir = dest / "tex" / "latex" / "contrib" / package
+                contrib_dir.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(item), str(contrib_dir / item.name))
+        elif item.is_dir():
+            # For directories in flat packages, just copy them into contrib
+            contrib_dir = dest / "tex" / "latex" / "contrib" / package
+            contrib_dir.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(item), str(contrib_dir / item.name))
+
+
+def _merge_dirs(src: Path, dst: Path) -> None:
+    """Recursively merge src into dst, overwriting existing files."""
+    for item in src.iterdir():
+        target = dst / item.name
+        if item.is_dir():
+            if not target.exists():
+                target.mkdir(parents=True, exist_ok=True)
+            _merge_dirs(item, target)
+        else:
+            shutil.move(str(item), str(target))
+
+
 def run_tectonic(
     tectonic: Path,
     main_in_workdir: Path,
     cache_dir: Path,
     biber: Path | None = None,
+    ctan_dir: Path | None = None,
 ) -> None:
     """Run tectonic with cwd set to the staged work directory.
 
@@ -131,6 +269,9 @@ def run_tectonic(
     env = os.environ.copy()
     env["TECTONIC_CACHE_DIR"] = str(cache_dir.resolve())
     env["LC_ALL"] = "C.UTF-8"
+
+    if ctan_dir is not None:
+        env["TEXMFHOME"] = str(ctan_dir.resolve())
 
     biber_dir_owned: tempfile.TemporaryDirectory[str] | None = None
     if biber is not None:
@@ -173,8 +314,12 @@ def run_tectonic(
         )
 
 
-def pack_cache(cache_dir: Path, output: Path) -> None:
+def pack_cache(cache_dir: Path, output: Path, ctan_dir: Path | None = None) -> None:
     """Tar ``cache_dir`` into ``output`` reproducibly.
+
+    When ctan_dir is provided, creates a structured tarball with both
+    the tectonic cache and CTAN packages, using cache/ and ctan_pkgs/
+    prefixes respectively.
 
     Walks the cache and emits a deterministic tar: sorted entries,
     fixed mtime, fixed owner. The cache contents themselves are
@@ -184,11 +329,23 @@ def pack_cache(cache_dir: Path, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
 
     entries: list[tuple[str, Path]] = []
+
+    # Tectonic cache entries
     for path in sorted(cache_dir.rglob("*")):
         if path.is_dir():
             continue
         rel = path.relative_to(cache_dir).as_posix()
+        if ctan_dir:
+            rel = "cache/" + rel
         entries.append((rel, path))
+
+    # CTAN package entries
+    if ctan_dir:
+        for path in sorted(ctan_dir.rglob("*")):
+            if path.is_dir():
+                continue
+            rel = "ctan_pkgs/" + path.relative_to(ctan_dir).as_posix()
+            entries.append((rel, path))
 
     # Open gzip with mtime=0 explicitly so the compressed header doesn't
     # leak the wall-clock time of this run.
@@ -223,11 +380,19 @@ def main() -> int:
         cache_dir = tmp_path / "cache"
         cache_dir.mkdir()
 
+        # Download CTAN packages if requested
+        ctan_dir = None
+        if args.ctan_packages:
+            ctan_dir = tmp_path / "ctan_pkgs"
+            ctan_dir.mkdir()
+            for pkg in args.ctan_packages:
+                download_ctan_package(pkg, ctan_dir)
+
         main_in_workdir = stage_sources(
             args.main, args.srcs, pkg_files, work_dir,
         )
-        run_tectonic(args.tectonic, main_in_workdir, cache_dir, biber=args.biber)
-        pack_cache(cache_dir, output)
+        run_tectonic(args.tectonic, main_in_workdir, cache_dir, biber=args.biber, ctan_dir=ctan_dir)
+        pack_cache(cache_dir, output, ctan_dir=ctan_dir)
 
     size_mb = output.stat().st_size / (1024 * 1024)
     print(

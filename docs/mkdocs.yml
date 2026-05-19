@@ -75,6 +75,7 @@ nav:
       - Installation: getting-started/installation.md
       - First document: getting-started/first-document.md
       - Bibliography: getting-started/bibliography.md
+      - CTAN packages: getting-started/ctan-packages.md
       - Live preview: getting-started/live-preview.md
   - Concepts:
       - Hermetic builds: concepts/hermetic-builds.md
