@@ -8,6 +8,44 @@ that, expect breaking changes in any v0.x release.
 
 ### Added
 
+- **`ctan_packages` attribute on `latex_document`, `latex_test`, and
+  `latex_cache_snapshot`.** Accepts a list of CTAN package names
+  (e.g. `["biblatex-apa"]`) and pulls them from `mirrors.ctan.org`
+  in TDS format during the implicit cache pipeline's online prime.
+  Closes the gap between Tectonic's frozen 2022 bundle and modern
+  CTAN: APA / Chicago / IEEE biblatex styles, recent `tcolorbox`
+  releases, niche contrib packages, and so on. Zero new targets
+  required — just list package names where they're used.
+
+  ```python
+  latex_document(
+      name = "thesis",
+      main = "thesis.tex",
+      srcs = ["thesis.tex", "references.bib"],
+      ctan_packages = ["biblatex-apa"],
+      biber = True,
+  )
+  ```
+
+  Compatible with the implicit cache pipeline (default) and with
+  per-document cache snapshots; explicitly incompatible with
+  `tectonic.bundle()` (the bundle path skips the online prime).
+  See `docs/site/getting-started/ctan-packages.md` and the
+  new `examples/ctan_paper/` for the user-facing treatment, plus
+  `DESIGN.md` for the architectural rationale.
+
+- **Structured cache-snapshot tarball format.** Snapshots produced
+  with `ctan_packages` non-empty wrap two trees:
+  `cache/` (the tectonic bundle cache, what the flat format used to
+  hold) and `ctan_pkgs/` (the extracted TDS overlay).
+  `tectonic_compile.py` detects the structure at extract time and
+  sets `TECTONIC_CACHE_DIR` + `TEXMFHOME` accordingly. Legacy
+  flat-format snapshots from older `rules_latex` releases keep
+  working unchanged — the format detection is purely structural.
+
+- New `examples/ctan_paper/` example demonstrating an APA-style
+  bibliography via `ctan_packages = ["biblatex-apa"]` + `biber = True`.
+
 - `latex_serve_web` now detects when it's being launched from a VS
   Code-family editor's integrated terminal (via `TERM_PROGRAM` =
   `vscode` / `cursor` / `vscodium`) and prints an

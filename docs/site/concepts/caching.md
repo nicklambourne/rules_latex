@@ -67,6 +67,7 @@ is what's checked into your repo when you opt into a manual
 |---------------------------------|---------------------|
 | Edit a sentence in `cv.tex`     | `TectonicCompile` only (~3-5s) |
 | Add a new `\usepackage` line    | Both actions (one-time prime, ~30-80s) |
+| Add/remove a `ctan_packages` entry | Both actions (re-fetches CTAN packages during prime) |
 | Bump rules_latex version        | Both actions (different tectonic binary) |
 | Move the document to a new dir  | Both actions (paths feed into the action key) |
 
@@ -75,3 +76,42 @@ builds](hermetic-builds.md)), the same trigger ("new `\usepackage`")
 means you need to re-run `bazel run //:cv_snapshot` and commit the
 new tarball. Otherwise the document will fail to compile with a
 missing-file error.
+
+## Snapshot tarball structure
+
+A `latex_cache_snapshot` tarball has one of two layouts depending on
+whether the document declares
+[`ctan_packages`](../getting-started/ctan-packages.md):
+
+=== "Without `ctan_packages` (legacy / common)"
+
+    The tarball is a flat dump of the tectonic cache directory:
+
+    ```
+    cv_cache.tar.gz
+    └── (tectonic-cache files at root: hash-named files, manifests, ...)
+    ```
+
+    `TectonicCompile` extracts straight into `$TECTONIC_CACHE_DIR`
+    and runs `tectonic --only-cached`.
+
+=== "With `ctan_packages` (structured)"
+
+    The tarball wraps two parallel trees:
+
+    ```
+    thesis_cache.tar.gz
+    ├── cache/        ← tectonic's bundle cache (what flat-format used to be)
+    └── ctan_pkgs/    ← extracted TDS overlay (tex/latex/biblatex/, etc.)
+    ```
+
+    `TectonicCompile` detects this structure, extracts each subtree,
+    sets `TECTONIC_CACHE_DIR` to `cache/` and `TEXMFHOME` to
+    `ctan_pkgs/`, then runs `tectonic --only-cached`. Tectonic's
+    kpathsea consults `TEXMFHOME` first, so CTAN-fetched packages
+    override anything in the bundle.
+
+The compile-time format detection is purely structural (does the
+tarball have `cache/` and `ctan_pkgs/` at the root?), so legacy
+snapshots from older `rules_latex` versions continue to work
+unchanged — there's no on-disk migration.

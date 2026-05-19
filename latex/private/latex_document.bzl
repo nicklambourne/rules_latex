@@ -115,7 +115,8 @@ def _populate_cache_action(
         pkg_files,
         output_tarball,
         staging_lib,
-        tool):
+        tool,
+        ctan_packages):
     """Schedule an online tectonic compile that captures its cache.
 
     Drives `//tools:tectonic_populate_cache.py`. The output is a
@@ -133,6 +134,8 @@ def _populate_cache_action(
         args.add("--pkg-file", "{}={}".format(f.path, rel))
     if biber_file:
         args.add("--biber", biber_file.path)
+    for pkg in ctan_packages:
+        args.add("--ctan-package", pkg)
 
     inputs = depset(
         direct = (
@@ -367,6 +370,8 @@ def _latex_document_impl(ctx):
             "absolute paths that aren't deterministic across machines).",
         )
 
+    ctan_packages = ctx.attr.ctan_packages
+
     all_srcs = depset(
         direct = ctx.files.srcs,
         transitive = _collect_transitive_srcs(ctx.attr.deps),
@@ -386,6 +391,16 @@ def _latex_document_impl(ctx):
     biber_file, use_system_biber = _resolve_biber(ctx, toolchain)
     user_cache = ctx.file.cache
     pkg_files = _resolved_pkg_files(ctx)
+
+    # Validate ctan_packages compatibility with offline mode.
+    if ctan_packages and toolchain.bundle and not user_cache:
+        fail(
+            "latex_document(ctan_packages = ...) on {} is incompatible with " +
+            "the toolchain-level bundle. ctan_packages requires the implicit " +
+            "cache pipeline (default) or a cache snapshot generated with " +
+            "matching ctan_packages. See DESIGN.md for details."
+                .format(ctx.label),
+        )
 
     populate_tool = ctx.file._populate_cache_tool
     compile_tool = ctx.file._compile_tool
@@ -438,6 +453,7 @@ def _latex_document_impl(ctx):
             output_tarball = offline_source,
             staging_lib = staging_lib,
             tool = populate_tool,
+            ctan_packages = ctan_packages,
         )
 
     _compile_action(
@@ -550,6 +566,17 @@ latex_document = rule(
                   "toolchain-level `tectonic.bundle()` and over the " +
                   "implicit cache pipeline.",
             allow_single_file = [".tar.gz", ".tgz"],
+        ),
+        "ctan_packages": attr.string_list(
+            doc = "Names of CTAN packages to fetch and make available to the " +
+                  "document. Each entry is a CTAN package name (e.g. 'fancyhdr'). " +
+                  "Packages are downloaded from CTAN mirrors in TDS format during " +
+                  "the cache population step and bundled into the offline cache. " +
+                  "Requires the implicit cache pipeline (default) or a cache " +
+                  "snapshot generated with matching `ctan_packages`. Not " +
+                  "supported when `tectonic.bundle()` is active (the toolchain-level " +
+                  "bundle does not support on-demand CTAN package fetching).",
+            default = [],
         ),
         "biber": attr.bool(
             doc = "Enable biber bibliography processing. When True, " +
