@@ -357,7 +357,6 @@ def run_one(args: argparse.Namespace) -> int:
         work_dir = tmp_path / "work"
         work_dir.mkdir()
 
-<<<<<<< HEAD
         ctan_dir = None
         if args.cache_dir is not None:
             # Fast path: hand tectonic a pre-extracted cache
