@@ -10,9 +10,9 @@ implicit cache pipeline, including:
 
 load(
     "//latex:defs.bzl",
+    "latex_cache_snapshot",
     "latex_document",
     "latex_test",
-    "latex_cache_snapshot",
 )
 
 # ---------------------------------------------------------------------------
@@ -21,17 +21,17 @@ load(
 
 latex_document(
     name = "lipsum_doc",
-    main = "lipsum_test.tex",
     srcs = ["lipsum_test.tex"],
     ctan_packages = ["lipsum"],
+    main = "lipsum_test.tex",
     tags = ["manual"],
 )
 
 latex_test(
     name = "lipsum_compiles_test",
-    main = "lipsum_test.tex",
     srcs = ["lipsum_test.tex"],
     ctan_packages = ["lipsum"],
+    main = "lipsum_test.tex",
 )
 
 # ---------------------------------------------------------------------------
@@ -40,15 +40,15 @@ latex_test(
 
 latex_test(
     name = "biblatex_apa_compiles_test",
-    main = "biblatex_apa_test.tex",
     srcs = [
         "biblatex_apa_test.tex",
         "references.bib",
     ],
+    biber = True,
     ctan_packages = [
         "biblatex-apa",
     ],
-    biber = True,
+    main = "biblatex_apa_test.tex",
     # Verify that the APA style was loaded by looking for "apa" in log
     required_patterns = ["apa"],
 )
@@ -57,9 +57,9 @@ latex_test(
 # Test 3: Cache snapshot with CTAN packages (manual - requires running bazel run)
 latex_cache_snapshot(
     name = "lipsum_cache",
-    main = "lipsum_test.tex",
     srcs = ["lipsum_test.tex"],
     ctan_packages = ["lipsum"],
+    main = "lipsum_test.tex",
     output = "lipsum_cache.tar.gz",
     tags = ["manual"],
 )
@@ -67,9 +67,7 @@ latex_cache_snapshot(
 test_suite(
     name = "ctan_tests",
     tests = [
-        ":lipsum_compiles_test",
         ":biblatex_apa_compiles_test",
+        ":lipsum_compiles_test",
     ],
 )
-
-
