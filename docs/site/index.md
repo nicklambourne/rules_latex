@@ -104,8 +104,9 @@ See the [Design rationale](about/design.md) for the full story.
 | SyncTeX reverse-sync | Stable since v0.2.0 |
 | Implicit cache pipeline | Stable since v0.2.0 |
 | Self-hosted PDF.js | Stable since v0.2.0 |
+| `ctan_packages` (post-2022 packages) | Unreleased — on master, slated for v0.4.0 |
 | Modern biblatex (3.18+) | Blocked on upstream bundle refresh ([#1][issue-1]) |
-| Linux arm64 biber | Pending v0.3 (build from source) |
+| Linux arm64 biber | Not vendored — use `biber_strategy = "system"` |
 | SyncTeX forward-sync | Future |
 
 [issue-1]: https://github.com/nicklambourne/rules_latex/issues/1
