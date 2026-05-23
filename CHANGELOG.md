@@ -4,7 +4,24 @@ All notable changes to `rules_latex` are documented here. This project follows
 [Semantic Versioning](https://semver.org/) once v1.0.0 is reached; before
 that, expect breaking changes in any v0.x release.
 
-## [0.4.0] - 2026-05-23
+## [0.4.1] - 2026-05-23
+
+### Fixed
+
+- **Release workflow now starts the CTAN fixture HTTP mirror before
+  `bazel test`.** The v0.4.0 tag failed to produce a GitHub release
+  because `bazel test //... //tests/...` ran without the fixture
+  mirror that the main CI workflow stands up; `transitive_resolve_test`
+  404'd against real CTAN looking for the synthetic `test-pkg-a` /
+  `test-pkg-b` packages (which only exist as fixtures under
+  `tests/ctan/fixtures/`). The release workflow now inlines the same
+  fixture-server bootstrap that CI uses. No code changes versus
+  v0.4.0 — this is a release-pipeline-only fix.
+
+## [0.4.0] - 2026-05-23 [YANKED]
+
+> Tag exists but no GitHub release was produced — the release
+> workflow failed at the `bazel test` step. Use 0.4.1 instead.
 
 ### Added
 
