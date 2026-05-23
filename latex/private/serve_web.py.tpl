@@ -269,6 +269,62 @@ class SyncTeXIndex:
             return None
         return (path, best.line)
 
+    def find_file_id(self, basename: str) -> int | None:
+        """Look up the SyncTeX file id for a source file basename.
+
+        SyncTeX stores absolute paths as seen by tectonic inside the
+        Bazel action sandbox (e.g. `/private/.../execroot/_main/cv.tex`).
+        Editors / CLI shims call forward-sync by workspace-relative
+        path or just by basename; this resolves the latter back to
+        the integer id the box index uses.
+
+        Returns the first id whose stored path has the requested
+        basename, or None if no match. If a document has multiple
+        source files sharing a basename (rare but possible across
+        directories), the first match wins — same convention as the
+        reverse-sync workspace resolver.
+        """
+        for file_id, path in self._inputs.items():
+            if path.name == basename:
+                return file_id
+        return None
+
+    def forward_lookup(
+        self,
+        file_basename: str,
+        line: int,
+    ) -> tuple[int, float, float, float, float] | None:
+        """Map a (source basename, line) tuple to a PDF location.
+
+        Returns ``(page, x_pt, y_pt, w_pt, h_pt)`` where ``(x_pt,
+        y_pt)`` is the box origin (bottom-left in TeX's coordinate
+        system) and ``w_pt`` / ``h_pt`` are the box width / total
+        height (above-baseline + below-baseline). All values are in
+        PDF points so the browser can render a highlight overlay
+        directly.
+
+        Returns None if no box matches. Picks the *first* box (in
+        document order) when multiple boxes share the same source
+        line — SyncTeX writes boxes top-down within a page and
+        pages in order, so the first match is the earliest
+        occurrence of that line in the document, which is what
+        users intuitively expect from a forward jump.
+        """
+        file_id = self.find_file_id(file_basename)
+        if file_id is None:
+            return None
+        for box in self._boxes:
+            if box.file_id != file_id or box.line != line:
+                continue
+            return (
+                box.page,
+                box.x / SYNCTEX_SP_PER_PT,
+                box.y / SYNCTEX_SP_PER_PT,
+                box.w / SYNCTEX_SP_PER_PT,
+                (box.h + box.d) / SYNCTEX_SP_PER_PT,
+            )
+        return None
+
 
 # -----------------------------------------------------------------------------
 # Build state
@@ -325,6 +381,27 @@ class BuildState:
         with self._lock:
             if q in self._listeners:
                 self._listeners.remove(q)
+
+    def broadcast_event(self, event: str) -> None:
+        """Push an arbitrary event payload to every SSE listener.
+
+        Used by /sync/forward to push a JSON-encoded "jump"
+        message to the browser. The reload / build-failed events
+        from the watcher use the same listener queues but go
+        through ``record_build`` for the locking + history book-
+        keeping that those events also need; jump events are
+        stateless and don't.
+        """
+        with self._lock:
+            listeners = list(self._listeners)
+        for q in listeners:
+            try:
+                q.put(event, timeout=0.1)
+            except queue.Full:
+                # Slow listener; drop the event. The forward-sync
+                # source can retry; nothing else depends on the
+                # event arriving.
+                pass
 
     def record_build(self, success: bool, elapsed: float, message: str) -> None:
         with self._lock:
@@ -791,6 +868,10 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
   #viewer {{
     overflow: auto; padding: 16px; background: #2b2b2b;
     text-align: center;
+    /* `position: relative` so .synctex-flash overlays (which are
+       absolutely positioned inside the viewer) anchor to the
+       scrollable content area rather than the page. */
+    position: relative;
   }}
   #viewer canvas {{
     display: block; margin: 0 auto 12px; background: white;
@@ -798,6 +879,22 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
     cursor: var(--canvas-cursor, default);
   }}
   body.synctex #viewer canvas {{ --canvas-cursor: crosshair; }}
+  /* Forward-sync flash overlay: a transient yellow box at the
+     synctex location, fades out over ~1.5s. Position is set in
+     JS based on the PDF.js viewport math. */
+  .synctex-flash {{
+    position: absolute;
+    background: rgba(255, 230, 80, 0.45);
+    border: 1px solid rgba(255, 215, 0, 0.9);
+    border-radius: 2px;
+    pointer-events: none;
+    animation: synctex-flash-fade 1.5s ease-out forwards;
+  }}
+  @keyframes synctex-flash-fade {{
+    0%   {{ opacity: 0.0; }}
+    15%  {{ opacity: 1.0; }}
+    100% {{ opacity: 0.0; }}
+  }}
   #empty {{ color: #888; padding: 32px; }}
   footer {{
     padding: 6px 12px; background: #1d1d1d;
@@ -1154,11 +1251,84 @@ evtSrc.onmessage = (e) => {{
     renderDocument();
   }} else if (e.data === "build-failed" || e.data === "hello") {{
     refreshStatus();
+  }} else if (e.data.startsWith("{{")) {{
+    // JSON-encoded events. Currently only "jump" (forward-sync
+    // from an editor / CLI), but the discriminator lives in
+    // `type` so future event shapes can land here too.
+    let msg;
+    try {{
+      msg = JSON.parse(e.data);
+    }} catch {{
+      return;
+    }}
+    if (msg && msg.type === "jump") {{
+      jumpToPdfLocation(msg);
+    }}
   }}
 }};
 evtSrc.onerror = () => {{
   setStatus("fail", "lost connection to server");
 }};
+
+// Forward-sync target: scroll the named page into view, then briefly
+// flash a highlight overlay at the PDF-coordinate box. The overlay
+// is a transient absolutely-positioned div that fades out after
+// ~1.5s; it's positioned with the same PDF.js viewport math the
+// reverse-click handler uses in the opposite direction.
+function jumpToPdfLocation(msg) {{
+  const canvas = viewer.querySelector(
+    `canvas[data-page-number="${{msg.page}}"]`,
+  );
+  if (!canvas) {{
+    syncResultEl.textContent =
+      `forward-sync: page ${{msg.page}} not yet rendered`;
+    return;
+  }}
+  const viewport = canvasViewports.get(canvas);
+  if (!viewport) return;
+  // PDF box origin is the bottom-left in PDF-point coords. Convert
+  // the origin AND the opposite corner so the highlight rectangle
+  // sits in CSS-pixel space regardless of zoom / DPR.
+  const [vx1, vy1] = viewport.convertToViewportPoint(msg.x, msg.y);
+  const [vx2, vy2] = viewport.convertToViewportPoint(
+    msg.x + msg.w, msg.y + msg.h,
+  );
+  const left = Math.min(vx1, vx2);
+  const top = Math.min(vy1, vy2);
+  const width = Math.abs(vx2 - vx1);
+  const height = Math.abs(vy2 - vy1);
+
+  const wrap = canvas.parentElement;
+  // The canvas itself isn't a positioned container, so we add a
+  // wrapper if needed and position the overlay relative to the
+  // canvas's offsetParent. Easiest: position the overlay relative
+  // to the viewer and offset by the canvas's position in the
+  // viewer's coordinate space.
+  const canvasRect = canvas.getBoundingClientRect();
+  const viewerRect = viewer.getBoundingClientRect();
+  const overlay = document.createElement("div");
+  overlay.className = "synctex-flash";
+  overlay.style.left = `${{
+    canvasRect.left - viewerRect.left + viewer.scrollLeft + left
+  }}px`;
+  overlay.style.top = `${{
+    canvasRect.top - viewerRect.top + viewer.scrollTop + top
+  }}px`;
+  overlay.style.width = `${{Math.max(width, 4)}}px`;
+  overlay.style.height = `${{Math.max(height, 4)}}px`;
+  viewer.appendChild(overlay);
+  // Scroll the overlay into view (smooth on supporting browsers,
+  // graceful fallback otherwise).
+  overlay.scrollIntoView({{ behavior: "smooth", block: "center" }});
+  // Fade + remove after the CSS animation settles. The animation
+  // is 1.5s in `.synctex-flash`; we wait a little longer before
+  // removing the node to avoid a sub-pixel flash at the end.
+  setTimeout(() => {{ overlay.remove(); }}, 1800);
+  syncResultEl.innerHTML =
+    `← <strong>${{escapeHtml(msg.file)}}</strong>:` +
+    `<strong>${{msg.line}}</strong> ` +
+    `(page ${{msg.page}})`;
+}}
 
 document.getElementById("zoom-in").addEventListener("click", () => {{
   scale = Math.min(scale * 1.2, 4.0);
@@ -1356,6 +1526,9 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path == "/sync/reverse":
             self._handle_sync_reverse()
+            return
+        if path == "/sync/forward":
+            self._handle_sync_forward()
             return
         self._send(
             HTTPStatus.NOT_FOUND,
@@ -1595,6 +1768,99 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(
             HTTPStatus.OK,
             {"ok": True, "file": resolved, "line": line},
+        )
+
+    def _handle_sync_forward(self) -> None:
+        """POST /sync/forward — map a (file, line) to a PDF location
+        and push a "jump" event to the open browser tabs.
+
+        Request body (JSON):
+            {"file": "cv.tex", "line": 42}
+            ``file`` can be a workspace-relative path or just a
+            basename; the resolver only looks at the basename.
+
+        Response body (JSON):
+            {"ok": true, "page": 3, "x": 121.5, "y": 614.2,
+             "w": 156.7, "h": 11.0}
+            All coordinates are in PDF points; (x, y) is the box
+            origin (bottom-left), w / h are width / total height.
+
+        Side effect: on success, broadcasts a JSON SSE event
+            {"type": "jump", "page": ..., "x": ..., "y": ...,
+             "w": ..., "h": ..., "file": ..., "line": ...}
+        to all open browser tabs. The browser scrolls the page
+        into view and briefly flashes a highlight overlay at the
+        box. The HTTP response confirms the lookup result for
+        editor / CLI callers that want to know if the jump
+        landed.
+        """
+        if not SYNCTEX_ENABLED:
+            self._send_json(
+                HTTPStatus.NOT_FOUND,
+                {"ok": False, "error": "synctex not enabled for this document"},
+            )
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            body_raw = self.rfile.read(length) if length else b""
+            payload = json.loads(body_raw.decode("utf-8"))
+            file = str(payload["file"])
+            line = int(payload["line"])
+        except (KeyError, ValueError, json.JSONDecodeError) as exc:
+            self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"ok": False, "error": "bad request: {}".format(exc)},
+            )
+            return
+
+        synctex_path = self.workspace / "bazel-bin" / SYNCTEX_RELPATH
+        idx = self.state.get_synctex(synctex_path)
+        if idx is None:
+            self._send_json(
+                HTTPStatus.NOT_FOUND,
+                {"ok": False, "error": "synctex file not produced yet"},
+            )
+            return
+
+        # The browser asks "go to cv.tex:42" — we only need the
+        # basename. This also handles workspace-relative inputs
+        # like "src/cv.tex" gracefully.
+        basename = Path(file).name
+        result = idx.forward_lookup(basename, line)
+        if result is None:
+            self._send_json(
+                HTTPStatus.OK,
+                {"ok": False, "error": "no PDF location found for that source line"},
+            )
+            return
+
+        page, x, y, w, h = result
+
+        # Broadcast over SSE so any open browser tabs scroll + flash.
+        # Stateless: not retained for new listeners that connect
+        # later. The HTTP response is the only durable record.
+        jump_event = json.dumps({
+            "type": "jump",
+            "page": page,
+            "x": x,
+            "y": y,
+            "w": w,
+            "h": h,
+            "file": basename,
+            "line": line,
+        })
+        self.state.broadcast_event(jump_event)
+
+        self._send_json(
+            HTTPStatus.OK,
+            {
+                "ok": True,
+                "page": page,
+                "x": x,
+                "y": y,
+                "w": w,
+                "h": h,
+            },
         )
 
     def _resolve_to_workspace(self, synctex_path: Path) -> str:
