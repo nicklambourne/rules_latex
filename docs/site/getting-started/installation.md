@@ -78,3 +78,24 @@ prime.
 
 See [Hermetic builds](../concepts/hermetic-builds.md) for the full
 mode hierarchy.
+
+## Optional: modern biblatex extension styles
+
+The bundle pins `biblatex 3.17` / `biber 2.17`, which works for the
+five core citation styles but not for modern extension styles like
+`biblatex-apa`, `biblatex-chicago`, `biblatex-ieee`, or
+`biblatex-nature`. Those require `biblatex 3.18+` / `biber 2.18+`.
+
+If your documents need modern citation styles, opt into the
+overlay by passing `modern_biblatex = True` to `tectonic.toolchain`:
+
+```python
+tectonic.toolchain(modern_biblatex = True)
+```
+
+That makes `rules_latex` also fetch `biblatex 3.21` from CTAN and
+`biber 2.21` from our mirrored release, and pass them to tectonic
+via `-Z search-path` — shadowing the bundle's pair for compiles in
+this workspace. See [the bibliography
+guide](bibliography.md#modern-citation-styles) for the full
+explanation.

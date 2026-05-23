@@ -792,13 +792,14 @@ These are deliberately out of scope for v0.1 but worth flagging.
 
     > **Caveat that emerged during implementation:** biblatex
     > extension styles (`biblatex-apa`, `biblatex-chicago`, etc.)
-    > are *not* usable via `ctan_packages` today. Modern releases
-    > require `biblatex 3.18+` / `biber 2.18+`, but the bundle
-    > pins `3.17 / 2.17`. The fetched style files reach tectonic
-    > correctly, but biblatex 3.17 can't process them. This is
-    > the version-coupling trap §4.10 warned about; it's gated
-    > on the bundle bump in [#1](https://github.com/nicklambourne/rules_latex/issues/1).
-    > See the "Limitations" section in the user guide.
+    > need an explicit toolchain opt-in. Modern releases require
+    > `biblatex 3.18+` / `biber 2.18+` while the bundle pins
+    > `3.17 / 2.17`. The fetched style files reach tectonic via
+    > `-Z search-path` correctly, but biblatex 3.17 can't process
+    > them. Resolved by `tectonic.toolchain(modern_biblatex = True)`
+    > in `MODULE.bazel`, which fetches biblatex 3.21 + biber 2.21
+    > and overlays them alongside the bundle. See the "Modern
+    > biblatex extension styles" section in the user guide.
 
     **Algorithm:**
 

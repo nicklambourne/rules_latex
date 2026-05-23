@@ -117,7 +117,8 @@ def _populate_cache_action(
         staging_lib,
         tool,
         ctan_packages,
-        bundle_manifest):
+        bundle_manifest,
+        biblatex_overlay):
     """Schedule an online tectonic compile that captures its cache.
 
     Drives `//tools:tectonic_populate_cache.py`. The output is a
@@ -143,12 +144,24 @@ def _populate_cache_action(
         # when there's anything to resolve so transitive deps get
         # picked up automatically (no user opt-in).
         args.add("--bundle-manifest", bundle_manifest.path)
+    biblatex_overlay_files = (
+        biblatex_overlay.to_list() if biblatex_overlay else []
+    )
+    if biblatex_overlay_files:
+        # Pass one --biblatex-overlay-file per file; the tool
+        # derives `-Z search-path` dirs from them. We use repeated
+        # flags rather than a single root path so the rule's
+        # action-cache key reflects every input file (changes to
+        # the overlay invalidate the action correctly).
+        for f in biblatex_overlay_files:
+            args.add("--biblatex-overlay-file", f.path)
 
     inputs = depset(
         direct = (
             [main_in, tectonic, tool, staging_lib] +
             ([biber_file] if biber_file else []) +
             ([bundle_manifest] if ctan_packages else []) +
+            biblatex_overlay_files +
             [f for (f, _) in pkg_files]
         ),
         transitive = [srcs_depset],
@@ -215,7 +228,8 @@ def _compile_action(
         synctex_output,
         outfmt,
         staging_lib,
-        tool):
+        tool,
+        biblatex_overlay):
     """Schedule the TectonicCompile action.
 
     Drives `//tools:tectonic_compile.py` which stages sources, runs
@@ -273,12 +287,22 @@ def _compile_action(
     if biber_file:
         args.add("--biber", biber_file.path)
 
+    # When a modern-biblatex overlay is configured, expose its files
+    # to the compile action so `\usepackage{biblatex}` resolves to
+    # 3.21 (overlaid via -Z search-path) rather than the bundle's 3.17.
+    biblatex_overlay_files = (
+        biblatex_overlay.to_list() if biblatex_overlay else []
+    )
+    for f in biblatex_overlay_files:
+        args.add("--biblatex-overlay-file", f.path)
+
     direct_inputs = [main_in, tectonic, tool, staging_lib]
     if offline_source != None:
         direct_inputs.append(offline_source)
     if biber_file:
         direct_inputs.append(biber_file)
     direct_inputs.extend([f for (f, _) in pkg_files])
+    direct_inputs.extend(biblatex_overlay_files)
 
     inputs = depset(
         direct = direct_inputs,
@@ -464,6 +488,7 @@ def _latex_document_impl(ctx):
             tool = populate_tool,
             ctan_packages = ctan_packages,
             bundle_manifest = bundle_manifest,
+            biblatex_overlay = toolchain.biblatex_overlay,
         )
 
     _compile_action(
@@ -482,6 +507,7 @@ def _latex_document_impl(ctx):
         outfmt = outfmt,
         staging_lib = staging_lib,
         tool = compile_tool,
+        biblatex_overlay = toolchain.biblatex_overlay,
     )
 
     output_groups = {

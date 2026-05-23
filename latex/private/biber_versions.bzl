@@ -30,6 +30,14 @@ match indefinitely.
 BIBER_VERSION = "2.17"
 BIBER_MIRROR_TAG = "biber-mirror-v" + BIBER_VERSION
 
+# Modern biber, paired with biblatex 3.21. Opt-in via
+# `tectonic.toolchain(modern_biblatex = True)`; bypasses the
+# bundle's pinned biblatex 3.17 / biber 2.17 stack so modern
+# CTAN extension styles (biblatex-apa 9.x etc.) work. See
+# DESIGN.md §4.10 + §5 item #12.
+BIBER_MODERN_VERSION = "2.21"
+BIBER_MODERN_MIRROR_TAG = "biber-mirror-v" + BIBER_MODERN_VERSION
+
 # Map (os, cpu) -> (asset_name, sha256). The macOS asset is a
 # universal binary that works on both Intel and Apple Silicon so it
 # covers both cpu entries.
@@ -62,9 +70,34 @@ BIBER_RELEASES = {
     ),
 }
 
-def biber_download_url(asset):
+# Same shape as BIBER_RELEASES but for biber 2.21. SHAs are from the
+# biber-mirror-v2.21 GitHub release.
+BIBER_MODERN_RELEASES = {
+    ("linux", "x86_64"): struct(
+        asset = "biber-linux_x86_64.tar.gz",
+        sha256 = "f00dfa29c7f798695339d9155abefcc0da4bd2fb1b4b2d90e46693f261b0a26e",
+        exe = "biber",
+    ),
+    ("macos", "x86_64"): struct(
+        asset = "biber-darwin_universal.tar.gz",
+        sha256 = "8c895defed5e69b7a824cb7b7947e8bbfa3f3b17ffb8a1d493e982b679e6633c",
+        exe = "biber",
+    ),
+    ("macos", "aarch64"): struct(
+        asset = "biber-darwin_universal.tar.gz",
+        sha256 = "8c895defed5e69b7a824cb7b7947e8bbfa3f3b17ffb8a1d493e982b679e6633c",
+        exe = "biber",
+    ),
+    ("windows", "x86_64"): struct(
+        asset = "biber-MSWIN64.zip",
+        sha256 = "2ae8323193db40f87f6471b3c9a8378059bf73a37ce15189f788770e6d93e353",
+        exe = "biber.exe",
+    ),
+}
+
+def biber_download_url(asset, mirror_tag = None):
     """Build the GitHub release URL for a mirrored biber asset."""
     return "https://github.com/nicklambourne/rules_latex/releases/download/{tag}/{asset}".format(
-        tag = BIBER_MIRROR_TAG,
+        tag = mirror_tag or BIBER_MIRROR_TAG,
         asset = asset,
     )

@@ -261,40 +261,85 @@ HEAD-probe couldn't reach CTAN (transient network), the hint
 names the requiring package — adding `foo` to `ctan_packages`
 explicitly bypasses the probe filter on the next run.
 
-## Limitations
-
-### biblatex extension styles don't work
+## Modern biblatex extension styles
 
 `ctan_packages = ["biblatex-apa"]` (or `biblatex-chicago`,
-`biblatex-ieee`, `biblatex-nature`, …) **does not work** with the
-current toolchain, and won't until Tectonic ships a newer bundle.
+`biblatex-ieee`, `biblatex-nature`, …) **needs an opt-in**.
 
-The reason is a version-coupling chain in DESIGN.md §4.10:
+The reason is a version-coupling chain documented in DESIGN.md §4.10:
 
 - Tectonic's pinned bundle (`tlextras-2022.0r0`) ships
   `biblatex 3.17` and `biber 2.17`.
-- Modern CTAN biblatex extension styles (current `biblatex-apa` 9.20,
+- Modern CTAN biblatex extension styles (current `biblatex-apa` 9.x,
   the actively-maintained Chicago / IEEE / Nature styles, etc.)
   require `biblatex 3.18+`, which itself requires `biber 2.18+` —
   the biblatex `.bcf` control file format is versioned and tightly
   coupled.
 
-Fetching the modern style from CTAN and overlaying it shadows the
-bundle's `apa.bbx` with one that the bundle's biblatex can't parse.
-You'll see something like:
+If you overlay a modern style on top of the bundle's older biblatex,
+the bundle's biblatex 3.17 can't parse the new `.bbx` and you get:
 
 ```
 error: apa.bbx:258: Undefined control sequence
 ```
 
-The bundle's own `apa.bbx` etc. are loaded automatically when you
-just write `\usepackage[style=apa]{biblatex}` without listing
-`biblatex-apa` in `ctan_packages`. That works fine for the older
-styles the bundle ships.
+### The fix: `modern_biblatex` toolchain opt-in
 
-This is tracked alongside the bundle-staleness work in
-[GitHub issue #1](https://github.com/nicklambourne/rules_latex/issues/1);
-modern biblatex support is gated on a fresh upstream bundle.
+Add the `modern_biblatex` attribute to the toolchain tag in your
+workspace's `MODULE.bazel`:
+
+```python
+tectonic = use_extension("@rules_latex//latex/toolchain:extensions.bzl", "tectonic")
+tectonic.toolchain(modern_biblatex = True)
+use_repo(tectonic, "rules_latex_tectonic_toolchains")
+register_toolchains("@rules_latex_tectonic_toolchains//:all")
+```
+
+This makes the toolchain fetch:
+
+- **biblatex 3.21** from CTAN's canonical mirror (URL + SHA pinned
+  in [`latex/private/biblatex_versions.bzl`](https://github.com/nicklambourne/rules_latex/blob/master/latex/private/biblatex_versions.bzl))
+- **biber 2.21** from the mirrored binary release pinned in
+  [`biber_versions.bzl`](https://github.com/nicklambourne/rules_latex/blob/master/latex/private/biber_versions.bzl)
+
+Both get overlaid via `-Z search-path` so they shadow the bundle's
+biblatex/biber pair. Modern extension styles work; the rest of the
+bundle (LaTeX kernel, fonts, non-biblatex packages) is unchanged.
+
+Use it like this:
+
+```python
+latex_document(
+    name = "thesis",
+    main = "thesis.tex",
+    srcs = ["thesis.tex", "references.bib"],
+    ctan_packages = ["biblatex-apa"],
+    biber = True,
+)
+```
+
+### When to leave it off
+
+The default toolchain (no `modern_biblatex`) is the right choice for:
+
+- Documents using the **five core biblatex styles** the bundle
+  ships (`numeric`, `alphabetic`, `authoryear`, `authortitle`,
+  `verbose`). These work fine; no need to override.
+- **Reproducibility-conscious workspaces** that prefer the
+  longer-stable bundle pin to a CTAN-tracked moving target.
+- **Air-gapped builds** — the modern-biblatex repos add two more
+  online-fetch dependencies during setup.
+
+### Risks of `modern_biblatex = True`
+
+- The pinned biblatex / biber versions are tracked here, not by the
+  upstream bundle. Bumping needs a maintainer (refresh procedure in
+  [`biblatex_versions.bzl`](https://github.com/nicklambourne/rules_latex/blob/master/latex/private/biblatex_versions.bzl)).
+- Other packages in the bundle that *interact* with biblatex
+  (`hyperref`, `csquotes`, language definitions) stay on the
+  bundle's version. So far we haven't observed compatibility issues
+  with biblatex 3.21, but the surface is larger than the bundle was
+  designed for.
 
 ### Shadowing risk for other bundle packages
 
