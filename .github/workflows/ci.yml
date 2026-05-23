@@ -252,12 +252,45 @@ jobs:
           wait "$PID" 2>/dev/null || true
           cat /tmp/synctex_serve.log
 
+      - name: Start CTAN fixture mirror
+        run: |
+          # Serve the checked-in CTAN fixtures at a local HTTP port so
+          # //tests/ctan:* don't depend on mirrors.ctan.org availability.
+          # See tests/ctan/fixtures/README.md for the layout and refresh
+          # process. The populate-cache tool reads RULES_LATEX_CTAN_MIRROR
+          # and uses it as the URL prefix; we point it at this server
+          # below.
+          python3 -m http.server 8765 --directory tests/ctan/fixtures \
+            > /tmp/ctan_fixtures.log 2>&1 &
+          echo "CTAN_FIXTURE_PID=$!" >> $GITHUB_ENV
+          # Wait briefly for the server to bind; if it doesn't, the
+          # subsequent tests will fail loudly with a connection refused
+          # rather than time out on real CTAN.
+          for _ in 1 2 3 4 5; do
+            if curl -fsS http://127.0.0.1:8765/ > /dev/null 2>&1 \
+               || curl -fsS http://127.0.0.1:8765/README.md > /dev/null 2>&1; then
+              echo "CTAN fixture mirror up on http://127.0.0.1:8765"
+              break
+            fi
+            sleep 1
+          done
+
       - name: Run //tests/... (Python + Starlark analysistests)
         run: |
           # //tests/... covers the Python tests for the snapshot tool
           # and the SyncTeX parser, plus the analysistests for
-          # latex_document. Fully hermetic; no network needed.
-          bazel test //tests/... --config=ci
+          # latex_document. The //tests/ctan:* integration tests use
+          # RULES_LATEX_CTAN_MIRROR to hit the local fixture server,
+          # not real CTAN, to keep CI hermetic and flake-free.
+          bazel test //tests/... --config=ci \
+            --test_env=RULES_LATEX_CTAN_MIRROR=http://127.0.0.1:8765
+
+      - name: Stop CTAN fixture mirror
+        if: always()
+        run: |
+          if [ -n "${CTAN_FIXTURE_PID:-}" ]; then
+            kill "$CTAN_FIXTURE_PID" 2>/dev/null || true
+          fi
 
       - name: Run latex_test integration target
         working-directory: examples
