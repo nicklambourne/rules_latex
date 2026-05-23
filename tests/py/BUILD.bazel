@@ -94,6 +94,13 @@ sh_test(
     data = _TEST_DATA + ["test_populate_cache_e2e.py"],
 )
 
+sh_test(
+    name = "test_populate_cache_retry",
+    srcs = ["run_pytest.sh"],
+    args = ["tests/py/test_populate_cache_retry.py"],
+    data = _TEST_DATA + ["test_populate_cache_retry.py"],
+)
+
 test_suite(
     name = "py_tests",
     tests = [
@@ -102,6 +109,7 @@ test_suite(
         ":test_pdf_chunks",
         ":test_populate_cache_e2e",
         ":test_populate_cache_hints",
+        ":test_populate_cache_retry",
         ":test_post_build_hook",
         ":test_serve_cache",
         ":test_staging",

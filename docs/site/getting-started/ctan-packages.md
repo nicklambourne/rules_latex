@@ -180,6 +180,29 @@ listing what was tried. Most users won't have to think about this:
 CTAN package names are stable, and the fallbacks cover the common
 naming conventions.
 
+### Retries and mirror overrides
+
+CTAN's mirror network is best-effort, and individual mirrors
+occasionally time out or 5xx. The fetcher retries each URL up to
+three times with exponential backoff (1 s, 2 s, 4 s) on transient
+errors (connection timeouts, DNS hiccups, 5xx responses). 4xx
+responses propagate immediately — those are "the file isn't there",
+and the next URL in the fallback list is tried instead.
+
+If you're behind a corporate firewall, on an air-gapped network, or
+want to pin against a specific mirror for reproducibility, set
+`RULES_LATEX_CTAN_MIRROR`:
+
+```bash
+bazel build //:thesis \
+    --action_env=RULES_LATEX_CTAN_MIRROR=https://mirror.your-org.com/CTAN
+```
+
+The value is used as a URL prefix in place of `https://mirrors.ctan.org`.
+The same env var is what CI uses to point at a local fixture server
+(see `tests/ctan/fixtures/`) and avoid depending on real CTAN
+availability for the integration tests.
+
 ## Transitive dependencies
 
 `ctan_packages` doesn't resolve dependencies automatically — you list

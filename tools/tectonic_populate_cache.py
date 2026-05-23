@@ -28,10 +28,83 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
+
+
+# CTAN mirror URL prefix. Overridable via env so that:
+#   * CI can point at a checked-in fixture mirror (avoids real-CTAN flake).
+#   * Enterprise users can point at a private/air-gapped mirror.
+# The default lands on the round-robin CTAN mirror redirect.
+CTAN_MIRROR = os.environ.get(
+    "RULES_LATEX_CTAN_MIRROR", "https://mirrors.ctan.org"
+).rstrip("/")
+
+# Retry policy for transient network errors during CTAN fetches.
+# Three attempts with exponential backoff (1s, 2s, 4s) is the
+# standard "polite-but-actually-helps" shape — covers a transient
+# DNS hiccup or one bad mirror redirect without burning minutes
+# during a genuine outage.
+_RETRY_MAX_ATTEMPTS = 3
+_RETRY_BASE_DELAY_S = 1.0
+
+
+def _retry_urlretrieve(
+    url: str,
+    dest: Path,
+    *,
+    max_attempts: int = _RETRY_MAX_ATTEMPTS,
+    base_delay: float = _RETRY_BASE_DELAY_S,
+    sleep=time.sleep,
+) -> None:
+    """``urlretrieve`` with retries on transient errors.
+
+    Retries up to ``max_attempts`` times on ``URLError`` (connection
+    refused, timeout, DNS failure, TLS hiccup) and on ``HTTPError``
+    with a 5xx status. 4xx codes propagate immediately — those are
+    "the file isn't there", and the caller already handles 404 by
+    falling through to the next URL.
+
+    Backoff is exponential: ``base_delay * 2**(attempt-1)`` between
+    attempts (1s, 2s, 4s with the defaults). ``sleep`` is a seam
+    for tests.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            urllib.request.urlretrieve(url, dest)
+            return
+        except urllib.error.HTTPError as e:
+            last_exc = e
+            if 500 <= e.code < 600 and attempt < max_attempts:
+                delay = base_delay * (2 ** (attempt - 1))
+                print(
+                    f"  HTTP {e.code} on attempt {attempt}/{max_attempts}; "
+                    f"retrying in {delay:g}s...",
+                    file=sys.stderr,
+                )
+                sleep(delay)
+                continue
+            raise
+        except urllib.error.URLError as e:
+            last_exc = e
+            if attempt < max_attempts:
+                delay = base_delay * (2 ** (attempt - 1))
+                print(
+                    f"  network error on attempt {attempt}/{max_attempts}: "
+                    f"{e.reason}; retrying in {delay:g}s...",
+                    file=sys.stderr,
+                )
+                sleep(delay)
+                continue
+            raise
+    # Loop only exits via return or raise; this is unreachable but
+    # appeases the type checker.
+    if last_exc is not None:
+        raise last_exc
 
 # Allow this script to be run directly (bazel build) or from runfiles
 # (bazel run), by locating staging.py next to it on disk.
@@ -144,10 +217,10 @@ def download_ctan_package(package: str, dest_dir: Path) -> set[str]:
     the shared TDS overlay).
     """
     urls = [
-        f"https://mirrors.ctan.org/install/macros/latex/contrib/{package}.tds.zip",
-        f"https://mirrors.ctan.org/macros/latex/contrib/{package}.zip",
-        f"https://mirrors.ctan.org/macros/latex/contrib/biblatex-contrib/{package}.zip",
-        f"https://mirrors.ctan.org/macros/latex/contrib/biblatex-contrib/{package}/{package}.zip",
+        f"{CTAN_MIRROR}/install/macros/latex/contrib/{package}.tds.zip",
+        f"{CTAN_MIRROR}/macros/latex/contrib/{package}.zip",
+        f"{CTAN_MIRROR}/macros/latex/contrib/biblatex-contrib/{package}.zip",
+        f"{CTAN_MIRROR}/macros/latex/contrib/biblatex-contrib/{package}/{package}.zip",
     ]
 
     archive = dest_dir / f"{package}.zip"
@@ -156,7 +229,7 @@ def download_ctan_package(package: str, dest_dir: Path) -> set[str]:
     for url in urls:
         try:
             print(f"Downloading CTAN package {package} from {url}...", file=sys.stderr)
-            urllib.request.urlretrieve(url, archive)
+            _retry_urlretrieve(url, archive)
             print(f"Downloaded {archive.stat().st_size} bytes for {package}", file=sys.stderr)
             break
         except urllib.error.HTTPError as e:
@@ -168,14 +241,14 @@ def download_ctan_package(package: str, dest_dir: Path) -> set[str]:
                 f"HTTP {e.code} fetching CTAN package '{package}' from {url}: {e.reason}"
             )
         except urllib.error.URLError as e:
-            # Connection refused / timed out / DNS failure / TLS error.
-            # These are usually transient — surface a one-liner instead
-            # of a 40-line urllib traceback. The retry suggestion is
-            # genuine: CTAN mirror availability fluctuates.
+            # We retried inside _retry_urlretrieve and still failed.
+            # Surface a one-liner instead of a 40-line urllib traceback.
             raise SystemExit(
-                f"Network error fetching CTAN package '{package}' from {url}: "
-                f"{e.reason}. CTAN mirrors can be flaky; try again, or set "
-                f"a specific mirror via HTTPS_PROXY / configure DNS."
+                f"Network error fetching CTAN package '{package}' from {url} "
+                f"(after {_RETRY_MAX_ATTEMPTS} attempts): {e.reason}. CTAN "
+                f"mirrors can be flaky; try again later, point "
+                f"RULES_LATEX_CTAN_MIRROR at a specific mirror, or check "
+                f"network/DNS."
             )
     else:
         raise SystemExit(
