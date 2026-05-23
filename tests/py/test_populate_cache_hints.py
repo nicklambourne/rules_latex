@@ -268,5 +268,119 @@ class PrintDepSummaryTest(unittest.TestCase):
         self.assertIn("no upstream", out.getvalue())
 
 
+class ExtractBiblatexVersionMismatchTest(unittest.TestCase):
+    """Detector for the modern-biblatex shadowing failure signature."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="rules_latex_test_")
+        self.log = Path(self.tmp.name) / "doc.log"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_returns_none_when_log_missing(self):
+        self.assertIsNone(tpc._extract_biblatex_version_mismatch(self.log))
+
+    def test_matches_bbx_error(self):
+        # Real-world: this is exactly what biblatex-apa 9.x against
+        # bundle's biblatex 3.17 produces.
+        self.log.write_text(
+            "note: Running TeX ...\n"
+            "error: apa.bbx:258: Undefined control sequence\n"
+            "error: halted on potentially-recoverable error as specified\n"
+        )
+        self.assertEqual(
+            tpc._extract_biblatex_version_mismatch(self.log), "apa.bbx"
+        )
+
+    def test_matches_cbx_error(self):
+        # The citation style file can be the one that breaks first
+        # depending on which macro got the update first.
+        self.log.write_text(
+            "error: chicago.cbx:142: Undefined control sequence\n"
+        )
+        self.assertEqual(
+            tpc._extract_biblatex_version_mismatch(self.log), "chicago.cbx"
+        )
+
+    def test_matches_lbx_error(self):
+        self.log.write_text(
+            "error: american-apa.lbx:88: Undefined control sequence\n"
+        )
+        self.assertEqual(
+            tpc._extract_biblatex_version_mismatch(self.log),
+            "american-apa.lbx",
+        )
+
+    def test_does_not_match_generic_undefined_control_sequence(self):
+        # Bare "Undefined control sequence" from a .tex file (the
+        # user typo'd a macro) shouldn't trigger this hint — we only
+        # care about errors originating in extension style files.
+        self.log.write_text(
+            "main.tex:42: Undefined control sequence\n"
+        )
+        self.assertIsNone(tpc._extract_biblatex_version_mismatch(self.log))
+
+    def test_does_not_match_sty_undefined_control_sequence(self):
+        # A user-fetched .sty erroring shouldn't be misattributed to
+        # the biblatex coupling.
+        self.log.write_text(
+            "error: foo.sty:1: Undefined control sequence\n"
+        )
+        self.assertIsNone(tpc._extract_biblatex_version_mismatch(self.log))
+
+
+class FormatBiblatexVersionHintTest(unittest.TestCase):
+    def test_includes_offending_file(self):
+        msg = tpc._format_biblatex_version_hint(
+            "apa.bbx", ctan_packages=[],
+        )
+        self.assertIn("apa.bbx", msg)
+
+    def test_names_likely_seed_packages(self):
+        # The hint should specifically call out biblatex-* entries in
+        # ctan_packages, since those are the likely culprits.
+        msg = tpc._format_biblatex_version_hint(
+            "apa.bbx", ctan_packages=["biblatex-apa", "lipsum"],
+        )
+        self.assertIn("biblatex-apa", msg)
+        # Non-biblatex entries shouldn't appear in the "likely culprits"
+        # callout (they're unrelated).
+        # We can't strictly assert lipsum is absent, but the seed
+        # clause should not include it.
+        self.assertNotIn("biblatex-apa, lipsum", msg)
+        self.assertNotIn("lipsum, biblatex-apa", msg)
+
+    def test_includes_module_bazel_snippet(self):
+        # The fix is verbatim:
+        # `tectonic.toolchain(modern_biblatex = True)`. The hint
+        # should include it so users can copy-paste.
+        msg = tpc._format_biblatex_version_hint(
+            "apa.bbx", ctan_packages=[],
+        )
+        self.assertIn("modern_biblatex = True", msg)
+
+    def test_includes_docs_link(self):
+        msg = tpc._format_biblatex_version_hint(
+            "apa.bbx", ctan_packages=[],
+        )
+        self.assertIn(
+            "nicklambourne.github.io/rules_latex/getting-started/"
+            "bibliography",
+            msg,
+        )
+
+    def test_handles_no_biblatex_seeds(self):
+        # If the user's ctan_packages doesn't contain any biblatex-*
+        # entries (rare — they might be using ctan_packages =
+        # ["apa7"] directly, for instance), the hint should still
+        # work, just without the "likely culprit" callout.
+        msg = tpc._format_biblatex_version_hint(
+            "apa.bbx", ctan_packages=["apa7"],
+        )
+        self.assertNotIn("likely culprit", msg)
+        self.assertIn("modern_biblatex = True", msg)
+
+
 if __name__ == "__main__":
     unittest.main()
