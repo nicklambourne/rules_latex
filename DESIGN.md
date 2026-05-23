@@ -792,12 +792,16 @@ These are deliberately out of scope for v0.1 but worth flagging.
    answer for that platform. Tracked in
    [GitHub issue #10](https://github.com/nicklambourne/rules_latex/issues/10).
 10. **Rule-version env var to prevent declared-output cache
-    poisoning.** Bazel's action cache key doesn't include the set of
-    declared outputs, so adding or removing an optional output on a
-    rule can silently match a stale cache entry. Hit once for the
-    synctex case (see commit `0d4639c`, reverted by `1978f5d`). The
-    defensive fix is to bake a schema version into the action's env,
-    plus an analysistest that catches forgotten bumps. Tracked in
+    poisoning.** **Shipped in v0.4.** The
+    `RULES_LATEX_ACTION_SCHEMA` constant in
+    `latex/private/action_schema.bzl` is now baked into the env of
+    `TectonicPopulateCache` and `TectonicCompile`; bumping it
+    invalidates any pre-existing action-cache entries that were
+    keyed against an older output schema. The
+    `action_schema_canary_test` analysistest snapshots the
+    declared-output set of a canonical `latex_document` config
+    and fails on drift, prompting the developer to bump the
+    constant alongside the output-set change. Tracked in
     [GitHub issue #11](https://github.com/nicklambourne/rules_latex/issues/11).
 11. **Python toolchain hermeticity (sh_test vs rules_python).**
     Tests use system `python3` via `sh_test` rather than `py_test`

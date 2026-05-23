@@ -191,6 +191,17 @@ package and reintroduce flake.
   the snapshot wins and the CTAN list becomes documentation. See
   [`docs/site/getting-started/ctan-packages.md`](docs/site/getting-started/ctan-packages.md)
   "Hermeticity" section for the explicit semantics.
+- **Declared-output cache poisoning.** Bazel's action cache key
+  doesn't include the set of declared outputs. If you add or
+  remove an output from a rule under `latex/private/`, also bump
+  `RULES_LATEX_ACTION_SCHEMA` in
+  [`latex/private/action_schema.bzl`](latex/private/action_schema.bzl)
+  and the matching snapshot in
+  [`tests/starlark/latex_document_test.bzl`](tests/starlark/latex_document_test.bzl)
+  (`_EXPECTED_ACTION_SCHEMA` + `expected` basenames list). The
+  `action_schema_canary_test` analysistest will fail if you change
+  the output set without updating the snapshot, with a message
+  pointing back here.
 
 ## When in doubt
 
