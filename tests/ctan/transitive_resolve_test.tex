@@ -1,0 +1,24 @@
+% Verifies the CTAN auto-resolver discovers and fetches transitive
+% deps, and — crucially — that fetched packages are actually
+% consumable by tectonic (via -Z search-path).
+%
+% test-pkg-a is a synthetic CTAN package (lives only in
+% tests/ctan/fixtures/, not on real CTAN) whose .sty does
+% \RequirePackage{test-pkg-b}. The test target only lists test-pkg-a
+% in `ctan_packages`; if the resolver works end-to-end, test-pkg-b
+% is fetched transparently and the document compiles. If the
+% resolver doesn't run (or the fetched files aren't reaching
+% tectonic), the compile fails with
+%   `! LaTeX Error: File 'test-pkg-b.sty' not found.`
+%
+% Why these packages don't exist on real CTAN: real-world fetches
+% of biblatex-style packages (e.g. biblatex-apa) hit a version
+% mismatch against the bundle's pinned biblatex 3.17 / biber 2.17.
+% See docs/site/getting-started/ctan-packages.md "Limitations".
+% Synthetic packages let us test the mechanism cleanly.
+\documentclass{article}
+\usepackage{test-pkg-a}
+
+\begin{document}
+\testpkga\ and \testpkgb.
+\end{document}

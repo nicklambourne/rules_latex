@@ -516,6 +516,34 @@ def _merge_dirs(src: Path, dst: Path) -> None:
             shutil.move(str(item), str(target))
 
 
+def _ctan_search_paths(ctan_dir: Path) -> list[str]:
+    """Enumerate directories under ``ctan_dir`` that contain package files.
+
+    Tectonic's ``-Z search-path=<dir>`` is the actual mechanism for
+    "look for files here in addition to the bundle". It's *flat* — no
+    recursive descent into subdirectories — so we hand tectonic one
+    flag per directory that actually contains a
+    ``\\RequirePackage``-targetable file. The normalised CTAN overlay
+    puts files at various TDS depths (``tex/latex/contrib/<pkg>/``,
+    ``tex/latex/biblatex/bbx/``, …); each such directory becomes one
+    search-path entry.
+
+    Note: this replaces an earlier TEXMFHOME-based approach that
+    appeared to work but didn't — tectonic doesn't honour TEXMFHOME at
+    all (that's a kpathsea concept). The bundle was the only source
+    of files for those compiles; fetched packages were ignored.
+
+    Returns absolute paths as strings, sorted for determinism.
+    """
+    if not ctan_dir.exists():
+        return []
+    dirs: set[Path] = set()
+    for path in ctan_dir.rglob("*"):
+        if path.is_file() and path.suffix.lower() in _PACKAGE_FILE_EXTS:
+            dirs.add(path.parent.resolve())
+    return [str(d) for d in sorted(dirs)]
+
+
 # File extensions we scan for `\RequirePackage` / `\usepackage` etc.
 # Other CTAN file types (.tex documentation, .pdf, .map) don't pull
 # in packages at compile time.
@@ -682,9 +710,10 @@ def run_tectonic(
     env = os.environ.copy()
     env["TECTONIC_CACHE_DIR"] = str(cache_dir.resolve())
     env["LC_ALL"] = "C.UTF-8"
-
-    if ctan_dir is not None:
-        env["TEXMFHOME"] = str(ctan_dir.resolve())
+    # NB: TEXMFHOME used to be set to ctan_dir here. It was a no-op
+    # — tectonic doesn't honour TEXMFHOME at all, that's a kpathsea
+    # concept. Fetched packages reach tectonic via `-Z search-path`
+    # flags constructed below from `_ctan_search_paths`.
 
     biber_dir_owned: tempfile.TemporaryDirectory[str] | None = None
     if biber is not None:
@@ -705,6 +734,15 @@ def run_tectonic(
         "-X",
         "compile",
         "--keep-logs",
+    ]
+    # One `-Z search-path` per directory under ctan_dir that holds
+    # package files. Tectonic prefers cwd > search-path entries >
+    # bundle, so this overlays fetched packages without disturbing
+    # documents that resolve everything from the bundle.
+    if ctan_dir is not None:
+        for search_dir in _ctan_search_paths(ctan_dir):
+            cmd.extend(["-Z", "search-path={}".format(search_dir)])
+    cmd += [
         "--outdir",
         str(main_in_workdir.parent),
         # Pass main by basename now that cwd is its parent: this is

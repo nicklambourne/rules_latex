@@ -1,19 +1,22 @@
-"""A paper using a CTAN bibliography style not in the Tectonic bundle.
+"""KNOWN BROKEN: a paper using a CTAN bibliography style not in the
+Tectonic bundle.
 
-Demonstrates:
-  * `ctan_packages = ["biblatex-apa"]` to pull a modern APA citation
-    style (post-2022, not in the frozen tlextras bundle) from CTAN
-    in TDS format at build time.
-  * Composition of `ctan_packages` with `biber = True` — a common
-    pairing because the citation styles users actually want
-    (APA, Chicago, IEEE, ...) almost all live outside the bundle.
+This example was originally written to demonstrate
+`ctan_packages = ["biblatex-apa"]`. It currently fails: the fetched
+biblatex-apa 9.20 requires biblatex 3.18+, but the bundle ships
+biblatex 3.17 / biber 2.17 (DESIGN.md §4.10). The mismatch surfaces
+as:
 
-When you don't need this:
-  * The five core biblatex styles (numeric / alphabetic / authoryear
-    / authortitle / verbose) ship with the bundle. See //paper for
-    the numeric variant.
-  * Anything that compiles with `\\usepackage{...}` lines that all
-    resolve cleanly without `ctan_packages` — that's the ~95% case.
+    error: apa.bbx:258: Undefined control sequence
+
+For the canonical explanation see the "Limitations" section in
+docs/site/getting-started/ctan-packages.md. Modern biblatex support
+is gated on a fresh upstream bundle
+(https://github.com/nicklambourne/rules_latex/issues/1).
+
+The targets are tagged `manual` so wildcard builds (`bazel build
+//...`) skip them. The files are kept as a historical reference and
+as the seed for a future working example once the bundle bumps.
 """
 
 load("@rules_latex//latex:defs.bzl", "latex_document", "latex_test")
@@ -27,6 +30,7 @@ latex_document(
     biber = True,
     ctan_packages = ["biblatex-apa"],
     main = "paper.tex",
+    tags = ["manual"],  # known broken; see docstring at top of file
     visibility = ["//visibility:public"],
 )
 
@@ -42,4 +46,5 @@ latex_test(
     # Confirms biblatex-apa actually loaded (not just silently
     # falling back to a default style).
     required_patterns = ["apa"],
+    tags = ["manual"],  # known broken; see docstring at top of file
 )
