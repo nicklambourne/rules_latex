@@ -37,6 +37,14 @@ jobs:
       # tests/ctan/fixtures/). The mirror also keeps the lipsum +
       # biblatex tests flake-free, since real CTAN occasionally
       # times out.
+      #
+      # The trailing backslash on the bazel test line is load-bearing.
+      # The reusable workflow inlines this value into a run: block
+      # that appends `--disk_cache=... --repository_cache=...`
+      # directly after it; without the line continuation those flags
+      # get parsed as a separate shell command and fail with
+      # `--disk_cache=...: command not found` (exit 127). See
+      # https://github.com/bazel-contrib/.github/blob/v7.5.0/.github/workflows/release_ruleset.yaml
       bazel_test_command: |
         set -e
         python3 -m http.server 8765 --directory tests/ctan/fixtures \
@@ -50,7 +58,7 @@ jobs:
           sleep 1
         done
         bazel test //... //tests/... \
-          --test_env=RULES_LATEX_CTAN_MIRROR=http://127.0.0.1:8765
+          --test_env=RULES_LATEX_CTAN_MIRROR=http://127.0.0.1:8765 \
       prerelease: false
       release_files: |
         rules_latex-*.tar.gz
