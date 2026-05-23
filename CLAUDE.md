@@ -1,0 +1,161 @@
+# CLAUDE.md
+
+Operational notes for Claude when working on this repo. Not a replacement
+for [DESIGN.md](DESIGN.md) (architecture) or [docs/site/](docs/site/)
+(user-facing).
+
+## Keep docs in sync with code
+
+**Whenever a feature is added, removed, or changed, update its
+documentation in the same change.** Three places to check, in order:
+
+1. **`docs/site/`** — user-facing pages, rendered by mkdocs at
+   <https://nicklambourne.github.io/rules_latex/>. Source of truth
+   for "how do I use this." Subpages live under `getting-started/`,
+   `concepts/`, and `api/` (the API pages are stardoc-generated;
+   see below).
+
+2. **`README.md`** — top-of-funnel summary. Update the Features
+   section when a user-visible attribute or rule changes. Update
+   the Why table only if a row's claim is no longer accurate.
+
+3. **`DESIGN.md`** — architectural rationale. Update when *why*
+   the code does something changes, not just *what*. New open
+   questions / future work go in §5.
+
+For rule changes that touch docstrings, regenerate the API pages:
+
+```bash
+bazel run //docs:regenerate
+```
+
+This rewrites `docs/site/api/{rules,providers,toolchain}.md` from
+current docstrings. CI fails the `Verify Stardoc output matches
+committed copy` job if you skip this step. Commit the regenerated
+files alongside the docstring change.
+
+**Quick rule of thumb:** if a PR adds a new rule attribute, a new
+rule, a new env var, or removes one, the change touches at least
+one file under `docs/site/` *and* runs `bazel run //docs:regenerate`.
+If it doesn't, you're probably missing something.
+
+## Commands
+
+```bash
+# Build everything
+bazel build //... --config=ci
+
+# Run the unit + analysistest suite (fast, hermetic, no network)
+bazel test //tests/...
+
+# Run an example end-to-end (each examples/<name> is its own workspace)
+cd examples && bazel build //cv:cv
+cd examples && bazel test //cv:cv_compiles
+
+# Regenerate stardoc API pages
+bazel run //docs:regenerate
+
+# Lint
+buildifier --mode=check --lint=warn -r .
+buildifier --mode=fix tests/ctan/BUILD.bazel   # auto-fix one file
+```
+
+## Repo conventions
+
+- **Bzlmod-only.** No `WORKSPACE`; everything goes through `MODULE.bazel`
+  and `latex/toolchain/extensions.bzl`. Compatibility line: Bazel 8.0+
+  (CI matrix tests 8.0.0, 8.7.0, 9.1.0).
+- **System `python3`, no `rules_python`.** Tooling under `tools/` is
+  stdlib-only. Python unit tests run as `sh_test` wrappers around
+  `python3 -m unittest`. See [DESIGN.md §5 item #11](DESIGN.md) for
+  the trade-off and the triggers that would justify revisiting.
+- **Each `examples/<name>` is its own Bazel workspace** with its own
+  `MODULE.bazel` (via `examples/MODULE.bazel`). Running `bazel build
+  //examples/cv:cv` from the repo root fails with "package is
+  considered deleted" — that's intentional. Always `cd examples`
+  first when working with the examples.
+- **Tectonic is behind toolchain resolution.** Tests that need the
+  tectonic binary go through `latex_test`; we don't expose a bare
+  `:tectonic` label for general use.
+
+## CTAN package fetching
+
+User-facing feature: `ctan_packages = ["foo"]` on `latex_document` /
+`latex_test` / `latex_cache_snapshot`. Implementation lives in
+[`tools/tectonic_populate_cache.py`](tools/tectonic_populate_cache.py).
+
+Key conventions worth knowing before changing this code:
+
+- **Mirror URL is overridable via `RULES_LATEX_CTAN_MIRROR`.** Default
+  is `https://mirrors.ctan.org`. CI sets it to a local fixture HTTP
+  server (see below). Enterprise users use it for internal mirrors.
+- **Per-package dep map.** `download_ctan_package` scans each package's
+  extract tree *pre-normalisation* (while package attribution is
+  still clean) and returns the set of upstream references. The map
+  is printed at populate time (proactive dep summary) and consulted
+  on failure to produce the targeted hint.
+- **Failure-hint formatter (`_format_missing_file_hint`)** has three
+  cases: already-listed (TDS-layout issue), referenced-by-fetched-pkg
+  ("add 'X' to ctan_packages"), unknown ("typo or missing CTAN
+  package"). The unit tests at
+  [`tests/py/test_populate_cache_hints.py`](tests/py/test_populate_cache_hints.py)
+  cover all three cases plus edge cases (Latin-1 archives,
+  comma-separated `\usepackage{a,b,c}`, biblatex `.bbx` files).
+- **Retry with backoff.** `_retry_urlretrieve` is 3 attempts with
+  1s/2s/4s exponential backoff on URLError and 5xx HTTPError; 4xx
+  propagates immediately and the caller falls through to the next
+  URL in the fallback chain.
+
+### CTAN test fixtures (CI hermeticity)
+
+`//tests/ctan:*` integration tests would hit real CTAN on every CI
+run — historically the single biggest source of CI flake. Solution:
+
+- Pre-downloaded TDS zips live under
+  [`tests/ctan/fixtures/`](tests/ctan/fixtures/), in a directory tree
+  that mirrors CTAN's URL structure (`macros/latex/contrib/...`).
+- The CI workflow ([`​.github/workflows/ci.yml`](.github/workflows/ci.yml))
+  starts `python3 -m http.server` rooted at that dir before tests,
+  sets `--test_env=RULES_LATEX_CTAN_MIRROR=http://127.0.0.1:8765`,
+  and kills the server in `if: always()`.
+- See [`tests/ctan/fixtures/README.md`](tests/ctan/fixtures/README.md)
+  for the refresh procedure when CTAN updates a fixture package.
+
+When adding a new `ctan_packages` test, the fixture needs to be
+checked in too — otherwise CI will fall back to real CTAN for that
+package and reintroduce flake.
+
+## Maintainer-only state
+
+- **`.github/MAINTAINER_TODO.md`** — punch list for maintainer-only
+  follow-ups (currently: capture a `latex_serve_web` screenshot for
+  the README). Not rendered to docs site, not surfaced anywhere
+  user-facing. Add items here rather than in the README.
+
+## Things that have bitten us before
+
+- **String-escape bugs in shell-script templates.** PR #18 introduced
+  a `" \\" + " \\".join([...])` pattern in `latex_test.bzl` that
+  emitted a stray leading backslash when `ctan_packages` was empty.
+  PR #19 tried to fix it and produced syntax errors in the generated
+  bash. PR #20 cleaned it up by switching to the same pattern
+  `src_args` / `pkg_file_args` already use: `" \\\n    ".join([...])`,
+  no conditional needed. Same twin bug existed in
+  `latex_cache_snapshot.bzl`; fixed in PR #25. If you find another
+  `" \\" + " \\".join(...)` anywhere, it's wrong.
+- **Hermeticity violations from tests.** Tests that need network
+  must go through the CTAN fixture mirror (see above) or be
+  explicitly tagged. Don't add new network-dependent tests without
+  a fixture or a justification.
+- **Implicit cache + checked-in cache shadowing.** When a
+  `latex_document` has both `cache = "..."` and `ctan_packages = [...]`,
+  the snapshot wins and the CTAN list becomes documentation. See
+  [`docs/site/getting-started/ctan-packages.md`](docs/site/getting-started/ctan-packages.md)
+  "Hermeticity" section for the explicit semantics.
+
+## When in doubt
+
+Read [DESIGN.md](DESIGN.md). It's deliberately thorough and answers
+most "why does it work this way" questions. §4.4 (network policy),
+§4.7 (live preview), §4.9 (biber), and §5 (open questions) are the
+sections most relevant to active work.
