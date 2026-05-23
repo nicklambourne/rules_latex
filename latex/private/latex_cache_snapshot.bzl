@@ -84,12 +84,10 @@ def _latex_cache_snapshot_impl(ctx):
         '--biber "{}"'.format(biber_file.short_path) if biber_file else ""
     )
 
-    ctan_args = ""
-    if ctx.attr.ctan_packages:
-        ctan_args = "  \\" + "  \\".join([
-            '--ctan-package "{}"'.format(pkg)
-            for pkg in ctx.attr.ctan_packages
-        ])
+    ctan_args = " \\\n    ".join([
+        '--ctan-package "{}"'.format(pkg)
+        for pkg in ctx.attr.ctan_packages
+    ])
 
     script = """\
 #!/usr/bin/env bash
