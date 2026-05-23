@@ -4,9 +4,91 @@ All notable changes to `rules_latex` are documented here. This project follows
 [Semantic Versioning](https://semver.org/) once v1.0.0 is reached; before
 that, expect breaking changes in any v0.x release.
 
-## [Unreleased]
+## [0.4.0] - 2026-05-23
 
 ### Added
+
+- **`tectonic.toolchain(modern_biblatex = True)` opt-in.** Makes
+  the toolchain extension fetch biblatex 3.21 from CTAN and biber
+  2.21 from the rules_latex GitHub mirror, and overlay them on top
+  of the bundle via Tectonic's `-Z search-path` flag. Required for
+  modern biblatex extension styles (`biblatex-apa` 9.x,
+  `biblatex-chicago`, `biblatex-ieee`, `biblatex-nature`, etc.)
+  which need biblatex 3.18+ / biber 2.18+ — the bundle pins 3.17 /
+  2.17, an incompatibility documented in DESIGN.md §4.10. Default
+  workspaces stay on the stable 3.17 / 2.17 pair, which is fine
+  for the five core biblatex styles the bundle ships. See
+  `docs/site/getting-started/bibliography.md#modern-citation-styles`.
+
+- **CTAN auto-resolve for transitive dependencies.** Listing
+  `ctan_packages = ["biblatex-apa"]` (or any other entry) now also
+  auto-fetches everything that package transitively requires from
+  CTAN that isn't in Tectonic's bundle. The resolver scans each
+  fetched package's `.sty` / `.cls` / `.bbx` / `.cbx` / `.lbx` /
+  `.dbx` files for `\RequirePackage` / `\usepackage` /
+  `\LoadClass`, filters references against a shipped bundle
+  manifest (`latex/toolchain/bundle_manifest.txt`, ~6100 entries
+  for tlextras-2022.0r0), HEAD-probes CTAN for any name not in the
+  manifest, and recurses. Single compile pass; users only list
+  entry-point packages.
+
+- **`RULES_LATEX_CTAN_MIRROR` environment variable.** Replaces the
+  hardcoded `https://mirrors.ctan.org` URL prefix with a
+  configurable one. Three audiences: CI (point at a local fixture
+  server to avoid real-CTAN flake), enterprise users behind firewalls
+  with internal CTAN mirrors, and reproducibility-conscious users
+  pinning a specific mirror.
+
+- **Retry-with-backoff on CTAN downloads.** `_retry_urlretrieve`
+  wraps each URL attempt up to three times with 1s/2s/4s
+  exponential backoff. Retries `URLError` (timeouts, DNS, TLS) and
+  `HTTPError` with 5xx status; 4xx propagates immediately so the
+  existing fallback chain takes over. Helps real users on flaky
+  networks just as much as it helps CI.
+
+- **Targeted failure-path hints.** When the populate-cache step
+  fails, the tool now greps the tectonic `.log` for the missing-
+  file LaTeX error AND for the biblatex/biber version-mismatch
+  signature. The first emits a hint that names the requiring
+  package and suggests adding the missing name to
+  `ctan_packages`; the second points at the
+  `modern_biblatex = True` opt-in. Both include direct links to
+  the relevant docs section.
+
+- **Proactive `ctan_packages` dep map.** The populate step prints
+  a per-package summary of upstream `\RequirePackage`-style
+  references so users see what each fetched package pulled in, even
+  on successful builds.
+
+- **CTAN fixture mirror for hermetic CI.** Checked-in TDS zips at
+  `tests/ctan/fixtures/macros/latex/contrib/{,biblatex-contrib/}*.zip`
+  served by a local `python3 -m http.server` started by the CI
+  workflow. Integration tests in `//tests/ctan:*` now run
+  ~4–8× faster than against real CTAN and are flake-free. See
+  `tests/ctan/fixtures/README.md` for the refresh procedure.
+
+- **SyncTeX forward-sync.** New `POST /sync/forward` endpoint on
+  `latex_serve_web`. Maps a source `(file, line)` tuple to a PDF
+  location via the same SyncTeX index that powers reverse-sync;
+  broadcasts a JSON `{"type": "jump", ...}` event over the
+  existing SSE channel; the browser scrolls the matching page
+  into view and flashes a yellow highlight overlay at the box.
+  Editors / CLI shims invoke via curl. Five documented response
+  shapes (success / unmatched / file unknown / synctex not
+  produced / synctex disabled). Includes editor-integration
+  snippets for Neovim, VS Code, and Emacs at
+  `docs/site/getting-started/live-preview.md#synctex-forward-sync`.
+
+- **`RULES_LATEX_ACTION_SCHEMA` cache-key contribution.** Baked
+  into the env of `TectonicPopulateCache` and `TectonicCompile`
+  so adding or removing a declared output on those rules
+  invalidates pre-existing action-cache entries (Bazel's action
+  cache key doesn't include declared outputs; this paper-cuts the
+  class of bug we hit once on synctex). A new
+  `action_schema_canary_test` analysistest snapshots the
+  declared-output set + verifies the env wiring and fails on
+  drift, prompting the developer to bump the constant. See
+  `latex/private/action_schema.bzl` and DESIGN.md §5 item 10.
 
 - **`ctan_packages` attribute on `latex_document`, `latex_test`, and
   `latex_cache_snapshot`.** Accepts a list of CTAN package names
@@ -63,6 +145,20 @@ that, expect breaking changes in any v0.x release.
 
 ### Fixed
 
+- **Fetched CTAN packages now actually reach tectonic.** The
+  original `ctan_packages` plumbing set `TEXMFHOME` on the
+  tectonic invocation, which was a no-op: tectonic doesn't honour
+  TEXMFHOME (it's a kpathsea concept, and tectonic uses its own
+  simpler resolver). Fetched packages were downloaded and
+  extracted but tectonic never consumed them — the bundle served
+  every request. Discovered while writing the first end-to-end
+  test for the auto-resolver. The fix: switch both the populate-
+  cache and compile actions to Tectonic's `-Z search-path` flag,
+  walking `ctan_pkgs/` for directories holding package files and
+  emitting one flag per directory. Tectonic's lookup is now
+  cwd → search-path → bundle, exactly as we'd assumed it
+  already was. See DESIGN.md §5 item 12.
+
 - **HTTP HEAD support.** `latex_serve_web`'s embedded server now
   honours `HEAD` requests per HTTP/1.1: every GET endpoint
   returns the same status code and headers under HEAD, with an
@@ -77,6 +173,14 @@ that, expect breaking changes in any v0.x release.
   `end_headers()` swaps `self.wfile` to a sink so subsequent
   body writes no-op. The SSE handler (`/events`) short-circuits
   on HEAD to avoid leaking listener threads.
+
+- **Stray-backslash bug in generated bash scripts** in
+  `latex_test.bzl` and `latex_cache_snapshot.bzl`. The
+  `" \\" + " \\".join([...])` pattern emitted a leading lone
+  backslash when `ctan_packages` was empty (PRs #20 / #25).
+  Switched to the same `" \\\n    ".join([...])` pattern that
+  `src_args` and `pkg_file_args` already use — works with both
+  empty and non-empty lists, no conditional needed.
 
 ### Added
 
