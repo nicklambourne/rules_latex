@@ -111,8 +111,24 @@ Key conventions worth knowing before changing this code:
   ```
 - **Bundle filter is load-bearing.** Without the manifest, the
   resolver would over-fetch and shadow bundle-resident packages
-  via `TEXMFHOME`, breaking the biblatex / biber version coupling
-  (DESIGN.md §4.10). Don't bypass it.
+  via the `-Z search-path` overlay, breaking the biblatex / biber
+  version coupling (DESIGN.md §4.10). Don't bypass it.
+- **Tectonic ignores `TEXMFHOME`.** Don't add it — it's a kpathsea
+  concept tectonic doesn't implement. Fetched packages reach
+  tectonic through `-Z search-path` flags; both
+  `tools/tectonic_populate_cache.py` and `tools/tectonic_compile.py`
+  walk `ctan_pkgs/` and emit one flag per directory containing
+  package files. An earlier `TEXMFHOME=ctan_dir` plumbing was a
+  no-op that made the integration look like it worked when the
+  bundle was actually serving every request — see DESIGN.md §5
+  item #12.
+- **biblatex extension styles are currently broken.** Modern
+  biblatex-apa / -chicago / -ieee / -nature etc. require biblatex
+  3.18+ / biber 2.18+, but the bundle pins 3.17 / 2.17. Fetching
+  newer versions overlays them via `-Z search-path` and biblatex
+  3.17 then chokes on the newer control file format. Tracked in
+  [#1](https://github.com/nicklambourne/rules_latex/issues/1); gated
+  on bundle bump.
 - **Failure-hint formatter (`_format_missing_file_hint`)** has three
   cases: already-listed (TDS-layout issue), referenced-by-fetched-pkg
   ("add 'X' to ctan_packages"), unknown ("typo or missing CTAN

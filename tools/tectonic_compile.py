@@ -71,6 +71,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from staging import PkgFile, stage_sources  # noqa: E402
 
 
+# File extensions that participate in `\RequirePackage` / `\usepackage`
+# / class loading. Used by `_ctan_search_paths` to figure out which
+# directories under ctan_dir need a `-Z search-path` flag for tectonic
+# to actually see fetched packages. Kept in sync with the same constant
+# in `tectonic_populate_cache.py`.
+_PACKAGE_FILE_EXTS = frozenset({".sty", ".cls", ".bbx", ".cbx", ".lbx", ".dbx"})
+
+
+def _ctan_search_paths(ctan_dir: Path) -> list[str]:
+    """Enumerate directories under ``ctan_dir`` that contain package files.
+
+    See the matching helper in ``tectonic_populate_cache.py`` for the
+    full rationale. Short version: tectonic's ``-Z search-path`` is
+    flat (no recursive descent), so we pass one flag per directory
+    that actually holds a ``\\RequirePackage``-targetable file.
+    """
+    if not ctan_dir.exists():
+        return []
+    dirs: set[Path] = set()
+    for path in ctan_dir.rglob("*"):
+        if path.is_file() and path.suffix.lower() in _PACKAGE_FILE_EXTS:
+            dirs.add(path.parent.resolve())
+    return [str(d) for d in sorted(dirs)]
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tectonic", required=True, type=Path)
@@ -229,9 +254,10 @@ def run_tectonic(
     env["LC_ALL"] = "C.UTF-8"
     if reproducible:
         env["SOURCE_DATE_EPOCH"] = "0"
-
-    if ctan_dir is not None:
-        env["TEXMFHOME"] = str(ctan_dir.resolve())
+    # NB: TEXMFHOME used to be set here pointing at ctan_dir. It was
+    # a no-op — tectonic doesn't honour TEXMFHOME at all. Fetched
+    # packages now reach tectonic via `-Z search-path` flags
+    # constructed below from `_ctan_search_paths`.
 
     biber_dir_owned: tempfile.TemporaryDirectory[str] | None = None
     if biber is not None:
@@ -259,6 +285,13 @@ def run_tectonic(
         cmd += ["--bundle", str(bundle.resolve()), "--only-cached"]
     else:
         cmd += ["--only-cached"]
+    # One `-Z search-path` per directory in ctan_dir that holds
+    # package files (.sty/.cls/.bbx/...). Tectonic prefers cwd >
+    # search-path > bundle, so this overlays fetched packages without
+    # disturbing docs that resolve everything from the bundle.
+    if ctan_dir is not None:
+        for search_dir in _ctan_search_paths(ctan_dir):
+            cmd.extend(["-Z", "search-path={}".format(search_dir)])
     if reproducible:
         cmd += ["-Z", "deterministic-mode"]
     if synctex:

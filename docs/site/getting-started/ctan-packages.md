@@ -31,25 +31,22 @@ Reach for `ctan_packages` when a build fails with a missing-file
 error like:
 
 ```
-error: biblatex.sty:15894: Package biblatex Error: Style 'apa' not found.
-```
-
-or
-
-```
 ! LaTeX Error: File `tcolorbox.sty' not found.
 ```
 
-and the missing file is a CTAN package newer than 2022.
+and the missing file is a self-contained CTAN package that isn't in
+Tectonic's 2022 bundle.
 
-The most common cases:
+The realistic use cases:
 
-- **Modern biblatex citation styles** — `biblatex-apa`, `biblatex-chicago`,
-  `biblatex-ieee`, `biblatex-nature`, …
-- **Active-development contrib packages** — `tcolorbox`, `pgfplots`,
-  `siunitx` releases newer than 2022.
-- **Niche or domain-specific packages** that the curated 2022 bundle
-  excluded.
+- **Niche contrib packages** that the curated 2022 bundle excluded —
+  utility macros, specialised drawing tools, domain-specific styles.
+- **Active-development packages** like recent `tcolorbox` or
+  `pgfplots` releases — as long as the new version doesn't depend
+  on engine or core-package features the bundle lacks.
+
+For limitations (biblatex extension styles in particular), see the
+[Limitations](#limitations) section below.
 
 ## When you *don't* need this
 
@@ -69,12 +66,11 @@ If your `\usepackage{...}` lines all resolve cleanly without
 `ctan_packages`, **leave it empty**. Adding packages you don't need
 just makes your first build slower and your cache snapshots larger.
 
-## Example: APA-style bibliography
+## Example
 
-`biblatex-apa` is a popular APA citation style that's actively
-maintained outside the bundle. The bundle's biblatex 3.17 ships only
-the five core styles; APA, Chicago, IEEE, and the rest are separate
-CTAN packages.
+Pick any leaf CTAN package the bundle doesn't ship; the API is the
+same regardless of which one. Suppose your document needs the
+`my-niche-pkg` styling package (substitute the real one you need):
 
 === "BUILD.bazel"
 
@@ -84,9 +80,8 @@ CTAN packages.
     latex_document(
         name = "thesis",
         main = "thesis.tex",
-        srcs = ["thesis.tex", "references.bib"],
-        ctan_packages = ["biblatex-apa"],
-        biber = True,
+        srcs = ["thesis.tex"],
+        ctan_packages = ["my-niche-pkg"],
     )
     ```
 
@@ -94,43 +89,21 @@ CTAN packages.
 
     ```latex
     \documentclass{article}
-    \usepackage[american]{babel}
-    \usepackage{csquotes}
-    \usepackage[style=apa]{biblatex}
-    \addbibresource{references.bib}
+    \usepackage{my-niche-pkg}
 
     \begin{document}
-    Wittgenstein's account of language games \cite{wittgenstein1953}
-    bears on this directly.
-    \printbibliography
+    ...
     \end{document}
-    ```
-
-=== "references.bib"
-
-    ```bibtex
-    @book{wittgenstein1953,
-      author = {Ludwig Wittgenstein},
-      title  = {Philosophical Investigations},
-      year   = {1953},
-      publisher = {Blackwell},
-    }
     ```
 
 ```bash
 bazel build //:thesis
 ```
 
-The first build downloads `biblatex-apa.zip` from CTAN (~430 KB),
-extracts it into a TDS overlay, sets `TEXMFHOME` so tectonic finds
-`apa.bbx`/`apa.cbx`/`american-apa.lbx`, and runs through tectonic +
-biber + tectonic. Subsequent builds skip the download and the prime
-entirely (Bazel action cache).
-
-The full working example lives at [`examples/ctan_paper/`][ex] in the
-repo.
-
-[ex]: https://github.com/nicklambourne/rules_latex/tree/master/examples/ctan_paper
+The first build downloads `my-niche-pkg.zip` from CTAN, extracts it
+into a TDS overlay, and runs tectonic with `-Z search-path` flags
+pointing at the overlay so the fetched `.sty` files are discoverable.
+Subsequent builds skip the download (Bazel action cache).
 
 ## How it works
 
@@ -144,24 +117,31 @@ reuse.
 ```
 TectonicPopulateCache  (online, network OK)
   1. Download each ctan_packages entry from mirrors.ctan.org
-     (TDS .zip first, then raw .zip fallback)
-  2. Normalise into a TDS overlay (tex/latex/, tex/latex/biblatex/...)
-  3. Set TEXMFHOME=<overlay> and run tectonic to prime the cache
+     (TDS .zip first, then raw .zip fallback). Walk the scanned
+     dep graph to fetch transitive deps too.
+  2. Normalise into a TDS overlay under ctan_pkgs/.
+  3. Invoke tectonic with one `-Z search-path=<dir>` flag per
+     directory in the overlay that holds package files. Tectonic
+     prefers cwd > search-path > bundle, so fetched packages
+     overlay the bundle without shadowing it for documents that
+     don't list them.
   4. Emit a structured tarball:
         cache.tar.gz
         ├── cache/        ← tectonic's bundle cache
         └── ctan_pkgs/    ← extracted TDS overlay
         ▼
 TectonicCompile        (offline, --only-cached)
-  1. Extract cache.tar.gz
-  2. Set TECTONIC_CACHE_DIR=cache/, TEXMFHOME=ctan_pkgs/
-  3. Run tectonic --only-cached
+  1. Extract cache.tar.gz.
+  2. Run `tectonic --only-cached` with the same `-Z search-path`
+     flags so the offline compile sees the same overlay.
 ```
 
-Tectonic resolves `\usepackage{foo}` against the overlay first
-(via kpathsea / `TEXMFHOME`) and falls back to the bundle for
-everything else. Modern packages override stale bundle versions
-transparently; old packages still come from the cached bundle.
+Tectonic's resolver does **not** use kpathsea or honour `TEXMFHOME`.
+Search paths come through `-Z search-path=<dir>` flags, which are
+*flat* (no recursive descent) — so we pass one flag per overlay
+directory holding `.sty` / `.cls` / `.bbx` / `.cbx` / `.lbx` / `.dbx`
+files. The ordering is cwd → each search-path → bundle; the first
+match wins.
 
 ## Source resolution
 
@@ -233,8 +213,12 @@ transparent:
 
 ```
 ctan_packages dep map:
-  biblatex-apa -> apa, apa-american, biblatex, csquotes, etoolbox
+  my-niche-pkg -> etoolbox, xcolor
 ```
+
+(`etoolbox` and `xcolor` are in the bundle, so they're listed but
+not fetched. Anything *not* in the bundle gets HEAD-probed against
+CTAN and pulled in if found.)
 
 **When auto-resolution can't help.** If the missing file isn't
 referenced by any fetched package's source, or isn't actually on
@@ -276,6 +260,52 @@ If `foo` is referenced by one of your fetched packages but the
 HEAD-probe couldn't reach CTAN (transient network), the hint
 names the requiring package — adding `foo` to `ctan_packages`
 explicitly bypasses the probe filter on the next run.
+
+## Limitations
+
+### biblatex extension styles don't work
+
+`ctan_packages = ["biblatex-apa"]` (or `biblatex-chicago`,
+`biblatex-ieee`, `biblatex-nature`, …) **does not work** with the
+current toolchain, and won't until Tectonic ships a newer bundle.
+
+The reason is a version-coupling chain in DESIGN.md §4.10:
+
+- Tectonic's pinned bundle (`tlextras-2022.0r0`) ships
+  `biblatex 3.17` and `biber 2.17`.
+- Modern CTAN biblatex extension styles (current `biblatex-apa` 9.20,
+  the actively-maintained Chicago / IEEE / Nature styles, etc.)
+  require `biblatex 3.18+`, which itself requires `biber 2.18+` —
+  the biblatex `.bcf` control file format is versioned and tightly
+  coupled.
+
+Fetching the modern style from CTAN and overlaying it shadows the
+bundle's `apa.bbx` with one that the bundle's biblatex can't parse.
+You'll see something like:
+
+```
+error: apa.bbx:258: Undefined control sequence
+```
+
+The bundle's own `apa.bbx` etc. are loaded automatically when you
+just write `\usepackage[style=apa]{biblatex}` without listing
+`biblatex-apa` in `ctan_packages`. That works fine for the older
+styles the bundle ships.
+
+This is tracked alongside the bundle-staleness work in
+[GitHub issue #1](https://github.com/nicklambourne/rules_latex/issues/1);
+modern biblatex support is gated on a fresh upstream bundle.
+
+### Shadowing risk for other bundle packages
+
+The auto-resolver explicitly filters transitive references against
+the [bundle manifest](https://github.com/nicklambourne/rules_latex/blob/master/latex/toolchain/bundle_manifest.txt)
+to avoid this trap — anything already in the bundle is left alone.
+But if you explicitly list a bundle-resident package in
+`ctan_packages` (a *seed*), the resolver fetches it anyway. That
+overlay version then shadows the bundle, with the same versioning
+hazard. Don't do that unless you've verified the newer CTAN version
+is compatible with the rest of the bundle.
 
 ## Hermeticity and reproducibility
 

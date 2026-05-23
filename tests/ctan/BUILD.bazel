@@ -4,8 +4,9 @@ These tests verify that ctan_packages works correctly with the
 implicit cache pipeline, including:
 
   * Fetching a simple CTAN package (lipsum)
-  * Fetching a bibliography reference style that is NOT in the tectonic
-    bundle and using it with biber
+  * The auto-resolver discovering and fetching a transitive CTAN
+    dep that the user didn't list, and the fetched files actually
+    being consumed by tectonic via -Z search-path
 """
 
 load(
@@ -35,22 +36,42 @@ latex_test(
 )
 
 # ---------------------------------------------------------------------------
-# Test 2: CTAN bibliography style not in bundle + biber
+# Test 2: Auto-resolver discovers and consumes a transitive CTAN dep
 # ---------------------------------------------------------------------------
+#
+# test-pkg-a is a synthetic CTAN package (lives only in
+# tests/ctan/fixtures/, not on real CTAN) whose .sty does
+# \RequirePackage{test-pkg-b}. test-pkg-b is also synthetic and
+# only available via the fixture mirror.
+#
+# We list only test-pkg-a in ctan_packages. The test passes iff:
+#   * test-pkg-a is fetched
+#   * its .sty is scanned, test-pkg-b is discovered as an upstream ref
+#   * test-pkg-b is HEAD-probed (200 on the fixture mirror) and fetched
+#   * tectonic compiles the .tex, finding both .sty files via the
+#     -Z search-path flags added by tools/tectonic_populate_cache.py
+#
+# This replaces an earlier biblatex_apa_compiles_test that was
+# passing by accident (fetched files weren't actually consumed by
+# tectonic; the bundled apa.bbx was loaded instead). See
+# docs/site/getting-started/ctan-packages.md "Limitations" for why
+# biblatex extension styles can't be tested this way.
+#
+# Requires RULES_LATEX_CTAN_MIRROR to point at the local fixture
+# server (set by the CI workflow via --test_env).
 
 latex_test(
-    name = "biblatex_apa_compiles_test",
-    srcs = [
-        "biblatex_apa_test.tex",
-        "references.bib",
+    name = "transitive_resolve_test",
+    srcs = ["transitive_resolve_test.tex"],
+    ctan_packages = ["test-pkg-a"],  # NOT test-pkg-b — must be auto-resolved
+    main = "transitive_resolve_test.tex",
+    # Sanity-check both fetched packages actually got loaded.
+    # If only test-pkg-a appeared, the resolver didn't follow
+    # the transitive ref; if neither did, search-path isn't wired up.
+    required_patterns = [
+        "test-pkg-a.sty",
+        "test-pkg-b.sty",
     ],
-    biber = True,
-    ctan_packages = [
-        "biblatex-apa",
-    ],
-    main = "biblatex_apa_test.tex",
-    # Verify that the APA style was loaded by looking for "apa" in log
-    required_patterns = ["apa"],
 )
 
 # ---------------------------------------------------------------------------
@@ -67,7 +88,7 @@ latex_cache_snapshot(
 test_suite(
     name = "ctan_tests",
     tests = [
-        ":biblatex_apa_compiles_test",
         ":lipsum_compiles_test",
+        ":transitive_resolve_test",
     ],
 )

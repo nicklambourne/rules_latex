@@ -786,9 +786,19 @@ These are deliberately out of scope for v0.1 but worth flagging.
     **Design (shipped via the resolver in
     `tools/tectonic_populate_cache.py`):** auto-resolve the
     transitive closure by default, with no user-facing knob. Goal:
-    the default case stays as simple as it is today —
-    `ctan_packages = ["biblatex-apa"]` and it just works, even when
-    biblatex-apa pulls in other post-2022 packages.
+    the default case stays as simple as today — list only the
+    entry-point packages in `ctan_packages`, the resolver follows
+    the chain.
+
+    > **Caveat that emerged during implementation:** biblatex
+    > extension styles (`biblatex-apa`, `biblatex-chicago`, etc.)
+    > are *not* usable via `ctan_packages` today. Modern releases
+    > require `biblatex 3.18+` / `biber 2.18+`, but the bundle
+    > pins `3.17 / 2.17`. The fetched style files reach tectonic
+    > correctly, but biblatex 3.17 can't process them. This is
+    > the version-coupling trap §4.10 warned about; it's gated
+    > on the bundle bump in [#1](https://github.com/nicklambourne/rules_latex/issues/1).
+    > See the "Limitations" section in the user guide.
 
     **Algorithm:**
 
@@ -830,11 +840,22 @@ These are deliberately out of scope for v0.1 but worth flagging.
     over-reports — `apa.bbx` does `\RequirePackage{biblatex}` even
     though `biblatex` is in the bundle. Without filtering, we'd
     re-fetch bundle-resident packages from CTAN and shadow the
-    bundle's versions via `TEXMFHOME`. That's catastrophic for the
-    biblatex/biber version coupling (§4.10): fetching biblatex
-    3.18+ over the bundle's 3.17 breaks biber 2.17 control-file
-    compatibility. The manifest is therefore load-bearing for
-    correctness, not just performance.
+    bundle's versions via the `-Z search-path` overlay. That's
+    catastrophic for the biblatex/biber version coupling (§4.10):
+    fetching biblatex 3.18+ over the bundle's 3.17 breaks biber
+    2.17 control-file compatibility. The manifest is therefore
+    load-bearing for correctness, not just performance.
+
+    **How the overlay reaches tectonic.** Tectonic's `\usepackage`
+    resolver does not honour `TEXMFHOME` (that's a kpathsea concept;
+    tectonic uses its own simpler lookup). Fetched packages reach
+    tectonic via one `-Z search-path=<dir>` flag per directory under
+    `ctan_pkgs/` that holds package files. The flag is flat (no
+    recursive descent), which is why we walk and enumerate. An
+    earlier implementation set `TEXMFHOME` and the integration
+    appeared to work — but it was a no-op; the bundle was the
+    actual source of files for those compiles. The `-Z search-path`
+    plumbing fixes that.
 
     Manifest source: generated from TeX Live 2022's `tlpdb` once
     (one-shot Python tool), committed at
