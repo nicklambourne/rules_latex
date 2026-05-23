@@ -213,7 +213,11 @@ cache pipeline. No extra targets, no manual vendoring, no waiting
 for an upstream bundle refresh.
 
 For most documents you don't need this attribute: the bundle covers
-~95% of real-world LaTeX. See the [CTAN packages user
+~95% of real-world LaTeX. When a fetched package transitively
+requires another post-2022 package, the populate-cache step surfaces
+a targeted hint naming the missing file and which of your existing
+`ctan_packages` referenced it — so the next iteration is one
+attribute edit away. See the [CTAN packages user
 guide](https://nicklambourne.github.io/rules_latex/getting-started/ctan-packages/)
 for when to reach for it (and when not to).
 
