@@ -104,9 +104,9 @@ See the [Design rationale](about/design.md) for the full story.
 | SyncTeX reverse-sync | Stable since v0.2.0 |
 | Implicit cache pipeline | Stable since v0.2.0 |
 | Self-hosted PDF.js | Stable since v0.2.0 |
-| `ctan_packages` (auto-resolved transitive closure) | Stable since v0.4.1 |
-| `tectonic.toolchain(modern_biblatex = True)` (3.18+ styles) | Stable since v0.4.1 |
-| SyncTeX forward-sync | Stable since v0.4.1 |
+| `ctan_packages` (auto-resolved transitive closure) | Stable since v0.4.2 |
+| `tectonic.toolchain(modern_biblatex = True)` (3.18+ styles) | Stable since v0.4.2 |
+| SyncTeX forward-sync | Stable since v0.4.2 |
 | Linux arm64 biber | Not vendored — use `biber_strategy = "system"` ([#10][issue-10]) |
 
 [issue-10]: https://github.com/nicklambourne/rules_latex/issues/10

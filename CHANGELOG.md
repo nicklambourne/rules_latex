@@ -4,24 +4,36 @@ All notable changes to `rules_latex` are documented here. This project follows
 [Semantic Versioning](https://semver.org/) once v1.0.0 is reached; before
 that, expect breaking changes in any v0.x release.
 
-## [0.4.1] - 2026-05-23
+## [0.4.2] - 2026-05-24
 
 ### Fixed
 
-- **Release workflow now starts the CTAN fixture HTTP mirror before
-  `bazel test`.** The v0.4.0 tag failed to produce a GitHub release
-  because `bazel test //... //tests/...` ran without the fixture
-  mirror that the main CI workflow stands up; `transitive_resolve_test`
-  404'd against real CTAN looking for the synthetic `test-pkg-a` /
-  `test-pkg-b` packages (which only exist as fixtures under
-  `tests/ctan/fixtures/`). The release workflow now inlines the same
-  fixture-server bootstrap that CI uses. No code changes versus
-  v0.4.0 — this is a release-pipeline-only fix.
+- **Release workflow now reliably produces a GitHub release.** Two
+  release-pipeline-only fixes folded in:
+  1. The reusable workflow's `bazel test` step now boots the CTAN
+     fixture HTTP mirror first, mirroring CI. Without it,
+     `transitive_resolve_test` 404'd against real CTAN looking for
+     the synthetic `test-pkg-a` / `test-pkg-b` fixtures (PR #35).
+  2. The final `bazel test` line in `bazel_test_command` ends with a
+     backslash so the disk/repository cache flags that the reusable
+     workflow appends become continuation args rather than a fresh
+     shell command (PR #37).
+
+  No code changes versus the v0.4.0 / v0.4.1 attempts — same feature
+  set, working pipeline.
+
+## [0.4.1] - 2026-05-23 [YANKED]
+
+> Tag exists but no GitHub release was produced — the release
+> workflow's appended `--disk_cache=...` flag tripped over a missing
+> shell line-continuation in `bazel_test_command` (exit code 127 after
+> all tests passed). Use 0.4.2 instead.
 
 ## [0.4.0] - 2026-05-23 [YANKED]
 
 > Tag exists but no GitHub release was produced — the release
-> workflow failed at the `bazel test` step. Use 0.4.1 instead.
+> workflow failed at the `bazel test` step (CTAN fixture mirror was
+> not started). Use 0.4.2 instead.
 
 ### Added
 
