@@ -116,7 +116,8 @@ def _populate_cache_action(
         output_tarball,
         staging_lib,
         tool,
-        ctan_packages):
+        ctan_packages,
+        bundle_manifest):
     """Schedule an online tectonic compile that captures its cache.
 
     Drives `//tools:tectonic_populate_cache.py`. The output is a
@@ -136,11 +137,18 @@ def _populate_cache_action(
         args.add("--biber", biber_file.path)
     for pkg in ctan_packages:
         args.add("--ctan-package", pkg)
+    if ctan_packages:
+        # The manifest is the auto-resolver's filter for "this
+        # name is in the bundle, don't fetch it". Always passed
+        # when there's anything to resolve so transitive deps get
+        # picked up automatically (no user opt-in).
+        args.add("--bundle-manifest", bundle_manifest.path)
 
     inputs = depset(
         direct = (
             [main_in, tectonic, tool, staging_lib] +
             ([biber_file] if biber_file else []) +
+            ([bundle_manifest] if ctan_packages else []) +
             [f for (f, _) in pkg_files]
         ),
         transitive = [srcs_depset],
@@ -405,6 +413,7 @@ def _latex_document_impl(ctx):
     populate_tool = ctx.file._populate_cache_tool
     compile_tool = ctx.file._compile_tool
     staging_lib = ctx.file._staging_lib
+    bundle_manifest = ctx.file._bundle_manifest
 
     # Read the serve-time cache-override build setting. Non-empty
     # only when `latex_serve_web` is driving the build; see
@@ -454,6 +463,7 @@ def _latex_document_impl(ctx):
             staging_lib = staging_lib,
             tool = populate_tool,
             ctan_packages = ctan_packages,
+            bundle_manifest = bundle_manifest,
         )
 
     _compile_action(
@@ -625,6 +635,14 @@ latex_document = rule(
         ),
         "_staging_lib": attr.label(
             default = "//tools:staging.py",
+            allow_single_file = True,
+        ),
+        "_bundle_manifest": attr.label(
+            doc = "Bundle-resident package manifest, consulted by the " +
+                  "CTAN auto-resolver to decide which transitive deps " +
+                  "to fetch from CTAN vs leave to the bundle. " +
+                  "Refresh when tectonic's pinned bundle changes.",
+            default = "//latex/toolchain:bundle_manifest.txt",
             allow_single_file = True,
         ),
         "_serve_cache_override": attr.label(

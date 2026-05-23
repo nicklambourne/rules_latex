@@ -183,6 +183,20 @@ def parse_args() -> argparse.Namespace:
         "May be repeated. Packages are downloaded in TDS format from "
         "mirrors.ctan.org and made available to tectonic via TEXMFHOME."
     )
+    parser.add_argument(
+        "--bundle-manifest",
+        type=Path,
+        default=None,
+        help=(
+            "Optional path to the bundle-resident package manifest (see "
+            "latex/toolchain/bundle_manifest.txt). When supplied and "
+            "--ctan-package is non-empty, the populate step walks the "
+            "transitive dep graph of the listed packages, HEAD-probes "
+            "CTAN for references not in the manifest, and auto-fetches "
+            "the closure. Without it, users must list every transitive "
+            "dep manually."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -278,6 +292,154 @@ def download_ctan_package(package: str, dest_dir: Path) -> set[str]:
     shutil.rmtree(str(extract_tmp), ignore_errors=True)
 
     return deps
+
+
+def _load_bundle_manifest(path: Path) -> set[str]:
+    """Read the bundle-resident package manifest into a set.
+
+    Lines starting with ``#`` are comments; blank lines are ignored.
+    See ``tools/extract_bundle_manifest.py`` for the producer.
+    """
+    if not path.is_file():
+        raise SystemExit(
+            f"--bundle-manifest path does not exist: {path}. "
+            f"Re-run `bazel run //tools:extract_bundle_manifest` to "
+            f"regenerate, or pass a different path."
+        )
+    names: set[str] = set()
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        names.add(line)
+    return names
+
+
+def _head_probe_ctan(
+    package: str,
+    *,
+    timeout: float = 10.0,
+) -> bool:
+    """Return True iff one of the canonical CTAN URLs for ``package`` exists.
+
+    Used by the auto-resolver to decide whether a scanner-discovered
+    name (which might be a CTAN package, a TeX-internal component, or
+    a typo) is worth fetching. We HEAD-probe the same fallback chain
+    that ``download_ctan_package`` would actually try; if *any* of
+    them returns 2xx, the package is reachable.
+
+    HEAD requests are cheap (no body transfer) and 4xx returns
+    immediately, so the upper bound is ~4 HEAD round-trips per
+    rejected name. Failure modes (URLError, 5xx) are treated as
+    "unknown" — we conservatively *don't* fetch on transient
+    errors, so the worst case for a flaky mirror is "we miss a
+    transitive dep this run, the user sees a hint on failure".
+    """
+    urls = [
+        f"{CTAN_MIRROR}/install/macros/latex/contrib/{package}.tds.zip",
+        f"{CTAN_MIRROR}/macros/latex/contrib/{package}.zip",
+        f"{CTAN_MIRROR}/macros/latex/contrib/biblatex-contrib/{package}.zip",
+        f"{CTAN_MIRROR}/macros/latex/contrib/biblatex-contrib/{package}/{package}.zip",
+    ]
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, method="HEAD")
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                if 200 <= resp.status < 300:
+                    return True
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                continue
+            # Other 4xx/5xx: treat as "not found on this URL" rather
+            # than fatal, since the caller is just trying to make a
+            # yes/no decision and we have more URLs to try.
+            continue
+        except urllib.error.URLError:
+            # Transient network error. Don't pretend the package
+            # exists when we don't know; the user will see the
+            # missing-file hint if it really was needed.
+            continue
+    return False
+
+
+def resolve_transitive_closure(
+    seed_packages: list[str],
+    dest_dir: Path,
+    bundle_manifest: set[str],
+    *,
+    max_iterations: int = 64,
+) -> dict[str, set[str]]:
+    """Auto-fetch the transitive closure of CTAN packages.
+
+    Walks the dep graph rooted at ``seed_packages``:
+      1. Download each seed; scan it for upstream references
+         (existing ``_scan_package_dependencies``).
+      2. For each reference not in ``bundle_manifest`` and not
+         already fetched: HEAD-probe CTAN to confirm the name is a
+         real package. If so, fetch it and recurse. If the
+         HEAD-probe says "no" (404 on every URL), silently skip —
+         this filters out TeX-internal names, typos, and any other
+         false-positive scanner output.
+      3. Cap at ``max_iterations`` defensive iterations; we never
+         actually expect to hit this in practice (the dep graph is
+         a DAG and the bundle catches most leaves) but it bounds
+         the worst case for circular or pathological inputs.
+
+    Returns the same per-package dep map ``download_ctan_package``
+    contributes to: ``{pkg: {referenced_name, ...}}``. Used by the
+    proactive dep summary and by the failure-path hint.
+    """
+    fetched: dict[str, set[str]] = {}
+    queue: list[str] = list(seed_packages)
+
+    # `attempted` includes both fetched packages and those we
+    # HEAD-probed and skipped, so we never re-probe the same name.
+    attempted: set[str] = set()
+
+    iterations = 0
+    while queue and iterations < max_iterations:
+        iterations += 1
+        pkg = queue.pop(0)
+        if pkg in fetched:
+            continue
+        attempted.add(pkg)
+
+        # Seed packages always fetch — the user explicitly asked
+        # for them, even if they happen to be in the bundle.
+        is_seed = pkg in seed_packages
+
+        if not is_seed:
+            # Transitive: skip if bundle-resident, else HEAD-probe.
+            if pkg in bundle_manifest:
+                continue
+            if not _head_probe_ctan(pkg):
+                print(
+                    f"  '{pkg}' referenced by a fetched package but not "
+                    f"in the bundle and not found on CTAN — skipping "
+                    f"(may be a TeX-internal name or a typo).",
+                    file=sys.stderr,
+                )
+                continue
+
+        deps = download_ctan_package(pkg, dest_dir)
+        fetched[pkg] = deps
+
+        for ref in deps:
+            if ref in attempted or ref in fetched:
+                continue
+            queue.append(ref)
+            attempted.add(ref)
+
+    if iterations >= max_iterations:
+        print(
+            f"warning: transitive resolution stopped after "
+            f"{max_iterations} iterations; the dep graph may be "
+            f"deeper than expected. The compile may still succeed; "
+            f"if not, file an issue.",
+            file=sys.stderr,
+        )
+
+    return fetched
 
 
 def _normalize_ctan_tree(src: Path, dest: Path, package: str) -> None:
@@ -647,8 +809,20 @@ def main() -> int:
         if args.ctan_packages:
             ctan_dir = tmp_path / "ctan_pkgs"
             ctan_dir.mkdir()
-            for pkg in args.ctan_packages:
-                package_deps[pkg] = download_ctan_package(pkg, ctan_dir)
+            if args.bundle_manifest is not None:
+                # Auto-resolve: fetch the listed seed packages and
+                # walk their dep graph, fetching transitive CTAN deps
+                # that aren't in the bundle.
+                manifest = _load_bundle_manifest(args.bundle_manifest)
+                package_deps = resolve_transitive_closure(
+                    args.ctan_packages, ctan_dir, manifest,
+                )
+            else:
+                # Legacy path (no manifest plumbed through): fetch
+                # only what the user listed. The failure-path hint
+                # still triggers if a transitive dep is missing.
+                for pkg in args.ctan_packages:
+                    package_deps[pkg] = download_ctan_package(pkg, ctan_dir)
             _print_dep_summary(package_deps)
 
         main_in_workdir = stage_sources(
