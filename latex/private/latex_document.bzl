@@ -52,6 +52,7 @@ resolve as the author would expect.
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("//latex:providers.bzl", "LatexDocumentInfo", "LatexInfo")
+load("//latex/private:action_schema.bzl", "RULES_LATEX_ACTION_SCHEMA")
 
 _OUTFMTS = ["pdf", "html", "xdv", "aux"]
 
@@ -167,7 +168,14 @@ def _populate_cache_action(
         transitive = [srcs_depset],
     )
 
-    env = {"LC_ALL": "C.UTF-8"}
+    env = {
+        "LC_ALL": "C.UTF-8",
+        # Cache-key contribution that picks up rule output-schema
+        # changes. See latex/private/action_schema.bzl for the
+        # rationale; bump there when adding/removing declared
+        # outputs.
+        "RULES_LATEX_ACTION_SCHEMA": RULES_LATEX_ACTION_SCHEMA,
+    }
     if use_system_biber:
         env["PATH"] = ""
 
@@ -313,7 +321,14 @@ def _compile_action(
     if synctex_output:
         outputs.append(synctex_output)
 
-    env = {"LC_ALL": "C.UTF-8"}
+    env = {
+        "LC_ALL": "C.UTF-8",
+        # Cache-key contribution that picks up rule output-schema
+        # changes. See latex/private/action_schema.bzl for the
+        # rationale; bump there when adding/removing declared
+        # outputs.
+        "RULES_LATEX_ACTION_SCHEMA": RULES_LATEX_ACTION_SCHEMA,
+    }
 
     # See `_populate_cache_action` for the rationale: shell wrapper
     # only for `use_system_biber`, direct `ctx.actions.run` otherwise.

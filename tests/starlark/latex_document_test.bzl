@@ -8,6 +8,7 @@ different combinations of attributes:
                                         TectonicCompile.
   * `synctex = True`                  → the synctex.gz output appears.
   * `biber = True`                    → biber binary in action inputs.
+  * action-schema canary               → declared-output set + env wiring.
 
 These tests run at analysis time, not at action execution time, so
 they're cheap (sub-second) and don't require any LaTeX compile to
@@ -16,6 +17,14 @@ happen.
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
 load("//latex:defs.bzl", "latex_document")
+
+# Mirror of `_EXPECTED_ACTION_SCHEMA` from
+# `//latex/private:action_schema.bzl`. Inlined rather than loaded
+# because the buildifier `bzl-visibility` rule discourages loading
+# from `//latex/private/*` outside `//latex/*`. When you bump the
+# constant in action_schema.bzl, update this snapshot too — that's
+# what makes the canary test actually catch forgotten bumps.
+_EXPECTED_ACTION_SCHEMA = "v1"
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -346,6 +355,103 @@ serve_cache_override_respects_user_cache_test = analysistest.make(
 )
 
 # -----------------------------------------------------------------------------
+# Test: action-schema canary
+# -----------------------------------------------------------------------------
+#
+# Snapshots both:
+#
+#   1. The set of declared output basenames on a canonical
+#      latex_document target (synctex + implicit pipeline, the most
+#      output-heavy default config). Changing the rule's output set
+#      drifts this snapshot, failing the test and signalling that
+#      `_EXPECTED_ACTION_SCHEMA` in latex/private/action_schema.bzl
+#      also needs bumping (see DESIGN.md §5 item 10 for why).
+#
+#   2. That the schema env var is actually plumbed through to the
+#      populate-cache and compile actions. Catches an "oh I added a
+#      third action and forgot the env" regression directly.
+#
+# The "rename the schema constant" half is enforced by code review:
+# the diff that updates the expected basenames here is the same diff
+# that should bump action_schema.bzl, and any reviewer will catch a
+# half-update.
+
+def _action_schema_canary_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    actions = analysistest.target_actions(env)
+
+    # Collect every declared output across every action this target
+    # registers. Sorted + de-duped: the same File can in principle
+    # appear under multiple actions (e.g. via output groups), and
+    # we don't want that to break the snapshot ordering. Starlark
+    # has no set comprehension; we walk a dict to dedupe.
+    dedup = {}
+    for action in actions:
+        for out in action.outputs.to_list():
+            dedup[out.basename] = True
+    basenames = sorted(dedup.keys())
+
+    # Tied to the `_doc_synctex_canary` target's config:
+    #   synctex = True      -> .synctex.gz exists
+    #   no cache attr       -> implicit pipeline runs the intermediate
+    #                          cache tarball
+    expected = sorted([
+        "_doc_synctex_canary.pdf",
+        "_doc_synctex_canary.synctex.gz",
+        # The implicit pipeline's intermediate cache tarball.
+        "__doc_synctex_canary_implicit_cache.tar.gz",
+        # One-line shell shim the compile action wraps around
+        # python3 + tectonic_compile.py so Bazel's worker strategy
+        # has a single exec path to identify the worker by. See
+        # the `args.use_param_file(...)` block in
+        # latex_document.bzl _compile_action.
+        "__doc_synctex_canary_compile_shim.sh",
+    ])
+    asserts.equals(
+        env,
+        expected,
+        basenames,
+        (
+            "latex_document declared-output set drifted from the " +
+            "canary snapshot. If you intended to add/remove outputs, " +
+            "ALSO bump _EXPECTED_ACTION_SCHEMA in " +
+            "latex/private/action_schema.bzl so existing action-cache " +
+            "entries get invalidated (DESIGN.md §5 item 10)."
+        ),
+    )
+
+    # Schema env var must be present in the populate-cache and
+    # compile actions — that's how the cache-busting actually works.
+    relevant = [
+        a
+        for a in actions
+        if a.mnemonic in ("TectonicPopulateCache", "TectonicCompile")
+    ]
+    asserts.true(
+        env,
+        len(relevant) >= 2,
+        ("expected both TectonicPopulateCache and TectonicCompile " +
+         "actions on the canary target; got: " +
+         ", ".join([a.mnemonic for a in actions])),
+    )
+    for a in relevant:
+        asserts.true(
+            env,
+            a.env.get("RULES_LATEX_ACTION_SCHEMA", "") == _EXPECTED_ACTION_SCHEMA,
+            (
+                "RULES_LATEX_ACTION_SCHEMA missing or mismatched in " +
+                "env of " + a.mnemonic + " action. Expected '" +
+                _EXPECTED_ACTION_SCHEMA + "', got '" +
+                str(a.env.get("RULES_LATEX_ACTION_SCHEMA", "<unset>")) +
+                "'. See latex/private/action_schema.bzl."
+            ),
+        )
+
+    return analysistest.end(env)
+
+action_schema_canary_test = analysistest.make(_action_schema_canary_test_impl)
+
+# -----------------------------------------------------------------------------
 # Suite definition
 # -----------------------------------------------------------------------------
 
@@ -425,6 +531,19 @@ def latex_document_test_suite(name):
         tags = ["manual"],
     )
 
+    # Canary target for the action-schema snapshot. synctex = True
+    # so the .synctex.gz output is present; no cache attr so the
+    # implicit pipeline contributes its intermediate tarball. This
+    # is the most output-heavy default configuration; pinning it
+    # catches any future change to the declared-output set.
+    latex_document(
+        name = "_doc_synctex_canary",
+        main = "_test_doc.tex",
+        srcs = [":_test_doc_tex"],
+        synctex = True,
+        tags = ["manual"],
+    )
+
     # --- analysistest cases -------------------------------------------
 
     implicit_pipeline_test(
@@ -459,6 +578,10 @@ def latex_document_test_suite(name):
         name = "serve_cache_override_respects_user_cache_test",
         target_under_test = ":_doc_with_cache",
     )
+    action_schema_canary_test(
+        name = "action_schema_canary_test",
+        target_under_test = ":_doc_synctex_canary",
+    )
 
     native.test_suite(
         name = name,
@@ -471,5 +594,6 @@ def latex_document_test_suite(name):
             ":serve_cache_override_test",
             ":serve_cache_override_dir_test",
             ":serve_cache_override_respects_user_cache_test",
+            ":action_schema_canary_test",
         ],
     )
