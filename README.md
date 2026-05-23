@@ -124,15 +124,6 @@ All seven are loaded from `@rules_latex//latex:defs.bzl`.
 
 ### Live preview
 
-<!--
-  TODO(maintainer): drop a screenshot or GIF of `latex_serve_web` in
-  ./assets/serve-web.png and uncomment the line below. The CV example
-  (`cd examples && bazel run //cv:cv_serve` → http://127.0.0.1:8767/)
-  is the most photogenic target.
-
-  <p align="center"><img src="./assets/serve-web.png" alt="latex_serve_web preview" width="700" /></p>
--->
-
 Two flavours, both `bazel run`-able. Each wraps the same file
 watcher around your `latex_document` target; the difference is
 where the rendered PDF shows up.
