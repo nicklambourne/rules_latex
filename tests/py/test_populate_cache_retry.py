@@ -14,6 +14,7 @@ at module import and substituted into the URL list.
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import unittest
 import urllib.error
@@ -170,10 +171,22 @@ class CtanMirrorEnvOverrideTest(unittest.TestCase):
     """RULES_LATEX_CTAN_MIRROR is read at import; verify it sets CTAN_MIRROR."""
 
     def test_default_is_official_mirror(self):
-        # The module under test was loaded once at the top of this
-        # file without the env var set; the default should be CTAN's
-        # canonical mirror.
-        self.assertEqual(tpc.CTAN_MIRROR, "https://mirrors.ctan.org")
+        # Re-import under a cleared env so the assertion is robust to
+        # whatever the test harness happens to have set in os.environ.
+        # In particular: CI sets RULES_LATEX_CTAN_MIRROR to the local
+        # fixture-server URL, so we can't rely on tpc.CTAN_MIRROR
+        # being the default in the already-loaded module.
+        saved = os.environ.pop("RULES_LATEX_CTAN_MIRROR", None)
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "tpc_default", _TOOL_PATH
+            )
+            reloaded = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(reloaded)
+            self.assertEqual(reloaded.CTAN_MIRROR, "https://mirrors.ctan.org")
+        finally:
+            if saved is not None:
+                os.environ["RULES_LATEX_CTAN_MIRROR"] = saved
 
     def test_env_override_changes_mirror(self):
         # Reload the module under a patched environment to verify
