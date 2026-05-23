@@ -50,6 +50,11 @@ bzl_library(
     visibility = ["//visibility:private"],
     deps = [
         ":providers_lib",
+        # latex_document.bzl loads RULES_LATEX_ACTION_SCHEMA from
+        # this private module. Stardoc needs the transitive bzl_library
+        # reference to satisfy its load graph even though the symbol
+        # isn't part of the public docs surface.
+        "//latex/private:action_schema.bzl",
         "//latex/private:latex_cache_snapshot.bzl",
         "//latex/private:latex_document.bzl",
         "//latex/private:latex_library.bzl",
