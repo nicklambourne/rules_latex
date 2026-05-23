@@ -122,6 +122,14 @@ def _latex_test_impl(ctx):
         for pkg in ctx.attr.ctan_packages
     ])
 
+    # When ctan_packages is non-empty, hand the auto-resolver the
+    # bundle-resident package manifest so it can filter out
+    # transitive refs that are already in the bundle (and avoid
+    # shadowing them with newer CTAN versions — see DESIGN.md §4.10).
+    bundle_manifest_arg = (
+        '--bundle-manifest "{}"'.format(ctx.file._bundle_manifest.short_path) if ctx.attr.ctan_packages else ""
+    )
+
     src_args = " \\\n    ".join([
         '--src "{}"'.format(s.short_path)
         for s in all_srcs.to_list()
@@ -157,6 +165,7 @@ PYTHON="${PYTHON:-python3}"
     --output "$WORK/cache.tar.gz" \\
     {biber_arg} \\
     {ctan_args} \\
+    {bundle_manifest_arg} \\
     {src_args} \\
     {pkg_file_args}
 
@@ -166,6 +175,7 @@ PYTHON="${PYTHON:-python3}"
             main = main.short_path,
             biber_arg = biber_arg,
             ctan_args = ctan_args,
+            bundle_manifest_arg = bundle_manifest_arg,
             src_args = src_args,
             pkg_file_args = pkg_file_args,
         )
@@ -224,6 +234,7 @@ exit $status
         ([toolchain.bundle] if toolchain.bundle and not cache_snapshot else []) +
         ([cache_snapshot] if cache_snapshot else []) +
         ([biber_file] if biber_file else []) +
+        ([ctx.file._bundle_manifest] if ctx.attr.ctan_packages else []) +
         [f for (f, _) in pkg_files]
     )
     runfiles = ctx.runfiles(
@@ -321,6 +332,10 @@ latex_test = rule(
         ),
         "_staging_lib": attr.label(
             default = "//tools:staging.py",
+            allow_single_file = True,
+        ),
+        "_bundle_manifest": attr.label(
+            default = "//latex/toolchain:bundle_manifest.txt",
             allow_single_file = True,
         ),
     },

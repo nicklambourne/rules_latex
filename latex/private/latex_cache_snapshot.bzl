@@ -89,6 +89,13 @@ def _latex_cache_snapshot_impl(ctx):
         for pkg in ctx.attr.ctan_packages
     ])
 
+    # Hand the auto-resolver the bundle-resident manifest when
+    # ctan_packages is non-empty, so it can filter transitive refs
+    # against the bundle and avoid shadowing bundle versions.
+    bundle_manifest_arg = (
+        '--bundle-manifest "{}"'.format(ctx.file._bundle_manifest.short_path) if ctx.attr.ctan_packages else ""
+    )
+
     script = """\
 #!/usr/bin/env bash
 set -euo pipefail
@@ -110,6 +117,7 @@ exec "$PYTHON" "{tool}" \\
     {src_args} \\
     {pkg_file_args} \\
     {ctan_args} \\
+    {bundle_manifest_arg} \\
     --workspace "$BUILD_WORKSPACE_DIRECTORY" \\
     --output "{output}" \\
     {biber_arg}
@@ -122,6 +130,7 @@ exec "$PYTHON" "{tool}" \\
         src_args = src_args,
         pkg_file_args = pkg_file_args,
         ctan_args = ctan_args,
+        bundle_manifest_arg = bundle_manifest_arg,
         output = ctx.attr.output,
         biber_arg = biber_arg,
     )
@@ -130,6 +139,8 @@ exec "$PYTHON" "{tool}" \\
     runfiles_files = [tectonic, ctx.file._tool, ctx.file._staging_lib] + all_srcs
     if biber_file:
         runfiles_files.append(biber_file)
+    if ctx.attr.ctan_packages:
+        runfiles_files.append(ctx.file._bundle_manifest)
     runfiles = ctx.runfiles(files = runfiles_files)
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
 
@@ -208,6 +219,10 @@ latex_cache_snapshot = rule(
         ),
         "_staging_lib": attr.label(
             default = "//tools:staging.py",
+            allow_single_file = True,
+        ),
+        "_bundle_manifest": attr.label(
+            default = "//latex/toolchain:bundle_manifest.txt",
             allow_single_file = True,
         ),
     },
