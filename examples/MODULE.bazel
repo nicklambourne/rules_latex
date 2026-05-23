@@ -21,7 +21,14 @@ local_path_override(
 )
 
 tectonic = use_extension("@rules_latex//latex/toolchain:extensions.bzl", "tectonic")
-tectonic.toolchain()
+
+# Opt into the modern-biblatex overlay (biblatex 3.21 + biber 2.21
+# fetched alongside the toolchain) so the //ctan_paper example —
+# which uses biblatex-apa, a modern citation style — actually
+# compiles. Default workspaces inherit the bundle's stable
+# biblatex 3.17 / biber 2.17 stack. See
+# docs/site/getting-started/ctan-packages.md "Modern biblatex".
+tectonic.toolchain(modern_biblatex = True)
 use_repo(tectonic, "rules_latex_tectonic_toolchains")
 
 register_toolchains("@rules_latex_tectonic_toolchains//:all")

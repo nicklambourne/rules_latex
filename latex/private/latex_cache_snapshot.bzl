@@ -96,6 +96,17 @@ def _latex_cache_snapshot_impl(ctx):
         '--bundle-manifest "{}"'.format(ctx.file._bundle_manifest.short_path) if ctx.attr.ctan_packages else ""
     )
 
+    # Modern-biblatex toolchain overlay (when the workspace opted in).
+    # One --biblatex-overlay-file per file; the tool emits matching
+    # `-Z search-path` flags.
+    biblatex_overlay_files = (
+        toolchain.biblatex_overlay.to_list() if toolchain.biblatex_overlay else []
+    )
+    biblatex_overlay_args = " \\\n    ".join([
+        '--biblatex-overlay-file "{}"'.format(f.short_path)
+        for f in biblatex_overlay_files
+    ])
+
     script = """\
 #!/usr/bin/env bash
 set -euo pipefail
@@ -118,6 +129,7 @@ exec "$PYTHON" "{tool}" \\
     {pkg_file_args} \\
     {ctan_args} \\
     {bundle_manifest_arg} \\
+    {biblatex_overlay_args} \\
     --workspace "$BUILD_WORKSPACE_DIRECTORY" \\
     --output "{output}" \\
     {biber_arg}
@@ -131,6 +143,7 @@ exec "$PYTHON" "{tool}" \\
         pkg_file_args = pkg_file_args,
         ctan_args = ctan_args,
         bundle_manifest_arg = bundle_manifest_arg,
+        biblatex_overlay_args = biblatex_overlay_args,
         output = ctx.attr.output,
         biber_arg = biber_arg,
     )
@@ -141,6 +154,7 @@ exec "$PYTHON" "{tool}" \\
         runfiles_files.append(biber_file)
     if ctx.attr.ctan_packages:
         runfiles_files.append(ctx.file._bundle_manifest)
+    runfiles_files += biblatex_overlay_files
     runfiles = ctx.runfiles(files = runfiles_files)
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
 

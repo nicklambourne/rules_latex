@@ -1,22 +1,19 @@
-"""KNOWN BROKEN: a paper using a CTAN bibliography style not in the
-Tectonic bundle.
+"""A paper using a CTAN bibliography style not in the Tectonic bundle.
 
-This example was originally written to demonstrate
-`ctan_packages = ["biblatex-apa"]`. It currently fails: the fetched
-biblatex-apa 9.20 requires biblatex 3.18+, but the bundle ships
-biblatex 3.17 / biber 2.17 (DESIGN.md §4.10). The mismatch surfaces
-as:
+Demonstrates `ctan_packages = ["biblatex-apa"]` to pull a modern APA
+citation style (post-2022) and compose it with `biber = True`. Real
+modern biblatex extension styles depend on biblatex 3.18+ / biber
+2.18+, which is *newer than the bundle ships* (3.17 / 2.17). The
+example workspace opts into the modern-biblatex toolchain overlay
+via `tectonic.toolchain(modern_biblatex = True)` in
+`examples/MODULE.bazel`, which fetches biblatex 3.21 + biber 2.21
+and overlays them so this works. See DESIGN.md §5 item #12 and
+docs/site/getting-started/ctan-packages.md "Modern biblatex".
 
-    error: apa.bbx:258: Undefined control sequence
-
-For the canonical explanation see the "Limitations" section in
-docs/site/getting-started/ctan-packages.md. Modern biblatex support
-is gated on a fresh upstream bundle
-(https://github.com/nicklambourne/rules_latex/issues/1).
-
-The targets are tagged `manual` so wildcard builds (`bazel build
-//...`) skip them. The files are kept as a historical reference and
-as the seed for a future working example once the bundle bumps.
+Workspaces *without* the opt-in stick with the bundle's pinned
+3.17/2.17 stack — fine for most documents (the bundle ships the
+five core biblatex styles), but biblatex-apa / -chicago / -ieee /
+-nature etc. need the overlay.
 """
 
 load("@rules_latex//latex:defs.bzl", "latex_document", "latex_test")
@@ -30,7 +27,6 @@ latex_document(
     biber = True,
     ctan_packages = ["biblatex-apa"],
     main = "paper.tex",
-    tags = ["manual"],  # known broken; see docstring at top of file
     visibility = ["//visibility:public"],
 )
 
@@ -46,5 +42,4 @@ latex_test(
     # Confirms biblatex-apa actually loaded (not just silently
     # falling back to a default style).
     required_patterns = ["apa"],
-    tags = ["manual"],  # known broken; see docstring at top of file
 )

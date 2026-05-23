@@ -197,6 +197,20 @@ def parse_args() -> argparse.Namespace:
             "dep manually."
         ),
     )
+    parser.add_argument(
+        "--biblatex-overlay-file",
+        dest="biblatex_overlay_files",
+        action="append",
+        default=[],
+        type=Path,
+        help=(
+            "A file from the modern-biblatex toolchain overlay (see "
+            "DESIGN.md §5 item #12). May be repeated. The tool derives "
+            "one -Z search-path flag per unique directory among these "
+            "files, so tectonic loads the overlaid biblatex 3.21 "
+            "instead of the bundle's pinned 3.17."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -544,6 +558,26 @@ def _ctan_search_paths(ctan_dir: Path) -> list[str]:
     return [str(d) for d in sorted(dirs)]
 
 
+def _biblatex_overlay_search_paths(
+    overlay_files: list[Path] | None,
+) -> list[str]:
+    """Return one search-path dir per unique parent of the overlay files.
+
+    The modern-biblatex toolchain overlay (DESIGN.md §5 item #12) is
+    passed in as a flat list of files (the toolchain attribute is a
+    filegroup; the rule plumbing forwards them one at a time via
+    ``--biblatex-overlay-file``). Same flat-search-path semantics as
+    `_ctan_search_paths`, sorted for determinism.
+    """
+    if not overlay_files:
+        return []
+    dirs: set[Path] = set()
+    for f in overlay_files:
+        if f.is_file() and f.suffix.lower() in _PACKAGE_FILE_EXTS:
+            dirs.add(f.parent.resolve())
+    return [str(d) for d in sorted(dirs)]
+
+
 # File extensions we scan for `\RequirePackage` / `\usepackage` etc.
 # Other CTAN file types (.tex documentation, .pdf, .map) don't pull
 # in packages at compile time.
@@ -700,6 +734,7 @@ def run_tectonic(
     ctan_dir: Path | None = None,
     ctan_packages: list[str] | None = None,
     package_deps: dict[str, set[str]] | None = None,
+    biblatex_overlay_files: list[Path] | None = None,
 ) -> None:
     """Run tectonic with cwd set to the staged work directory.
 
@@ -742,6 +777,13 @@ def run_tectonic(
     if ctan_dir is not None:
         for search_dir in _ctan_search_paths(ctan_dir):
             cmd.extend(["-Z", "search-path={}".format(search_dir)])
+    # Same shape, but for the modern-biblatex toolchain overlay
+    # (when the workspace opted into it). Listed *after* ctan_dir
+    # entries so a user-fetched extension can still shadow the
+    # toolchain overlay if it really comes to that — tectonic's
+    # search-path lookup is first-match-wins.
+    for search_dir in _biblatex_overlay_search_paths(biblatex_overlay_files):
+        cmd.extend(["-Z", "search-path={}".format(search_dir)])
     cmd += [
         "--outdir",
         str(main_in_workdir.parent),
@@ -874,6 +916,7 @@ def main() -> int:
             ctan_dir=ctan_dir,
             ctan_packages=args.ctan_packages,
             package_deps=package_deps,
+            biblatex_overlay_files=args.biblatex_overlay_files,
         )
         pack_cache(cache_dir, output, ctan_dir=ctan_dir)
 

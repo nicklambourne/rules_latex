@@ -122,13 +122,17 @@ Key conventions worth knowing before changing this code:
   no-op that made the integration look like it worked when the
   bundle was actually serving every request — see DESIGN.md §5
   item #12.
-- **biblatex extension styles are currently broken.** Modern
-  biblatex-apa / -chicago / -ieee / -nature etc. require biblatex
-  3.18+ / biber 2.18+, but the bundle pins 3.17 / 2.17. Fetching
-  newer versions overlays them via `-Z search-path` and biblatex
-  3.17 then chokes on the newer control file format. Tracked in
-  [#1](https://github.com/nicklambourne/rules_latex/issues/1); gated
-  on bundle bump.
+- **Modern biblatex needs the toolchain opt-in.** Modern
+  biblatex-apa / -chicago / -ieee / -nature require biblatex
+  3.18+ / biber 2.18+; the bundle pins 3.17 / 2.17. Workspaces
+  using those styles must set
+  `tectonic.toolchain(modern_biblatex = True)` in MODULE.bazel,
+  which makes the toolchain fetch biblatex 3.21 + biber 2.21 from
+  CTAN/mirror and overlay them. Pins live in
+  [`latex/private/biblatex_versions.bzl`](latex/private/biblatex_versions.bzl)
+  and [`latex/private/biber_versions.bzl`](latex/private/biber_versions.bzl)
+  (the `*_MODERN_*` constants). Refresh via the procedure in
+  biblatex_versions.bzl when bumping.
 - **Failure-hint formatter (`_format_missing_file_hint`)** has three
   cases: already-listed (TDS-layout issue), referenced-by-fetched-pkg
   ("add 'X' to ctan_packages"), unknown ("typo or missing CTAN

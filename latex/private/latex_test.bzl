@@ -130,6 +130,17 @@ def _latex_test_impl(ctx):
         '--bundle-manifest "{}"'.format(ctx.file._bundle_manifest.short_path) if ctx.attr.ctan_packages else ""
     )
 
+    # Modern-biblatex toolchain overlay: one --biblatex-overlay-file
+    # flag per file, passed through to both populate-cache and compile
+    # tools so they emit matching `-Z search-path` flags.
+    biblatex_overlay_files = (
+        toolchain.biblatex_overlay.to_list() if toolchain.biblatex_overlay else []
+    )
+    biblatex_overlay_args = " \\\n    ".join([
+        '--biblatex-overlay-file "{}"'.format(f.short_path)
+        for f in biblatex_overlay_files
+    ])
+
     src_args = " \\\n    ".join([
         '--src "{}"'.format(s.short_path)
         for s in all_srcs.to_list()
@@ -166,6 +177,7 @@ PYTHON="${PYTHON:-python3}"
     {biber_arg} \\
     {ctan_args} \\
     {bundle_manifest_arg} \\
+    {biblatex_overlay_args} \\
     {src_args} \\
     {pkg_file_args}
 
@@ -176,6 +188,7 @@ PYTHON="${PYTHON:-python3}"
             biber_arg = biber_arg,
             ctan_args = ctan_args,
             bundle_manifest_arg = bundle_manifest_arg,
+            biblatex_overlay_args = biblatex_overlay_args,
             src_args = src_args,
             pkg_file_args = pkg_file_args,
         )
@@ -192,6 +205,7 @@ PYTHON="${PYTHON:-python3}"
     --log-output "$WORK/output.log" \\
     {compile_cache_args} \\
     {biber_arg} \\
+    {biblatex_overlay_args} \\
     {src_args} \\
     {pkg_file_args}
 
@@ -212,6 +226,7 @@ exit $status
         outfmt = ctx.attr.outfmt,
         compile_cache_args = compile_cache_args,
         biber_arg = biber_arg,
+        biblatex_overlay_args = biblatex_overlay_args,
         src_args = src_args,
         pkg_file_args = pkg_file_args,
         forbidden_checks = "\n".join([
@@ -235,6 +250,7 @@ exit $status
         ([cache_snapshot] if cache_snapshot else []) +
         ([biber_file] if biber_file else []) +
         ([ctx.file._bundle_manifest] if ctx.attr.ctan_packages else []) +
+        biblatex_overlay_files +
         [f for (f, _) in pkg_files]
     )
     runfiles = ctx.runfiles(
