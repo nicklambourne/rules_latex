@@ -769,6 +769,198 @@ These are deliberately out of scope for v0.1 but worth flagging.
     [GitHub issue #2](https://github.com/nicklambourne/rules_latex/issues/2)
     along with the triggers that would justify revisiting.
 
+12. **Automatic transitive CTAN dep resolution.** As of v0.4
+    (`ctan_packages`), users list each post-2022 CTAN package
+    explicitly. When a package transitively requires *another*
+    post-2022 package the populate step fails; the user reads the
+    targeted hint, adds the missing name to their `ctan_packages`
+    list, rebuilds. Iterate until the closure is covered.
+
+    For most documents this terminates in zero or one round-trips —
+    the 2022 bundle covers ~95% of TeX Live, so a fetched package's
+    deps almost always resolve from the bundle. But for some
+    package families (active biblatex citation styles, recent
+    `tcolorbox` releases, multi-package contribs) the closure can
+    chain 2-3 levels deep, and the iterative "rebuild, read hint,
+    edit `ctan_packages`, rebuild" cycle gets tedious.
+
+    Four strategies for automating this, in order of increasing
+    intrusiveness:
+
+    **A. Status quo (manual iteration with hints).** Today's
+    behaviour. The populate step's failure-hint already names the
+    missing file and the referencing package precisely enough that
+    each iteration is a one-attribute edit.
+      * **Pro:** Explicit, predictable. The set of packages fetched
+        is exactly what the user wrote. No silent expansion.
+        Reproducible without a lockfile. Zero new failure modes.
+        Hermeticity is trivially preserved.
+      * **Pro:** Already shipped (v0.4 work).
+      * **Con:** Each iteration is a full online prime
+        (~30-90s) plus a compile. A 3-level chain costs 3 build
+        cycles. Frustrating for new package families.
+      * **Con:** Discoverability: users need to read the hint to
+        know what to add. Not in your face.
+
+    **B. Scan-driven closure (recursive fetch + bundle filter).**
+    During populate, run the scanner over each fetched package's
+    extract tree (already implemented for the hint and dep-summary
+    paths). For each referenced name *not* in a static bundle
+    manifest, fetch and recurse until the queue is empty. Then run
+    tectonic exactly once.
+      * **Pro:** Single compile pass; latency same as the current
+        no-transitive-dep path.
+      * **Pro:** Uses existing scanner — no new oracle, no new
+        network protocols.
+      * **Pro:** Composable with the existing snapshot tarball
+        format; the closure ends up in `ctan_pkgs/` and the snapshot
+        captures it.
+      * **Con:** Requires a static bundle manifest (~6000 package
+        names from TeX Live 2022). We'd ship it as a `BUNDLE.txt`
+        data file or generate it from the tectonic bundle at
+        toolchain-init time. Maintenance burden grows when the
+        bundle itself updates (see open question #4).
+      * **Con:** False positives: the scanner over-reports (e.g.
+        `\RequirePackage{biblatex}` in `apa.bbx`), so without the
+        manifest we'd over-fetch and shadow bundle packages.
+        Shadowing a bundle package with a newer CTAN version can
+        break compat (biblatex 3.18+ vs the bundle's pinned biber
+        2.17). The manifest is therefore load-bearing for
+        correctness, not just performance.
+      * **Con:** Heuristic. `\RequirePackage{foo}` doesn't tell us
+        whether `foo` is a CTAN package name, a TeX-internal
+        component, or a typo. We'd attempt-fetch and treat 404 as
+        "not on CTAN, leave it alone" — which adds 4 HEAD requests
+        per false positive (matching the existing fallback chain in
+        `download_ctan_package`).
+
+    **C. CTAN JSON catalogue lookup.** Query
+    `https://www.ctan.org/json/2.0/pkg/<name>` per package; the
+    catalogue's `depends` field is the authoritative dep list. Walk
+    transitively, filter by the bundle manifest (or by attempted
+    download).
+      * **Pro:** Authoritative — uses CTAN's own metadata rather
+        than the heuristic scanner.
+      * **Pro:** Smaller payloads than full `.tds.zip` downloads
+        during exploration.
+      * **Pro:** No bundle-manifest dep for the *discovery* step;
+        only for filtering false positives.
+      * **Con:** New runtime dep on the CTAN JSON API. Outages or
+        rate-limiting break builds in a new way. We don't currently
+        use this endpoint, so we'd be the canary if it changes.
+      * **Con:** Catalogue `depends` entries can be stale or
+        absent — not every CTAN package has a fully-populated
+        catalogue record. We'd need a fall-back to strategy B.
+      * **Con:** Doesn't solve the shadowing problem. Same bundle
+        manifest still required.
+
+    **D. Iterative compile-fail-fetch loop.** Treat tectonic itself
+    as the oracle: run a compile, on `File X.sty not found`, fetch
+    `X`, retry. Loop until success or no more progress.
+      * **Pro:** Most accurate. By definition fetches exactly what
+        tectonic can't find, no false positives.
+      * **Pro:** No manifest needed; tectonic's bundle is the
+        ground truth.
+      * **Pro:** Handles the "package P exists in the bundle but
+        requires a newer feature only in the CTAN version" case
+        correctly (we don't fetch P).
+      * **Con:** Serialised compiles. A 3-level chain pays 3 online
+        primes (~90-270s). The 1-level common case is no faster
+        than today.
+      * **Con:** Loop bounding: must cap iterations to prevent
+        infinite loops on circular references or genuinely-missing
+        non-CTAN files. A typo'd `\usepackage{foobazquux}` would
+        run the loop until the cap is hit.
+      * **Con:** Cache key complexity: Bazel's action cache must
+        reflect the resolved closure, not just the user-listed set.
+        That means either (i) the closure becomes part of the
+        action's inputs (lockfile required, see below), or (ii) the
+        action is marked non-cacheable (slow forever).
+
+    **Cross-cutting concern: hermeticity and reproducibility.**
+
+    All three of B/C/D introduce a non-determinism: the *effective*
+    `ctan_packages` set depends on CTAN's state at fetch time.
+    Today's `latex_cache_snapshot` flow finesses this by capturing
+    the result and checking it in. For build-time auto-resolution
+    without a snapshot, three options:
+
+    1. **Lockfile.** Add a `ctan.lock` file (generated by a
+       new `bazel run :foo_ctan_lock` target) that pins the
+       resolved closure. Builds consume the lockfile; resolution
+       only happens during lock generation. Mirrors the pattern in
+       Cargo / npm / pip-compile. Best long-term answer.
+    2. **Network-during-action.** Mark the populate action with
+       `requires-network`, accept that the closure may drift,
+       document the trade-off. Easier to ship but loses
+       reproducibility.
+    3. **Snapshot-required.** Only allow auto-resolution behind a
+       `latex_cache_snapshot` (which already pins). User opts in to
+       auto-resolution at snapshot time; downstream builds see a
+       frozen closure. Simplest implementation, but doesn't help
+       users who don't yet use snapshots.
+
+    **Recommendation:** strategy **B + lockfile**, opt-in via a new
+    attribute on `latex_document` / `latex_test` / `latex_cache_snapshot`:
+
+    ```python
+    latex_document(
+        name = "thesis",
+        ctan_packages = ["biblatex-apa"],
+        ctan_lockfile = "ctan.lock",   # opt-in
+    )
+    ```
+
+    Plus a generator: `bazel run :thesis_ctan_lock_update` writes
+    `ctan.lock` containing the resolved closure (using strategy B
+    plus a CTAN HEAD probe for false-positive filtering — D is
+    overkill since the scanner is fast enough). Default behaviour
+    when `ctan_lockfile` is unset is unchanged from today (manual
+    iteration with hints).
+
+    **Why this combination:**
+    - Hermeticity preserved (lockfile is the input).
+    - Single compile at build time (lock generation is offline-ish
+      and runs once per source change).
+    - No new runtime dep on a flaky API (B avoids C).
+    - Strategy D's worst-case latency (3+ serialised compiles)
+      happens at most during lockfile regeneration, not on every
+      build.
+    - Falls back cleanly to today's behaviour when the user doesn't
+      want a lockfile.
+
+    **Risks worth flagging:**
+    - **Bundle manifest staleness:** we'd ship a list of 2022 bundle
+      packages. If a future bundle bump (see #4) drops or adds
+      packages, the manifest drifts. Mitigation: regenerate the
+      manifest from the bundle's `tlpdb` file at toolchain-init time
+      (one-shot, cached) instead of hand-maintaining.
+    - **Version pinning:** CTAN doesn't expose versioned URLs for
+      the `.tds.zip` flavour we prefer. A lockfile pins package
+      *names*, not versions; the actual content can drift between
+      lock generation and build. To fully pin, we'd need to also
+      record a content hash and refuse builds where the fetched
+      content doesn't match — a meaningful new failure mode.
+    - **Privacy/policy:** auto-resolution makes silent network calls
+      to `mirrors.ctan.org`. Today, every fetch corresponds to a
+      package the user explicitly listed; that explicitness is a
+      feature for some audit/compliance environments. Auto-fetch
+      should be opt-in for this reason alone.
+
+    **What I'd not do (yet):**
+    - **Strategy D as the only option.** The serialised-compile
+      latency makes it untenable for the common case.
+    - **Strategy C as the discovery primary.** The CTAN JSON API
+      isn't reliable enough to take a runtime dep on without a
+      fallback.
+    - **Auto-resolution without a lockfile by default.** Silent
+      transitive expansion is the kind of "magic" that makes
+      Bazel users (rightly) suspicious. Opt-in via lockfile is
+      the smaller surprise.
+
+    Tracked in [GitHub issue #12](https://github.com/nicklambourne/rules_latex/issues/12)
+    (to be filed).
+
 ## 6. Versioning
 
 `rules_latex` will follow semver post-1.0. Pre-1.0 releases (v0.x) can break

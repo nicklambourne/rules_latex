@@ -87,12 +87,20 @@ sh_test(
     data = _TEST_DATA + ["test_populate_cache_hints.py"],
 )
 
+sh_test(
+    name = "test_populate_cache_e2e",
+    srcs = ["run_pytest.sh"],
+    args = ["tests/py/test_populate_cache_e2e.py"],
+    data = _TEST_DATA + ["test_populate_cache_e2e.py"],
+)
+
 test_suite(
     name = "py_tests",
     tests = [
         ":test_editor_detection",
         ":test_http_head",
         ":test_pdf_chunks",
+        ":test_populate_cache_e2e",
         ":test_populate_cache_hints",
         ":test_post_build_hook",
         ":test_serve_cache",
