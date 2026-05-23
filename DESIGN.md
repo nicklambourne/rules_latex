@@ -447,6 +447,20 @@ serves predictable URLs for the `current` release rather than
 version-pinned ones — content-addressed pinning against upstream's
 URL scheme would break on every biber bump.
 
+Two pinned versions exist, governed by the `modern_biblatex` opt-in
+on the toolchain tag:
+
+* **biber 2.17 (default).** Matches the bundle's biblatex 3.17
+  via the `.bcf` control-file format (v3.8). Selected when
+  `tectonic.toolchain()` is called with the default arguments;
+  release table is `BIBER_RELEASES` in
+  `latex/private/biber_versions.bzl`.
+* **biber 2.21 (opt-in).** Paired with a CTAN-fetched biblatex
+  3.21 via the `-Z search-path` overlay (§4.10 option 6).
+  Selected when `tectonic.toolchain(modern_biblatex = True)`.
+  Same mirror pattern (`biber-mirror-v2.21`); release table is
+  `BIBER_MODERN_RELEASES`.
+
 #### Activation modes
 
 `latex_document(biber = ...)` and `latex_cache_snapshot(biber = ...)`
@@ -561,30 +575,55 @@ durability:
    install required. Cost: high (effectively rewriting the
    toolchain layer). Risk: we'd be reinventing what `bazel_latex`
    does, which is the project we set out to *replace*.
+6. **Toolchain-side overlay via `-Z search-path`** (**shipped, opt-in**).
+   Tectonic's `-Z search-path=<dir>` flag adds search directories
+   in front of the bundle. We use this to overlay a CTAN-fetched
+   biblatex package and a vendored newer biber on top of the
+   bundle, swapping just the two version-coupled components without
+   touching the rest of the bundle. Opt-in via
+   `tectonic.toolchain(modern_biblatex = True)` in `MODULE.bazel`;
+   default workspaces stay on biblatex 3.17 / biber 2.17. Cost paid:
+   ~1 day. Pinned to biblatex 3.21 + biber 2.21 today (see
+   `latex/private/biblatex_versions.bzl` + `BIBER_MODERN_*` in
+   `biber_versions.bzl`). Risk: we own two more upstream version
+   pins; the rest of the bundle (hyperref, csquotes, kernel) stays
+   on 2022-vintage, so a future hard requirement in biblatex 3.22+
+   for newer kernel features could still bite.
 
 #### Recommendation
 
-For v0.2 and v0.3 we ship with the current biblatex 3.17 + biber 2.17
-stack and document the limitation clearly. This is defensible because:
+**Implemented:** option 6 above. The `modern_biblatex = True`
+toolchain opt-in unlocks modern citation styles (`biblatex-apa`
+9.x, `biblatex-chicago`, `biblatex-ieee`, etc.) for workspaces that
+need them. Workspaces that don't opt in stay on the stable
+biblatex 3.17 / biber 2.17 pair from the bundle — fine for the
+five core styles (numeric / alphabetic / authoryear /
+authortitle / verbose) the bundle ships and for the ~95% of
+real-world documents that don't need post-2022 biblatex features.
 
-* The 2022-vintage biblatex covers ~95% of real-world citation needs.
-  All major styles (APA, Chicago, IEEE, Vancouver, Harvard) were
-  mature by then.
-* Users who hit a specific package's staleness can self-host a newer
-  bundle and override via `tectonic.bundle()` — the escape hatch
-  already exists.
-* The implicit cache pipeline (§4.4) means the bundle is fetched
-  exactly once per platform across an entire CI fleet (via the remote
-  cache). The "stale" 2.88 GB is a one-time cost, not per-build.
+Why this combination, rather than the heavier options (2)/(3) that
+rebuild the whole bundle:
 
-The right time to do option (3) is when one of:
+* The biblatex/biber pair is the only place inside the bundle
+  where we've observed a real version-coupling problem in
+  practice. The other "stale" pieces (tikz, beamer, etc.) work
+  fine for almost all documents.
+* Tectonic's `-Z search-path` cleanly shadows just the affected
+  files; no need to repackage the bundle.
+* The opt-in shape leaves the stable default unchanged.
 
-* Tectonic upstream cuts a new bundle (which makes the bundle path
-  worth investing in because there's a flow to follow), or
-* A real user blocks on a feature in biblatex 3.18+, or
-* We have a half-week of capacity to invest in long-term durability.
+Re-evaluate the heavier options if:
 
-Until then, this is tracked as §5.8 with the full option matrix above.
+* Tectonic upstream cuts a fresh bundle (do option 1 — just bump
+  the pin).
+* Real users hit version coupling for a package *other than*
+  biblatex (then option 2 or 3 starts to earn its complexity).
+* The pinned biblatex 3.21 starts demanding a newer kernel than
+  TL 2022 ships (then option 3 is the right answer for the whole
+  ecosystem, not just biblatex).
+
+Tracked at the open-question level in §5.8 below for the upstream
+fresh-bundle case, which would supersede the overlay.
 
 ### 4.11 Source staging (main-rooted layout)
 
@@ -731,21 +770,17 @@ These are deliberately out of scope for v0.1 but worth flagging.
    resulting jump event. Revisit if a future feature genuinely needs
    duplex binary comms. Tracked in
    [GitHub issue #9](https://github.com/nicklambourne/rules_latex/issues/9).
-8. **Modern biblatex / fresh TeX Live bundle.** The upstream
-   `tlextras-2022.0r0` bundle and matched biber 2.17 are both
-   ~3 years stale because the bundle-publishing project is archived
-   (see §4.10 for the full chain). Tracked in
+8. **Modern biblatex / fresh TeX Live bundle.** **Partially
+   resolved.** §4.10 originally listed five graded options; we
+   shipped a sixth (a toolchain-side overlay via `-Z search-path`)
+   in v0.4 as `tectonic.toolchain(modern_biblatex = True)`. That
+   covers the biblatex+biber slice of the staleness problem —
+   modern citation styles like `biblatex-apa` 9.x now work via
+   opt-in. The rest of the bundle (tikz, beamer, font packages,
+   etc.) stays on 2022-vintage. The original "rebuild the whole
+   bundle" options remain open for the day a non-biblatex package
+   actually needs them. Tracked in
    [GitHub issue #1](https://github.com/nicklambourne/rules_latex/issues/1).
-   §4.10 lays out five graded options ranging from "shim overlay
-   bundle" (~2-3 days) through "drive `tectonic -X bundle create`
-   from a repo rule against a fresh TeX Live" (~2-4 days,
-   recommended) to "drop Tectonic for TeX Live entirely". Not
-   actioned for v0.2 because: (a) the 2022-vintage stack covers
-   ~95% of real citation use cases, (b) users with specific package
-   needs can self-host newer bundles and override via
-   `tectonic.bundle()`, and (c) ownership of a TeX Live distribution
-   is an ongoing maintenance commitment we don't want to take on
-   speculatively.
 9. **Biber from source for linux/aarch64.** Upstream ships no
    prebuilt biber for that triple. Building biber from source means
    resolving its 50+ CPAN dependencies via a Bazel-friendly Perl
@@ -903,8 +938,16 @@ These are deliberately out of scope for v0.1 but worth flagging.
       the compile still fails after auto-resolution, the existing
       targeted hint kicks in (the failure-path code from PR #22).
 
-    Tracked in [GitHub issue #12](https://github.com/nicklambourne/rules_latex/issues/12)
-    (to be filed).
+    **Status:** shipped end-to-end in v0.4.
+
+    The resolver, the bundle manifest, the failure-hint chain, the
+    HEAD-probe filtering, the proactive dep summary, the
+    `RULES_LATEX_CTAN_MIRROR` env override, retry+backoff, and the
+    CI fixture server all live in `tools/tectonic_populate_cache.py`
+    + `tools/tectonic_compile.py` + the rule plumbing. The modern
+    biblatex/biber opt-in (item #8 above) closed the last open
+    caveat — the biblatex 3.21 / biber 2.21 overlay reaches
+    tectonic via `-Z search-path` as designed.
 
 ## 6. Versioning
 
