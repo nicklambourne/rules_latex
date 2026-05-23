@@ -37,9 +37,6 @@ LaTeX install. `bazel build //:cv` works on a fresh machine.
 | Bibliography (`biblatex`/biber) | System install, manual flags      | Vendored biber toolchain       |
 | Newer-than-bundle CTAN packages | Manual vendoring                  | `ctan_packages = [...]`        |
 | Reproducible builds             | Possible, manual                  | `reproducible = True` attr     |
-| Live preview                    | None                              | `latex_serve` / `latex_serve_web` |
-| In-browser SyncTeX              | None                              | Click PDF → jump to source     |
-| Air-gapped CI                   | Yes (vendored TeX Live)           | Yes (`cache = "foo.tar.gz"`)   |
 | First-build cost                | Many MB of TeX Live as needed     | ~20 MB tectonic + 10–100 MB cache snapshot per document |
 
 The first time you build, `rules_latex` runs Tectonic once online to
@@ -47,8 +44,9 @@ populate a per-document cache (~10–100 MB depending on the document),
 then runs the actual compile offline against it. Bazel's action cache
 makes the prime a one-time cost; subsequent builds (including across
 CI machines via the remote cache) skip it entirely. See the
-[implicit cache pipeline](./DESIGN.md#44-network-policy) section
-of `DESIGN.md` for the design rationale.
+[caching](https://nicklambourne.github.io/rules_latex/concepts/caching/)
+docs page for the user-facing summary and `DESIGN.md` for the
+architectural rationale.
 
 ## Quick start
 
@@ -87,7 +85,6 @@ latex_document(
     # ctan_packages = ["..."]   # for packages not in the 2022 bundle
     # reproducible = True       # byte-identical PDF across builds
     # synctex = True            # click PDF → jump to source in serve_web
-    # cache = "cv_cache.tar.gz" # for fully air-gapped builds
 )
 
 # Catch regressions: fails CI if cv.tex stops compiling cleanly.
@@ -104,14 +101,6 @@ bazel build //:cv            # first build: ~30-90s (online prime + compile)
 bazel build //:cv            # subsequent builds: ~1-5s (action-cache hit)
 bazel test //:cv_compiles
 ```
-
-Live preview with `latex_serve_web` primes a persistent cache
-snapshot on first run (under `.cache/rules_latex/` in the workspace,
-auto-added to `.gitignore`) and reuses it on every subsequent edit
-— so the edit-to-preview cycle is in the 2-3 s range regardless of
-whether you've checked in a `latex_cache_snapshot`. See
-[`DESIGN.md` §4.7.1](./DESIGN.md#471-serve-time-persistent-cache-implicit-pipeline-only)
-for the mechanism.
 
 For more, see the [examples](./examples/) directory — letter, CV,
 paper, thesis, beamer slides, and a CTAN-overlay paper — and the
@@ -133,6 +122,59 @@ All seven are loaded from `@rules_latex//latex:defs.bzl`.
 
 ## Features
 
+### Live preview
+
+<!--
+  TODO(maintainer): drop a screenshot or GIF of `latex_serve_web` in
+  ./assets/serve-web.png and uncomment the line below. The CV example
+  (`cd examples && bazel run //cv:cv_serve` → http://127.0.0.1:8767/)
+  is the most photogenic target.
+
+  <p align="center"><img src="./assets/serve-web.png" alt="latex_serve_web preview" width="700" /></p>
+-->
+
+Two flavours, both `bazel run`-able. Each wraps the same file
+watcher around your `latex_document` target; the difference is
+where the rendered PDF shows up.
+
+```bash
+bazel run //:cv_live        # local: opens cv.pdf in your system viewer
+bazel run //:cv_web         # browser: http://127.0.0.1:8765/
+```
+
+**`latex_serve` (local viewer)** — watches the document's transitive
+sources, triggers a `bazel build` on every save, then opens (or
+re-opens) the resulting PDF in the OS-default viewer
+(Preview.app / Skim / Okular / SumatraPDF / …). Because the rebuild
+goes through Bazel's action cache, the edit-to-update loop is in
+the 2–3 s range once the cache is warm. Useful when you'd rather
+stay in a native PDF viewer — Skim's text-search and annotation
+flow, Preview's gesture zoom — than a browser tab.
+
+**`latex_serve_web` (browser preview)** — same watcher, but serves a
+self-hosted PDF.js page on `127.0.0.1:<port>`:
+
+- **PDF.js, vendored** — no CDN, works on disconnected networks,
+  doesn't leak the document to a third-party host.
+- **SSE auto-reload** — the browser tab refreshes the moment the new
+  PDF lands. Scroll position, zoom level, and page number are
+  preserved across reloads, so a 90-page thesis doesn't snap back
+  to page 1 on every save.
+- **Click-to-source via SyncTeX** — when the document declares
+  `synctex = True`, clicking a glyph in the preview jumps your
+  editor to the matching `.tex` line via the generated
+  `.synctex.gz` index.
+- **VS Code-family terminal detection** — when invoked from
+  VS Code / Cursor / Windsurf / VSCodium, the preview opens in
+  the editor's built-in Simple Browser by default instead of a
+  separate window. Outside those terminals it opens the system
+  browser. Tunable via the `open_on_start` attribute.
+- **DPI-aware rendering** — canvases render at `devicePixelRatio`,
+  so the preview is crisp on Retina / 4K displays.
+- **Configurable port and debouncer** — `port`, `poll_interval_ms`,
+  `debounce_ms`, and `debounce_max_ms` are all rule attributes for
+  noisy filesystems or shared dev hosts.
+
 ### Bibliography (biblatex / biber)
 
 ```python
@@ -147,8 +189,8 @@ latex_document(
 A vendored biber binary (pinned to 2.17 to match the bundle's biblatex
 3.17) is staged onto PATH at compile time. On Linux arm64 — where
 upstream ships no prebuilt biber — set `biber_strategy = "system"` to
-fall back to a distro-installed binary. See
-[DESIGN.md §4.9](./DESIGN.md#49-biber).
+fall back to a distro-installed binary. See the
+[bibliography guide](https://nicklambourne.github.io/rules_latex/getting-started/bibliography/).
 
 ### CTAN packages outside the bundle
 
@@ -171,20 +213,13 @@ cache pipeline. No extra targets, no manual vendoring, no waiting
 for an upstream bundle refresh.
 
 For most documents you don't need this attribute: the bundle covers
-~95% of real-world LaTeX. See the [CTAN packages user
+~95% of real-world LaTeX. When a fetched package transitively
+requires another post-2022 package, the populate-cache step surfaces
+a targeted hint naming the missing file and which of your existing
+`ctan_packages` referenced it — so the next iteration is one
+attribute edit away. See the [CTAN packages user
 guide](https://nicklambourne.github.io/rules_latex/getting-started/ctan-packages/)
 for when to reach for it (and when not to).
-
-### Live preview
-
-```bash
-bazel run //:cv_live        # opens cv.pdf in your system viewer, auto-rebuilds on save
-bazel run //:cv_web         # http://127.0.0.1:8765/ — PDF.js + SSE auto-reload
-```
-
-`latex_serve_web` self-hosts PDF.js (no CDN), preserves scroll
-position across reloads, and offers click-to-source via SyncTeX when
-the underlying document declares `synctex = True`.
 
 ### Reproducible PDFs
 
@@ -203,10 +238,12 @@ on every push.
 
 ### Hermetic offline builds
 
-Three offline modes plus a default implicit pipeline; the rule
-chooses based on what you've configured. See
-[DESIGN.md §4.4](./DESIGN.md#44-network-policy) for the full
-hierarchy.
+For fully air-gapped CI, `latex_cache_snapshot` captures a tiny
+per-document cache tarball that you check into the repo and pass
+as `cache = "..."` — see the [hermetic builds
+guide](https://nicklambourne.github.io/rules_latex/concepts/hermetic-builds/).
+Most users won't need this: the default implicit pipeline already
+caches the online prime through Bazel's action cache.
 
 ## Supported platforms
 
@@ -218,30 +255,16 @@ hierarchy.
 | macOS aarch64   | ✅       | ✅ universal binary | ✅      |
 | Windows x86_64  | ✅ MSVC  | ✅                  | ✅      |
 
-The Linux arm64 biber gap is documented in
-[DESIGN.md §4.9](./DESIGN.md#49-biber); workarounds available today.
-
-## Project status
-
-| Layer | Status |
-|---|---|
-| Core rules (`document`, `library`, `pkg`, `test`) | Stable since v0.1.0 |
-| Toolchain (`tectonic`, `bundle`, `biber`) | Stable since v0.2.0 |
-| Live preview (`serve`, `serve_web`) | Stable since v0.2.0 |
-| SyncTeX reverse-sync | Stable since v0.2.0 |
-| Implicit cache pipeline | Stable since v0.2.0 |
-| Self-hosted PDF.js | Stable since v0.2.0 |
-| `ctan_packages` (post-2022 packages) | New in v0.4.0 |
-| Modern biblatex (3.18+) | Blocked on upstream bundle refresh ([#1](https://github.com/nicklambourne/rules_latex/issues/1)) |
-| Linux arm64 biber | Pending v0.3 (build from source) |
-| SyncTeX forward-sync | Future (`DESIGN.md` §5.6) |
+The Linux arm64 biber gap is documented in the
+[bibliography guide](https://nicklambourne.github.io/rules_latex/getting-started/bibliography/#linux-arm64-workaround);
+workarounds available today.
 
 ## Compatibility
 
 - **Bazel**: 8.0+ (Bzlmod-only). CI tests against 8.0.0, 8.7.0, and 9.1.0 on every push and PR.
 - **Tectonic**: 0.16.9 (pinned)
 - **biber / biblatex**: 2.17 / 3.17 (paired by control-file format)
-- **TeX Live**: 2022 (frozen — see [DESIGN.md §4.10](./DESIGN.md#410-biberbiblatex-version-coupling-and-the-upstream-bundle-staleness))
+- **TeX Live**: 2022 (frozen — see the [roadmap](https://nicklambourne.github.io/rules_latex/about/roadmap/))
 
 ## Documentation
 
