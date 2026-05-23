@@ -29,7 +29,28 @@ jobs:
     # for the BCR provenance design these attestations implement.
     uses: bazel-contrib/.github/.github/workflows/release_ruleset.yaml@v7.5.0
     with:
-      bazel_test_command: bazel test //... //tests/...
+      # //tests/ctan:* needs the CTAN fixture mirror running before
+      # bazel test, the same way the main CI workflow sets it up.
+      # Without it, transitive_resolve_test 404s against real CTAN
+      # (test-pkg-a / test-pkg-b are synthetic, not real CTAN
+      # packages — they only exist as fixtures in
+      # tests/ctan/fixtures/). The mirror also keeps the lipsum +
+      # biblatex tests flake-free, since real CTAN occasionally
+      # times out.
+      bazel_test_command: |
+        set -e
+        python3 -m http.server 8765 --directory tests/ctan/fixtures \
+          > /tmp/ctan_fixtures.log 2>&1 &
+        CTAN_FIXTURE_PID=$!
+        trap 'kill $CTAN_FIXTURE_PID 2>/dev/null || true' EXIT
+        for _ in 1 2 3 4 5; do
+          if curl -fsS http://127.0.0.1:8765/README.md > /dev/null 2>&1; then
+            break
+          fi
+          sleep 1
+        done
+        bazel test //... //tests/... \
+          --test_env=RULES_LATEX_CTAN_MIRROR=http://127.0.0.1:8765
       prerelease: false
       release_files: |
         rules_latex-*.tar.gz
