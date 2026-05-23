@@ -178,9 +178,13 @@ latex_document(
 ```
 
 A vendored biber binary (pinned to 2.17 to match the bundle's biblatex
-3.17) is staged onto PATH at compile time. On Linux arm64 — where
-upstream ships no prebuilt biber — set `biber_strategy = "system"` to
-fall back to a distro-installed binary. See the
+3.17) is staged onto PATH at compile time. For modern citation styles
+(`biblatex-apa`, `biblatex-chicago`, `biblatex-ieee`, …) that need
+biblatex 3.18+, set `tectonic.toolchain(modern_biblatex = True)` in
+`MODULE.bazel` — that fetches biblatex 3.21 + biber 2.21 alongside the
+toolchain. On Linux arm64 — where upstream ships no prebuilt biber —
+set `biber_strategy = "system"` to fall back to a distro-installed
+binary. See the
 [bibliography guide](https://nicklambourne.github.io/rules_latex/getting-started/bibliography/).
 
 ### CTAN packages outside the bundle
@@ -202,6 +206,13 @@ modern packages — APA / Chicago / IEEE citation styles, recent
 `mirrors.ctan.org` in TDS format and folds them into the implicit
 cache pipeline. No extra targets, no manual vendoring, no waiting
 for an upstream bundle refresh.
+
+Modern biblatex extension styles (`biblatex-apa` 9.x etc.) need the
+toolchain-level `modern_biblatex = True` opt-in too, because the bundle's
+pinned biblatex 3.17 / biber 2.17 are older than the style files
+require. See the
+[bibliography guide](https://nicklambourne.github.io/rules_latex/getting-started/bibliography/#modern-citation-styles)
+for the full coupling discussion.
 
 For most documents you don't need this attribute: the bundle covers
 ~95% of real-world LaTeX. When a fetched package transitively
@@ -254,7 +265,7 @@ workarounds available today.
 
 - **Bazel**: 8.0+ (Bzlmod-only). CI tests against 8.0.0, 8.7.0, and 9.1.0 on every push and PR.
 - **Tectonic**: 0.16.9 (pinned)
-- **biber / biblatex**: 2.17 / 3.17 (paired by control-file format)
+- **biber / biblatex**: 2.17 / 3.17 by default; 2.21 / 3.21 with `tectonic.toolchain(modern_biblatex = True)` (paired by control-file format)
 - **TeX Live**: 2022 (frozen — see the [roadmap](https://nicklambourne.github.io/rules_latex/about/roadmap/))
 
 ## Documentation
