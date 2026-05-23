@@ -130,12 +130,18 @@ def _parse_pkg_files(raw_entries: list[str]) -> list[PkgFile]:
     return out
 
 
-def download_ctan_package(package: str, dest_dir: Path) -> None:
+def download_ctan_package(package: str, dest_dir: Path) -> set[str]:
     """Download a single CTAN package in TDS format.
 
     Tries the TDS .zip first (structured tex/latex/contrib tree),
     then falls back to the raw package .zip and normalizes it into
     a compatible TDS layout under dest_dir.
+
+    Returns the set of upstream package names this package
+    ``\\RequirePackage``/``\\usepackage``/``\\LoadClass``-references,
+    scanned from its pre-normalisation extract tree (so we can still
+    attribute deps to the originating package after files merge into
+    the shared TDS overlay).
     """
     urls = [
         f"https://mirrors.ctan.org/install/macros/latex/contrib/{package}.tds.zip",
@@ -187,11 +193,18 @@ def download_ctan_package(package: str, dest_dir: Path) -> None:
     # Clean up the archive
     archive.unlink()
 
+    # Scan the extract tree *before* normalising — once files merge
+    # into the shared TDS overlay, we lose the per-package attribution
+    # that makes the dep map and the failure-path hint informative.
+    deps = _scan_package_dependencies(extract_tmp)
+
     # Normalize the extracted contents into a TDS tree under dest_dir
     _normalize_ctan_tree(extract_tmp, dest_dir, package)
 
     # Remove the temporary extraction directory
     shutil.rmtree(str(extract_tmp), ignore_errors=True)
+
+    return deps
 
 
 def _normalize_ctan_tree(src: Path, dest: Path, package: str) -> None:
@@ -283,25 +296,22 @@ _REQUIRE_RE = re.compile(
 )
 
 
-def _scan_ctan_dependencies(ctan_dir: Path) -> dict[str, set[str]]:
-    """Scan extracted CTAN package files for upstream package references.
+def _scan_package_dependencies(package_root: Path) -> set[str]:
+    """Return the set of package names a single CTAN package references.
 
-    Returns a dict mapping each referenced package name to the set of
-    file basenames inside ``ctan_dir`` that reference it. Used to
-    produce a targeted hint when tectonic fails because one of those
-    referenced packages isn't in the bundle either.
+    Greps the package's own extracted tree (pre-normalisation, while
+    we still know which files belong to which package) for
+    ``\\RequirePackage``, ``\\usepackage``, and ``\\LoadClass``.
 
-    Heuristic: greps for `\\RequirePackage`, `\\usepackage`, and
-    `\\LoadClass` in `.sty/.cls/.bbx/.cbx/.lbx/.dbx` files. This will
-    over-report (e.g. a package that requires `etoolbox` — already in
-    the bundle — still shows up), but that's fine: we only consult
-    this map on the failure path, when we already know a specific
-    package wasn't found.
+    Over-reports — packages bundled with tectonic (``etoolbox``,
+    ``biblatex``, …) still show up — but we only consult this on
+    the failure path, where the missing name is already known, so
+    over-reporting is harmless.
     """
-    refs: dict[str, set[str]] = {}
-    if not ctan_dir.exists():
-        return refs
-    for path in ctan_dir.rglob("*"):
+    deps: set[str] = set()
+    if not package_root.exists():
+        return deps
+    for path in package_root.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in _PACKAGE_FILE_EXTS:
             continue
         try:
@@ -311,10 +321,33 @@ def _scan_ctan_dependencies(ctan_dir: Path) -> dict[str, set[str]]:
         for match in _REQUIRE_RE.finditer(text):
             for name in match.group(1).split(","):
                 name = name.strip()
-                if not name:
-                    continue
-                refs.setdefault(name, set()).add(path.name)
-    return refs
+                if name:
+                    deps.add(name)
+    return deps
+
+
+def _print_dep_summary(
+    package_deps: dict[str, set[str]],
+    out=sys.stderr,
+) -> None:
+    """Emit a short "what your ctan_packages pulled in" report.
+
+    Printed after all downloads, before the tectonic populate step,
+    so users see the dep graph even on a successful build. The list
+    will include packages already in the bundle (etoolbox, biblatex,
+    …) — over-reporting is fine here; the goal is transparency, not
+    a precise dependency manifest.
+    """
+    if not package_deps:
+        return
+    print("ctan_packages dep map:", file=out)
+    for pkg in sorted(package_deps):
+        deps = sorted(package_deps[pkg])
+        if not deps:
+            print(f"  {pkg}: (no upstream package references found)", file=out)
+        else:
+            print(f"  {pkg} -> {', '.join(deps)}", file=out)
+    print(file=out)
 
 
 # Matches the LaTeX error tectonic prints when a `\usepackage`,
@@ -346,20 +379,22 @@ def _extract_missing_file(log_path: Path) -> str | None:
 def _format_missing_file_hint(
     missing: str,
     ctan_packages: list[str],
-    refs: dict[str, set[str]],
+    package_deps: dict[str, set[str]],
 ) -> str:
     """Compose a one-paragraph hint for a missing-file failure.
 
     Three cases, in increasing order of how much we can say:
-      1. `missing` is already listed in `ctan_packages`. The download
-         succeeded (otherwise we'd have died earlier) but tectonic
-         still didn't find it — most likely a TDS-layout mismatch in
-         the fetched archive. Steer the user toward an issue report.
-      2. `missing` is referenced by one of the fetched packages' files.
-         We can name them: "X.sty is required by foo.sty (from your
-         ctan_packages); add 'X' to ctan_packages too."
-      3. `missing` is unreferenced and unlisted. Mention it might be a
-         CTAN package or a typo in `.tex`.
+      1. ``missing`` is already listed in ``ctan_packages``. The
+         download succeeded (otherwise we'd have died earlier) but
+         tectonic still didn't find the file — most likely a
+         TDS-layout mismatch in the fetched archive. Steer the user
+         toward an issue report.
+      2. ``missing`` is referenced by one of the fetched packages.
+         We can name the requiring package: "X is required by
+         <pkg> (from your ctan_packages); add 'X' to ctan_packages
+         too."
+      3. ``missing`` is unreferenced and unlisted. Mention it might
+         be a CTAN package or a typo in ``.tex``.
     """
     base = missing.rsplit(".", 1)[0] if "." in missing else missing
     listed = base in ctan_packages
@@ -373,16 +408,17 @@ def _format_missing_file_hint(
             f"issue with the package name."
         )
 
-    referencing = sorted(refs.get(base, set()))
+    referencing = sorted(
+        pkg for pkg, deps in package_deps.items() if base in deps
+    )
     if referencing:
-        # Limit the file list — long lists make the hint less readable.
         sample = ", ".join(referencing[:3])
         more = f" (+{len(referencing) - 3} more)" if len(referencing) > 3 else ""
         return (
-            f"hint: '{missing}' is required by {sample}{more} — file(s) "
-            f"from one of your ctan_packages. It isn't in Tectonic's "
-            f"2022 bundle. Add '{base}' to ctan_packages on this "
-            f"target and rebuild."
+            f"hint: '{missing}' is required by {sample}{more} — one "
+            f"of your ctan_packages. It isn't in Tectonic's 2022 "
+            f"bundle. Add '{base}' to ctan_packages on this target "
+            f"and rebuild."
         )
 
     return (
@@ -400,6 +436,7 @@ def run_tectonic(
     biber: Path | None = None,
     ctan_dir: Path | None = None,
     ctan_packages: list[str] | None = None,
+    package_deps: dict[str, set[str]] | None = None,
 ) -> None:
     """Run tectonic with cwd set to the staged work directory.
 
@@ -456,9 +493,10 @@ def run_tectonic(
             f"{main_in_workdir.parent} for details."
         )
         if missing is not None:
-            refs = _scan_ctan_dependencies(ctan_dir) if ctan_dir else {}
             hint = _format_missing_file_hint(
-                missing, list(ctan_packages or []), refs
+                missing,
+                list(ctan_packages or []),
+                package_deps or {},
             )
             message = f"{message}\n\n{hint}"
         raise SystemExit(message)
@@ -532,11 +570,13 @@ def main() -> int:
 
         # Download CTAN packages if requested
         ctan_dir = None
+        package_deps: dict[str, set[str]] = {}
         if args.ctan_packages:
             ctan_dir = tmp_path / "ctan_pkgs"
             ctan_dir.mkdir()
             for pkg in args.ctan_packages:
-                download_ctan_package(pkg, ctan_dir)
+                package_deps[pkg] = download_ctan_package(pkg, ctan_dir)
+            _print_dep_summary(package_deps)
 
         main_in_workdir = stage_sources(
             args.main, args.srcs, pkg_files, work_dir,
@@ -548,6 +588,7 @@ def main() -> int:
             biber=args.biber,
             ctan_dir=ctan_dir,
             ctan_packages=args.ctan_packages,
+            package_deps=package_deps,
         )
         pack_cache(cache_dir, output, ctan_dir=ctan_dir)
 

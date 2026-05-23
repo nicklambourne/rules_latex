@@ -1,16 +1,16 @@
 """Unit tests for the missing-file hint logic in tectonic_populate_cache.
 
 Covers:
-  * `_scan_ctan_dependencies` — which package-file references the
+  * `_scan_package_dependencies` — which package-file references the
     scanner detects across .sty/.cls/.bbx/.cbx layouts.
   * `_extract_missing_file` — the LaTeX-error grep over a tectonic
     .log file.
   * `_format_missing_file_hint` — the three-case hint formatter
     (listed / referenced / unknown).
+  * `_print_dep_summary` — the proactive dep-map report.
 
-These are the failure-path ergonomics for the ctan_packages workflow.
-The actual tectonic invocation is exercised end-to-end by
-//tests/ctan:*.
+End-to-end coverage of the failure path (real subprocess, real
+log-file, real ctan_dir) lives in test_populate_cache_e2e.py.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ def _load_module():
 tpc = _load_module()
 
 
-class ScanCtanDependenciesTest(unittest.TestCase):
+class ScanPackageDependenciesTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="rules_latex_test_")
         self.root = Path(self.tmp.name)
@@ -57,94 +57,76 @@ class ScanCtanDependenciesTest(unittest.TestCase):
         path.write_text(body, encoding="utf-8")
 
     def test_returns_empty_for_missing_directory(self):
-        result = tpc._scan_ctan_dependencies(self.root / "does-not-exist")
-        self.assertEqual(result, {})
+        self.assertEqual(
+            tpc._scan_package_dependencies(self.root / "does-not-exist"),
+            set(),
+        )
 
     def test_finds_RequirePackage(self):
-        self._write(
-            "tex/latex/contrib/foo/foo.sty",
-            r"\RequirePackage{etoolbox}" + "\n",
+        self._write("foo.sty", r"\RequirePackage{etoolbox}" + "\n")
+        self.assertEqual(
+            tpc._scan_package_dependencies(self.root), {"etoolbox"}
         )
-        refs = tpc._scan_ctan_dependencies(self.root)
-        self.assertEqual(set(refs.keys()), {"etoolbox"})
-        self.assertEqual(refs["etoolbox"], {"foo.sty"})
 
     def test_finds_usepackage_with_options(self):
-        self._write(
-            "tex/latex/contrib/foo/foo.sty",
-            r"\usepackage[utf8]{inputenc}" + "\n",
+        self._write("foo.sty", r"\usepackage[utf8]{inputenc}" + "\n")
+        self.assertIn(
+            "inputenc", tpc._scan_package_dependencies(self.root)
         )
-        refs = tpc._scan_ctan_dependencies(self.root)
-        self.assertIn("inputenc", refs)
 
     def test_finds_LoadClass(self):
-        self._write(
-            "tex/latex/contrib/bar/bar.cls",
-            r"\LoadClass[10pt]{article}" + "\n",
-        )
-        refs = tpc._scan_ctan_dependencies(self.root)
-        self.assertIn("article", refs)
+        self._write("bar.cls", r"\LoadClass[10pt]{article}" + "\n")
+        self.assertIn("article", tpc._scan_package_dependencies(self.root))
 
     def test_handles_comma_separated_package_list(self):
-        # `\usepackage{a,b,c}` is the multi-package form. We want all
+        # \usepackage{a,b,c} is the multi-package form. We want all
         # three names so the hint can be precise about which one was
         # the culprit.
         self._write(
-            "tex/latex/contrib/multi/multi.sty",
+            "multi.sty",
             r"\usepackage{amsmath, amssymb,amsfonts}" + "\n",
         )
-        refs = tpc._scan_ctan_dependencies(self.root)
         self.assertEqual(
-            {k for k in refs}, {"amsmath", "amssymb", "amsfonts"}
+            tpc._scan_package_dependencies(self.root),
+            {"amsmath", "amssymb", "amsfonts"},
         )
 
     def test_RequirePackageWithOptions_variant(self):
-        self._write(
-            "tex/latex/contrib/x/x.sty",
-            r"\RequirePackageWithOptions{geometry}" + "\n",
-        )
-        refs = tpc._scan_ctan_dependencies(self.root)
-        self.assertIn("geometry", refs)
+        self._write("x.sty", r"\RequirePackageWithOptions{geometry}" + "\n")
+        self.assertIn("geometry", tpc._scan_package_dependencies(self.root))
 
     def test_biblatex_style_files_scanned(self):
-        # APA-style citation styles live as .bbx/.cbx/.lbx under
-        # tex/latex/biblatex/. The scanner needs to read them too,
-        # since they're a major source of transitive ctan_packages
-        # demand.
-        self._write(
-            "tex/latex/biblatex/bbx/apa.bbx",
-            r"\RequirePackage{biblatex}" + "\n",
+        # APA-style citation styles live as .bbx/.cbx/.lbx files.
+        # The scanner needs to read them — they're a major source of
+        # transitive ctan_packages demand.
+        self._write("apa.bbx", r"\RequirePackage{biblatex}" + "\n")
+        self.assertIn(
+            "biblatex", tpc._scan_package_dependencies(self.root)
         )
-        refs = tpc._scan_ctan_dependencies(self.root)
-        self.assertEqual(refs.get("biblatex"), {"apa.bbx"})
 
     def test_ignores_unrelated_files(self):
-        # README/.tex/.pdf/etc shouldn't be scanned.
+        # README / .tex / .pdf shouldn't be scanned.
         self._write("README.txt", r"\usepackage{foo}" + "\n")
         self._write("doc/manual.tex", r"\usepackage{bar}" + "\n")
-        refs = tpc._scan_ctan_dependencies(self.root)
-        self.assertEqual(refs, {})
+        self.assertEqual(tpc._scan_package_dependencies(self.root), set())
 
-    def test_multiple_files_referencing_same_package_are_aggregated(self):
-        self._write(
-            "tex/latex/contrib/a/a.sty",
-            r"\RequirePackage{shared}" + "\n",
+    def test_walks_nested_directories(self):
+        # Packages often ship multi-file trees (e.g. biblatex-apa has
+        # apa.bbx, apa.cbx, american-apa.lbx in different subdirs).
+        self._write("tex/latex/contrib/x/a.sty", r"\RequirePackage{p1}")
+        self._write("tex/latex/contrib/x/b.sty", r"\RequirePackage{p2}")
+        self._write("tex/latex/biblatex/cbx/x.cbx", r"\RequirePackage{p3}")
+        self.assertEqual(
+            tpc._scan_package_dependencies(self.root),
+            {"p1", "p2", "p3"},
         )
-        self._write(
-            "tex/latex/contrib/b/b.sty",
-            r"\RequirePackage{shared}" + "\n",
-        )
-        refs = tpc._scan_ctan_dependencies(self.root)
-        self.assertEqual(refs["shared"], {"a.sty", "b.sty"})
 
     def test_non_utf8_files_dont_crash(self):
         # CTAN packages occasionally ship Latin-1; the scanner must
         # not blow up on them. Write raw bytes that aren't valid UTF-8.
-        path = self.root / "tex" / "latex" / "contrib" / "x" / "x.sty"
-        path.parent.mkdir(parents=True)
+        path = self.root / "x.sty"
         path.write_bytes(b"\\usepackage{ok}\n\xff\xfe garbage \n")
-        refs = tpc._scan_ctan_dependencies(self.root)
-        self.assertIn("ok", refs)
+        self.assertIn("ok", tpc._scan_package_dependencies(self.root))
 
 
 class ExtractMissingFileTest(unittest.TestCase):
@@ -198,32 +180,32 @@ class FormatMissingFileHintTest(unittest.TestCase):
         hint = tpc._format_missing_file_hint(
             missing="biblatex-apa.sty",
             ctan_packages=["biblatex-apa"],
-            refs={},
+            package_deps={},
         )
         self.assertIn("already listed", hint)
         self.assertIn("biblatex-apa", hint)
 
-    def test_referenced_case_names_referring_file(self):
-        # Missing package is referenced from a file in a fetched
-        # ctan_package — the actionable next step is "add it to the
-        # list", and we should name the witness file.
+    def test_referenced_case_names_referring_package(self):
+        # Missing package is referenced from a file inside one of the
+        # fetched ctan_packages — the actionable next step is "add
+        # it to the list", and we should name the requiring package.
         hint = tpc._format_missing_file_hint(
             missing="apa7.sty",
             ctan_packages=["biblatex-apa"],
-            refs={"apa7": {"apa.bbx"}},
+            package_deps={"biblatex-apa": {"apa7", "biblatex"}},
         )
         self.assertIn("apa7", hint)
-        self.assertIn("apa.bbx", hint)
+        self.assertIn("biblatex-apa", hint)
         self.assertIn("ctan_packages", hint)
 
-    def test_referenced_case_truncates_long_witness_list(self):
-        # If many files reference the missing package, the hint
+    def test_referenced_case_truncates_long_package_list(self):
+        # If many packages reference the missing name, the hint
         # should sample a few rather than dump the whole list.
-        refs = {"common": {f"pkg{i}.sty" for i in range(10)}}
+        deps = {f"pkg{i}": {"shared"} for i in range(10)}
         hint = tpc._format_missing_file_hint(
-            missing="common.sty",
-            ctan_packages=[],
-            refs=refs,
+            missing="shared.sty",
+            ctan_packages=list(deps.keys()),
+            package_deps=deps,
         )
         self.assertIn("more", hint)
 
@@ -233,7 +215,7 @@ class FormatMissingFileHintTest(unittest.TestCase):
         hint = tpc._format_missing_file_hint(
             missing="mystery.sty",
             ctan_packages=["biblatex-apa"],
-            refs={},
+            package_deps={"biblatex-apa": {"biblatex"}},
         )
         self.assertIn("mystery", hint)
         self.assertIn("CTAN package", hint)
@@ -245,11 +227,45 @@ class FormatMissingFileHintTest(unittest.TestCase):
         hint = tpc._format_missing_file_hint(
             missing="apa7.sty",
             ctan_packages=[],
-            refs={"apa7": {"apa.bbx"}},
+            package_deps={"biblatex-apa": {"apa7"}},
         )
-        # The hint should mention `'apa7'` (without .sty) as the
-        # name to add.
         self.assertIn("'apa7'", hint)
+
+
+class PrintDepSummaryTest(unittest.TestCase):
+    def test_empty_map_emits_nothing(self):
+        import io
+        out = io.StringIO()
+        tpc._print_dep_summary({}, out=out)
+        self.assertEqual(out.getvalue(), "")
+
+    def test_packages_with_deps_listed_alphabetically(self):
+        import io
+        out = io.StringIO()
+        tpc._print_dep_summary(
+            {
+                "biblatex-apa": {"biblatex", "csquotes", "apa"},
+                "tcolorbox": {"etoolbox", "pgf"},
+            },
+            out=out,
+        )
+        body = out.getvalue()
+        # Packages listed in sorted order, dep names also sorted.
+        self.assertIn(
+            "biblatex-apa -> apa, biblatex, csquotes", body
+        )
+        self.assertIn("tcolorbox -> etoolbox, pgf", body)
+        # biblatex-apa appears before tcolorbox in the output.
+        self.assertLess(
+            body.index("biblatex-apa"), body.index("tcolorbox")
+        )
+
+    def test_package_with_no_deps_is_noted(self):
+        import io
+        out = io.StringIO()
+        tpc._print_dep_summary({"lipsum": set()}, out=out)
+        self.assertIn("lipsum", out.getvalue())
+        self.assertIn("no upstream", out.getvalue())
 
 
 if __name__ == "__main__":
