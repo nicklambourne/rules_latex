@@ -219,5 +219,105 @@ class TestPointConversion(unittest.TestCase):
         self.assertEqual(_M.SYNCTEX_SP_PER_PT, 65536)
 
 
+class TestFindFileId(unittest.TestCase):
+    """Inverse of the inputs map — basename -> file_id."""
+
+    def test_resolves_main_source_by_basename(self):
+        path = _write_synctex_gz(SAMPLE_SYNCTEX)
+        idx = _M.SyncTeXIndex.from_file(path)
+        self.assertEqual(idx.find_file_id("hello.tex"), 1)
+
+    def test_resolves_secondary_input(self):
+        path = _write_synctex_gz(SAMPLE_SYNCTEX)
+        idx = _M.SyncTeXIndex.from_file(path)
+        self.assertEqual(idx.find_file_id("preamble.tex"), 4)
+
+    def test_unknown_basename_returns_none(self):
+        path = _write_synctex_gz(SAMPLE_SYNCTEX)
+        idx = _M.SyncTeXIndex.from_file(path)
+        self.assertIsNone(idx.find_file_id("nonexistent.tex"))
+
+
+class TestForwardLookup(unittest.TestCase):
+    """Source (basename, line) -> PDF location."""
+
+    def test_returns_page_and_pdf_coords_for_matching_line(self):
+        path = _write_synctex_gz(SAMPLE_SYNCTEX)
+        idx = _M.SyncTeXIndex.from_file(path)
+        # hello.tex line 11 has the outer page box in SAMPLE_SYNCTEX.
+        result = idx.forward_lookup("hello.tex", line=11)
+        self.assertIsNotNone(result)
+        page, x_pt, y_pt, w_pt, h_pt = result
+        self.assertEqual(page, 1)
+        # All coords are positive and in a sane PDF-point range for
+        # a letter/A4 page (max ~600 / ~800).
+        self.assertGreater(w_pt, 0)
+        self.assertGreater(h_pt, 0)
+        self.assertGreaterEqual(x_pt, 0)
+        self.assertGreaterEqual(y_pt, 0)
+
+    def test_returns_none_for_unknown_basename(self):
+        path = _write_synctex_gz(SAMPLE_SYNCTEX)
+        idx = _M.SyncTeXIndex.from_file(path)
+        self.assertIsNone(idx.forward_lookup("doesnotexist.tex", line=11))
+
+    def test_returns_none_for_unmatched_line(self):
+        path = _write_synctex_gz(SAMPLE_SYNCTEX)
+        idx = _M.SyncTeXIndex.from_file(path)
+        # hello.tex exists in the inputs but no box ever recorded
+        # for line 9999 (well outside the sample).
+        self.assertIsNone(idx.forward_lookup("hello.tex", line=9999))
+
+    def test_returns_first_box_when_line_appears_multiple_times(self):
+        # Synthesise a SyncTeX file where the same source line maps
+        # to two boxes (first on page 1, then on page 2). The
+        # forward lookup should return the first one — that's
+        # what users expect: jump to the earliest occurrence.
+        synctex = (
+            "SyncTeX Version:1\n"
+            "Input:1:/sandbox/main.tex\n"
+            "Content:\n"
+            "{1\n"
+            "[1,5:1000,2000:300,40,10\n"
+            "]\n"
+            "}1\n"
+            "{2\n"
+            "[1,5:5000,6000:400,50,20\n"
+            "]\n"
+            "}2\n"
+            "Postamble:\n"
+        )
+        path = _write_synctex_gz(synctex)
+        idx = _M.SyncTeXIndex.from_file(path)
+        result = idx.forward_lookup("main.tex", line=5)
+        self.assertIsNotNone(result)
+        page, _x, _y, _w, _h = result
+        self.assertEqual(page, 1)
+
+    def test_coords_convert_from_scaled_points_to_pdf_points(self):
+        # Hand-rolled fixture with known scaled-points coords lets us
+        # verify the unit conversion exactly (sp / 65536 -> pt).
+        synctex = (
+            "SyncTeX Version:1\n"
+            "Input:1:/sandbox/doc.tex\n"
+            "Content:\n"
+            "{1\n"
+            "[1,7:" + str(65536 * 100) + "," + str(65536 * 200) + ":"
+            + str(65536 * 50) + "," + str(65536 * 8) + ","
+            + str(65536 * 2) + "\n"
+            "]\n"
+            "}1\n"
+            "Postamble:\n"
+        )
+        path = _write_synctex_gz(synctex)
+        idx = _M.SyncTeXIndex.from_file(path)
+        page, x_pt, y_pt, w_pt, h_pt = idx.forward_lookup("doc.tex", line=7)
+        self.assertEqual(page, 1)
+        self.assertEqual(x_pt, 100.0)
+        self.assertEqual(y_pt, 200.0)
+        self.assertEqual(w_pt, 50.0)
+        self.assertEqual(h_pt, 10.0)  # h + d = 8 + 2
+
+
 if __name__ == "__main__":
     unittest.main()

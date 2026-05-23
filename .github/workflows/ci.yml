@@ -248,6 +248,51 @@ jobs:
           echo "$resp" | python3 -c \
             'import sys, json; r=json.load(sys.stdin); assert r["ok"] is True, r; assert r["file"] == "hello/hello.tex", r; assert isinstance(r["line"], int), r; print("reverse-sync OK:", r)'
 
+          # Forward-sync: editor / CLI shim posts (file, line); server
+          # resolves to PDF coords and broadcasts a "jump" SSE event.
+          # We exercise just the HTTP request here — the SSE side is
+          # covered by unit tests. The line we point at (the
+          # corresponding hello.tex source line that's expected to
+          # have rendered output) was discovered from the reverse-
+          # sync response above; reuse it so this stays stable
+          # across hello.tex edits.
+          forward_line="$(echo "$resp" | python3 -c \
+              'import sys, json; print(json.load(sys.stdin)["line"])')"
+          echo "Forward-syncing hello.tex:${forward_line}..."
+          set +e
+          http_status="$(curl -s -o /tmp/forward.body -w "%{http_code}" \
+            -X POST -H "Content-Type: application/json" \
+            --data "{\"file\":\"hello.tex\",\"line\":${forward_line}}" \
+            http://127.0.0.1:8766/sync/forward)"
+          curl_exit=$?
+          set -e
+          echo "curl exit=${curl_exit} http_status=${http_status}"
+          echo "Forward-sync body: $(cat /tmp/forward.body)"
+          if [[ "${http_status}" != "200" ]]; then
+            echo "FAIL: forward-sync expected HTTP 200, got ${http_status}" >&2
+            tail -30 /tmp/synctex_serve.log >&2 || true
+            exit 1
+          fi
+          cat /tmp/forward.body | python3 -c \
+            'import sys, json; r=json.load(sys.stdin); assert r["ok"] is True, r; assert r["page"] >= 1, r; assert r["w"] > 0 and r["h"] > 0, r; print("forward-sync OK:", r)'
+
+          # Forward-sync with an unknown line should report `ok: false`
+          # but still HTTP 200 — that's the contract for the
+          # "no PDF location matches this source line" case.
+          set +e
+          http_status="$(curl -s -o /tmp/forward_miss.body -w "%{http_code}" \
+            -X POST -H "Content-Type: application/json" \
+            --data '{"file":"hello.tex","line":9999}' \
+            http://127.0.0.1:8766/sync/forward)"
+          set -e
+          echo "Forward-sync (no-match) body: $(cat /tmp/forward_miss.body)"
+          if [[ "${http_status}" != "200" ]]; then
+            echo "FAIL: forward-sync no-match expected HTTP 200, got ${http_status}" >&2
+            exit 1
+          fi
+          cat /tmp/forward_miss.body | python3 -c \
+            'import sys, json; r=json.load(sys.stdin); assert r["ok"] is False, r; print("forward-sync no-match OK")'
+
           kill "$PID" || true
           wait "$PID" 2>/dev/null || true
           cat /tmp/synctex_serve.log

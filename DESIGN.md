@@ -742,17 +742,19 @@ These are deliberately out of scope for v0.1 but worth flagging.
    the action output, so this is probably never worth doing — but worth
    benchmarking on multi-pass documents (e.g. with biblatex). Tracked in
    [GitHub issue #7](https://github.com/nicklambourne/rules_latex/issues/7).
-6. **Forward-sync (editor → PDF) for SyncTeX.** Currently `latex_serve_web`
-   only implements reverse-sync (click on PDF → source location). A
-   future feature could expose a `POST /sync/forward` endpoint that the
-   editor (or a small `bazel run //:foo_jump -- file.tex:42` CLI shim)
-   posts to. The server would parse the synctex file in the opposite
-   direction (file_id + line → first matching box) and push a
-   `jump-to-page-N-y-Y` event over the existing SSE channel, which the
-   browser handles by scrolling the relevant page into view and
-   highlighting the location. No new comms primitive needed beyond the
-   ones we already have. Tracked in
-   [GitHub issue #8](https://github.com/nicklambourne/rules_latex/issues/8).
+6. **Forward-sync (editor → PDF) for SyncTeX.** **Shipped in v0.4.**
+   `latex_serve_web` exposes a `POST /sync/forward` endpoint that
+   maps `(file, line)` → first matching SyncTeX box → broadcasts a
+   `{"type": "jump", "page": N, "x": X, "y": Y, "w": W, "h": H}`
+   event over the existing SSE channel. The browser scrolls the
+   page into view and flashes a yellow highlight overlay at the
+   box for ~1.5s. Implementation followed the design sketch
+   above; no new comms primitives needed. See
+   [docs/site/getting-started/live-preview.md](https://github.com/nicklambourne/rules_latex/blob/master/docs/site/getting-started/live-preview.md#synctex-forward-sync)
+   for editor-integration examples (Neovim / VS Code / Emacs).
+   Tracked in
+   [GitHub issue #8](https://github.com/nicklambourne/rules_latex/issues/8)
+   — to close when the issue is updated.
 7. **WebSocket-based live-reload channel.** `latex_serve_web` currently
    uses Server-Sent Events for the server→browser "reload" signal, which
    is unidirectional. WebSockets would allow the browser to push state

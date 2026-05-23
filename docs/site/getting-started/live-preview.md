@@ -69,7 +69,11 @@ Open the URL in your browser. The page:
 - Preserves scroll position across reloads.
 - When `synctex = True` is set on the document, clicking anywhere in
   the rendered PDF resolves to a source `file:line` displayed in the
-  footer bar.
+  footer bar (**reverse-sync**).
+- Editors can also push the other direction (**forward-sync**) by
+  POSTing to `/sync/forward`; the browser scrolls the page into view
+  and flashes a yellow overlay at the matching PDF location. See
+  [SyncTeX forward-sync](#synctex-forward-sync) below.
 
 ## How fast is the loop?
 
@@ -92,6 +96,82 @@ analysis layer, so they trigger correct rebuilds too.
 External-repo files (e.g. from a `latex_library` published in another
 Bazel module) are not watched. Edit those and re-run `bazel run
 //:cv_web` to pick up the change.
+
+## SyncTeX forward-sync
+
+When `latex_document(synctex = True)` is set, `latex_serve_web`
+exposes a `POST /sync/forward` endpoint that maps a source
+`(file, line)` tuple to a PDF location and flashes a highlight in
+every open browser tab. The complement to the click-on-PDF
+reverse-sync that the same documents already support.
+
+The endpoint is the integration point — your editor (or a small CLI
+shim) is responsible for invoking it. The minimum viable wrapper is
+two lines of `curl`:
+
+```bash
+# Jump every connected browser to cv.tex line 42.
+curl -sf -X POST http://127.0.0.1:8765/sync/forward \
+    -H "Content-Type: application/json" \
+    -d '{"file":"cv.tex","line":42}' | jq .
+```
+
+Successful response:
+
+```json
+{"ok": true, "page": 3, "x": 121.5, "y": 614.2, "w": 156.7, "h": 11.0}
+```
+
+The HTTP response is for the caller's logging; the actual UX (scroll
++ flash) happens in the browser tab via an SSE event.
+
+### Editor integrations
+
+Any editor that can shell out on save can wire this up. Examples:
+
+=== "Neovim (Lua)"
+
+    ```lua
+    vim.api.nvim_create_autocmd("BufWritePost", {
+      pattern = "*.tex",
+      callback = function()
+        local line = vim.api.nvim_win_get_cursor(0)[1]
+        local file = vim.fn.expand("%:t")
+        vim.fn.jobstart({
+          "curl", "-sf", "-X", "POST",
+          "http://127.0.0.1:8765/sync/forward",
+          "-H", "Content-Type: application/json",
+          "-d", vim.fn.json_encode({file = file, line = line}),
+        }, {detach = true})
+      end,
+    })
+    ```
+
+=== "VS Code (tasks.json)"
+
+    Bind a keybinding to a task that runs `curl` with
+    `${file}` / `${lineNumber}` substituted.
+
+=== "Emacs (auctex)"
+
+    Hook `LaTeX-after-write-hook` to call
+    `(shell-command (format "curl ... '{\"file\":\"%s\",\"line\":%d}'" ...))`.
+
+### Response semantics
+
+| Case | HTTP | Body |
+|---|---|---|
+| Line has output in the PDF | 200 | `{"ok": true, "page": ..., "x": ..., "y": ..., "w": ..., "h": ...}` |
+| Line is recorded in SyncTeX but produced no boxes (e.g. a comment-only line) | 200 | `{"ok": false, "error": "no PDF location found for that source line"}` |
+| File isn't in the document's input set | 200 | Same as above |
+| SyncTeX file isn't produced yet (the build is still in progress) | 404 | `{"ok": false, "error": "synctex file not produced yet"}` |
+| Document was built without `synctex = True` | 404 | `{"ok": false, "error": "synctex not enabled for this document"}` |
+
+When multiple boxes match the same source line (a line that produces
+output on more than one PDF page — uncommon, but possible with
+two-column layouts and `\twocolumn` breaks), the **first** match is
+returned. That's the earliest occurrence in document order, which is
+what most editors and users expect for a "jump-to" action.
 
 ## Architecture
 
