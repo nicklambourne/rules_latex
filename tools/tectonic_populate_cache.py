@@ -673,6 +673,75 @@ def _extract_missing_file(log_path: Path) -> str | None:
     return match.group(1) if match else None
 
 
+# Matches the biblatex/biber version-coupling failure signature: a
+# fetched extension style (`.bbx`/`.cbx`/`.lbx`/`.dbx`) compiled
+# against the bundle's older biblatex fails on macros the older
+# biblatex doesn't define. The error format tectonic prints is
+# `error: <file>.bbx:<line>: Undefined control sequence`.
+#
+# We're deliberately strict about the extension whitelist so we don't
+# false-positive on generic "Undefined control sequence" errors from
+# user code.
+_BIBLATEX_VERSION_ERROR_RE = re.compile(
+    r"error:\s+(?P<file>\S+\.(?:bbx|cbx|lbx|dbx)):\d+:\s+Undefined control sequence",
+)
+
+
+def _extract_biblatex_version_mismatch(log_path: Path) -> str | None:
+    """Return the offending .bbx/.cbx/.lbx/.dbx filename, or None.
+
+    Tectonic's diagnostic for the biblatex version-coupling trap
+    (bundle's biblatex 3.17 trying to read a fetched biblatex 3.18+
+    style file) is `Undefined control sequence` originating in the
+    extension style file. We detect that specific shape — not the
+    generic LaTeX 'Undefined control sequence' — to avoid false
+    positives on errors in the user's `.tex`.
+    """
+    if not log_path.is_file():
+        return None
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    match = _BIBLATEX_VERSION_ERROR_RE.search(text)
+    return match.group("file") if match else None
+
+
+def _format_biblatex_version_hint(
+    offending_file: str,
+    ctan_packages: list[str],
+) -> str:
+    """Compose the modern-biblatex opt-in hint."""
+    biblatex_seeds = sorted(
+        p for p in ctan_packages if p.startswith("biblatex-")
+    )
+    seed_clause = ""
+    if biblatex_seeds:
+        seed_clause = (
+            f" The likely culprit is {', '.join(biblatex_seeds)} in your "
+            f"ctan_packages — modern releases of these styles need "
+            f"biblatex 3.18+ / biber 2.18+."
+        )
+    return (
+        f"hint: '{offending_file}' failed with 'Undefined control sequence', "
+        f"which is the signature of a biblatex extension style fetched from "
+        f"CTAN being too new for the bundle's pinned biblatex 3.17 / biber "
+        f"2.17.{seed_clause}\n"
+        f"\n"
+        f"Fix: opt the toolchain into the modern biblatex overlay by adding\n"
+        f"\n"
+        f"    tectonic.toolchain(modern_biblatex = True)\n"
+        f"\n"
+        f"to your workspace's MODULE.bazel. That fetches biblatex 3.21 + "
+        f"biber 2.21 alongside the toolchain and overlays them via -Z "
+        f"search-path so modern style files actually work.\n"
+        f"\n"
+        f"Background and gotchas: "
+        f"https://nicklambourne.github.io/rules_latex/getting-started/"
+        f"bibliography/#modern-citation-styles"
+    )
+
+
 def _format_missing_file_hint(
     missing: str,
     ctan_packages: list[str],
@@ -802,11 +871,11 @@ def run_tectonic(
             biber_dir_owned.cleanup()
     if result.returncode != 0:
         log_path = main_in_workdir.parent / (main_in_workdir.stem + ".log")
-        missing = _extract_missing_file(log_path)
         message = (
             f"tectonic exited with code {result.returncode}; see log in "
             f"{main_in_workdir.parent} for details."
         )
+        missing = _extract_missing_file(log_path)
         if missing is not None:
             hint = _format_missing_file_hint(
                 missing,
@@ -814,6 +883,21 @@ def run_tectonic(
                 package_deps or {},
             )
             message = f"{message}\n\n{hint}"
+        else:
+            # If we didn't hit a missing-file error, check for the
+            # biblatex version-coupling signature. The two are
+            # mutually exclusive (one is "I couldn't find the file",
+            # the other is "I found it but couldn't parse it"), so
+            # there's never ambiguity about which hint to show.
+            # Suppress the hint if the workspace has already opted
+            # into modern_biblatex — in that case the .bbx error
+            # has some other cause.
+            biblatex_file = _extract_biblatex_version_mismatch(log_path)
+            if biblatex_file and not biblatex_overlay_files:
+                hint = _format_biblatex_version_hint(
+                    biblatex_file, list(ctan_packages or []),
+                )
+                message = f"{message}\n\n{hint}"
         raise SystemExit(message)
 
 

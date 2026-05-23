@@ -58,6 +58,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -77,6 +78,15 @@ from staging import PkgFile, stage_sources  # noqa: E402
 # to actually see fetched packages. Kept in sync with the same constant
 # in `tectonic_populate_cache.py`.
 _PACKAGE_FILE_EXTS = frozenset({".sty", ".cls", ".bbx", ".cbx", ".lbx", ".dbx"})
+
+# Tectonic's diagnostic when a fetched biblatex extension style is
+# too new for the bundle's pinned biblatex. Detection mirror of the
+# same regex in `tectonic_populate_cache.py`; we duplicate rather
+# than share because these two scripts run as independent
+# stdlib-only entry-points.
+_BIBLATEX_VERSION_ERROR_RE = re.compile(
+    r"error:\s+(?P<file>\S+\.(?:bbx|cbx|lbx|dbx)):\d+:\s+Undefined control sequence",
+)
 
 
 def _ctan_search_paths(ctan_dir: Path) -> list[str]:
@@ -373,10 +383,40 @@ def run_tectonic(
         if biber_dir_owned is not None:
             biber_dir_owned.cleanup()
     if result.returncode != 0:
-        raise SystemExit(
+        message = (
             f"tectonic exited with code {result.returncode}; see log in "
             f"{main_in_workdir.parent} for details."
         )
+        # Surface the biblatex-version-coupling hint when the failure
+        # signature matches *and* the workspace hasn't already opted
+        # into the modern_biblatex overlay. (If they have and it's
+        # still failing, the hint would be misleading.) Same detection
+        # logic as in tectonic_populate_cache.py — kept inline rather
+        # than refactored into a shared module because these two
+        # scripts are run as independent stdlib-only entry-points.
+        log_path = main_in_workdir.parent / (main_in_workdir.stem + ".log")
+        if log_path.is_file() and not biblatex_overlay_files:
+            try:
+                log_text = log_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                log_text = ""
+            m = _BIBLATEX_VERSION_ERROR_RE.search(log_text)
+            if m is not None:
+                file = m.group("file")
+                message += (
+                    f"\n\nhint: '{file}' failed with 'Undefined control "
+                    f"sequence', which is the signature of a biblatex "
+                    f"extension style being too new for the bundle's "
+                    f"pinned biblatex 3.17 / biber 2.17. Add\n"
+                    f"\n"
+                    f"    tectonic.toolchain(modern_biblatex = True)\n"
+                    f"\n"
+                    f"to your workspace's MODULE.bazel to fetch biblatex "
+                    f"3.21 + biber 2.21 alongside the toolchain. See "
+                    f"https://nicklambourne.github.io/rules_latex/"
+                    f"getting-started/bibliography/#modern-citation-styles"
+                )
+        raise SystemExit(message)
 
 
 def _extract_cache(tarball: Path, cache_dir: Path) -> Path | None:
