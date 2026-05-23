@@ -180,6 +180,60 @@ listing what was tried. Most users won't have to think about this:
 CTAN package names are stable, and the fallbacks cover the common
 naming conventions.
 
+## Transitive dependencies
+
+`ctan_packages` doesn't resolve dependencies automatically — you list
+package names, those exact names are fetched. The common case still
+just works because Tectonic's 2022 bundle covers ~95% of TeX Live:
+a fetched package's dependencies (`etoolbox`, `csquotes`, `biblatex`,
+core LaTeX, …) almost always already live in the bundle and resolve
+transparently.
+
+You only hit the transitive-dependency case when a CTAN package you
+fetched itself depends on **another post-2022 package** that the
+bundle doesn't have. Tectonic then fails the populate-cache action
+with an error like:
+
+```
+! LaTeX Error: File `foo.sty' not found.
+```
+
+When this happens, `rules_latex` scans the packages you fetched for
+`\RequirePackage{foo}` / `\usepackage{foo}` references and, if it
+finds one, points at the source explicitly:
+
+```
+hint: 'foo.sty' is required by biblatex-apa (one of your
+ctan_packages). It isn't in Tectonic's 2022 bundle. Add 'foo' to
+ctan_packages on this target.
+```
+
+Then add the missing package to the same list:
+
+```python
+latex_document(
+    name = "thesis",
+    main = "thesis.tex",
+    srcs = [...],
+    ctan_packages = [
+        "biblatex-apa",
+        "foo",          # transitive dep of biblatex-apa
+    ],
+    biber = True,
+)
+```
+
+Repeat until the build succeeds. In practice this rarely chains more
+than one level deep — modern citation styles, custom font packages,
+and recent `tcolorbox` releases typically pull in zero or one
+additional post-2022 package.
+
+If the missing file isn't referenced by any of the packages you
+fetched, the hint is more cautious — it suggests `foo` might be a
+typo in your `.tex` file or might still be a CTAN package not on
+your list. Either way, the actionable next step is the same: add it
+to `ctan_packages` and rebuild.
+
 ## Hermeticity and reproducibility
 
 CTAN is a mutable mirror network. The Bazel action cache key for

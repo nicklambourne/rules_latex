@@ -22,11 +22,13 @@ import argparse
 import gzip
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -144,7 +146,7 @@ def download_ctan_package(package: str, dest_dir: Path) -> None:
 
     archive = dest_dir / f"{package}.zip"
 
-    last_error = None
+    last_error: BaseException | None = None
     for url in urls:
         try:
             print(f"Downloading CTAN package {package} from {url}...", file=sys.stderr)
@@ -156,11 +158,24 @@ def download_ctan_package(package: str, dest_dir: Path) -> None:
             if e.code == 404:
                 print(f"  not found at {url}, trying next...", file=sys.stderr)
                 continue
-            raise
+            raise SystemExit(
+                f"HTTP {e.code} fetching CTAN package '{package}' from {url}: {e.reason}"
+            )
+        except urllib.error.URLError as e:
+            # Connection refused / timed out / DNS failure / TLS error.
+            # These are usually transient — surface a one-liner instead
+            # of a 40-line urllib traceback. The retry suggestion is
+            # genuine: CTAN mirror availability fluctuates.
+            raise SystemExit(
+                f"Network error fetching CTAN package '{package}' from {url}: "
+                f"{e.reason}. CTAN mirrors can be flaky; try again, or set "
+                f"a specific mirror via HTTPS_PROXY / configure DNS."
+            )
     else:
         raise SystemExit(
-            f"Failed to download CTAN package {package} from any mirror. "
-            f"Last error: {last_error}"
+            f"CTAN package '{package}' not found at any known URL. Tried:\n"
+            + "\n".join(f"  - {u}" for u in urls)
+            + f"\nLast error: {last_error}"
         )
 
     # Extract to a staging area first
@@ -253,12 +268,138 @@ def _merge_dirs(src: Path, dst: Path) -> None:
             shutil.move(str(item), str(target))
 
 
+# File extensions we scan for `\RequirePackage` / `\usepackage` etc.
+# Other CTAN file types (.tex documentation, .pdf, .map) don't pull
+# in packages at compile time.
+_PACKAGE_FILE_EXTS = frozenset({".sty", ".cls", ".bbx", ".cbx", ".lbx", ".dbx"})
+
+# Matches `\RequirePackage[opts]{name}`, `\usepackage[opts]{name}`,
+# `\LoadClass[opts]{name}`, and `\RequirePackageWithOptions{name}`.
+# Whitespace inside the optional `[...]` arg is tolerated; package
+# names are restricted to the [a-zA-Z0-9_-] charset that CTAN uses.
+_REQUIRE_RE = re.compile(
+    r"\\(?:RequirePackage(?:WithOptions)?|usepackage|LoadClass(?:WithOptions)?)"
+    r"\s*(?:\[[^\]]*\])?\s*\{([a-zA-Z0-9_\-]+(?:\s*,\s*[a-zA-Z0-9_\-]+)*)\}"
+)
+
+
+def _scan_ctan_dependencies(ctan_dir: Path) -> dict[str, set[str]]:
+    """Scan extracted CTAN package files for upstream package references.
+
+    Returns a dict mapping each referenced package name to the set of
+    file basenames inside ``ctan_dir`` that reference it. Used to
+    produce a targeted hint when tectonic fails because one of those
+    referenced packages isn't in the bundle either.
+
+    Heuristic: greps for `\\RequirePackage`, `\\usepackage`, and
+    `\\LoadClass` in `.sty/.cls/.bbx/.cbx/.lbx/.dbx` files. This will
+    over-report (e.g. a package that requires `etoolbox` — already in
+    the bundle — still shows up), but that's fine: we only consult
+    this map on the failure path, when we already know a specific
+    package wasn't found.
+    """
+    refs: dict[str, set[str]] = {}
+    if not ctan_dir.exists():
+        return refs
+    for path in ctan_dir.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in _PACKAGE_FILE_EXTS:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for match in _REQUIRE_RE.finditer(text):
+            for name in match.group(1).split(","):
+                name = name.strip()
+                if not name:
+                    continue
+                refs.setdefault(name, set()).add(path.name)
+    return refs
+
+
+# Matches the LaTeX error tectonic prints when a `\usepackage`,
+# `\RequirePackage`, `\input`, etc. names a file that resolves
+# nowhere. Both styles of quote (' and `) appear in the wild.
+_MISSING_FILE_RE = re.compile(
+    r"!\s*LaTeX Error:\s*File [`']([^'`]+)' not found\."
+)
+
+
+def _extract_missing_file(log_path: Path) -> str | None:
+    """Return the first missing-file name from a tectonic log, or None.
+
+    Tectonic surfaces missing `\\usepackage`/`\\input` files as a
+    standard LaTeX error inside the `.log` it writes when run with
+    `--keep-logs`. We grep the log on the failure path so the hint
+    can name the specific file.
+    """
+    if not log_path.is_file():
+        return None
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    match = _MISSING_FILE_RE.search(text)
+    return match.group(1) if match else None
+
+
+def _format_missing_file_hint(
+    missing: str,
+    ctan_packages: list[str],
+    refs: dict[str, set[str]],
+) -> str:
+    """Compose a one-paragraph hint for a missing-file failure.
+
+    Three cases, in increasing order of how much we can say:
+      1. `missing` is already listed in `ctan_packages`. The download
+         succeeded (otherwise we'd have died earlier) but tectonic
+         still didn't find it — most likely a TDS-layout mismatch in
+         the fetched archive. Steer the user toward an issue report.
+      2. `missing` is referenced by one of the fetched packages' files.
+         We can name them: "X.sty is required by foo.sty (from your
+         ctan_packages); add 'X' to ctan_packages too."
+      3. `missing` is unreferenced and unlisted. Mention it might be a
+         CTAN package or a typo in `.tex`.
+    """
+    base = missing.rsplit(".", 1)[0] if "." in missing else missing
+    listed = base in ctan_packages
+
+    if listed:
+        return (
+            f"hint: '{missing}' resolves to a package you already listed "
+            f"in ctan_packages ('{base}'). The download succeeded but "
+            f"tectonic couldn't find the file — likely a TDS-layout "
+            f"mismatch in the fetched archive. Consider opening an "
+            f"issue with the package name."
+        )
+
+    referencing = sorted(refs.get(base, set()))
+    if referencing:
+        # Limit the file list — long lists make the hint less readable.
+        sample = ", ".join(referencing[:3])
+        more = f" (+{len(referencing) - 3} more)" if len(referencing) > 3 else ""
+        return (
+            f"hint: '{missing}' is required by {sample}{more} — file(s) "
+            f"from one of your ctan_packages. It isn't in Tectonic's "
+            f"2022 bundle. Add '{base}' to ctan_packages on this "
+            f"target and rebuild."
+        )
+
+    return (
+        f"hint: '{missing}' isn't in Tectonic's 2022 bundle and isn't "
+        f"referenced by any of your ctan_packages. If '{base}' is a "
+        f"CTAN package, add it to ctan_packages on this target. "
+        f"Otherwise check for a typo in your .tex sources."
+    )
+
+
 def run_tectonic(
     tectonic: Path,
     main_in_workdir: Path,
     cache_dir: Path,
     biber: Path | None = None,
     ctan_dir: Path | None = None,
+    ctan_packages: list[str] | None = None,
 ) -> None:
     """Run tectonic with cwd set to the staged work directory.
 
@@ -308,10 +449,19 @@ def run_tectonic(
         if biber_dir_owned is not None:
             biber_dir_owned.cleanup()
     if result.returncode != 0:
-        raise SystemExit(
+        log_path = main_in_workdir.parent / (main_in_workdir.stem + ".log")
+        missing = _extract_missing_file(log_path)
+        message = (
             f"tectonic exited with code {result.returncode}; see log in "
             f"{main_in_workdir.parent} for details."
         )
+        if missing is not None:
+            refs = _scan_ctan_dependencies(ctan_dir) if ctan_dir else {}
+            hint = _format_missing_file_hint(
+                missing, list(ctan_packages or []), refs
+            )
+            message = f"{message}\n\n{hint}"
+        raise SystemExit(message)
 
 
 def pack_cache(cache_dir: Path, output: Path, ctan_dir: Path | None = None) -> None:
@@ -391,7 +541,14 @@ def main() -> int:
         main_in_workdir = stage_sources(
             args.main, args.srcs, pkg_files, work_dir,
         )
-        run_tectonic(args.tectonic, main_in_workdir, cache_dir, biber=args.biber, ctan_dir=ctan_dir)
+        run_tectonic(
+            args.tectonic,
+            main_in_workdir,
+            cache_dir,
+            biber=args.biber,
+            ctan_dir=ctan_dir,
+            ctan_packages=args.ctan_packages,
+        )
         pack_cache(cache_dir, output, ctan_dir=ctan_dir)
 
     size_mb = output.stat().st_size / (1024 * 1024)
