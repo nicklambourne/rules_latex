@@ -19,14 +19,13 @@ What this is:
                     state ("building...", "✓ built in 0.4s").
 
 Background thread polls the watched source files at POLL_INTERVAL_MS
-intervals and runs `bazel build` on every detected change, the same
-way `latex_serve` does. On success it bumps a counter and pings every
-connected SSE listener.
+intervals and runs `bazel build` on every detected change. On
+success it bumps a counter and pings every connected SSE listener
+(and pushes the new chunk manifest + missing chunks to every
+connected WebSocket).
 
-No third-party Python deps. PDF.js is pulled from
-cdn.jsdelivr.net at page-load time — the rule deliberately doesn't
-vendor a ~3 MB JS bundle. Users without internet at preview-time can
-fall back to `latex_serve` (system viewer).
+No third-party Python deps. PDF.js is vendored under @rules_latex_pdfjs
+and served from /_pdfjs/pdf.mjs at preview time — works fully offline.
 """
 
 from __future__ import annotations

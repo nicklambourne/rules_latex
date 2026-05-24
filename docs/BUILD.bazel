@@ -59,7 +59,6 @@ bzl_library(
         "//latex/private:latex_document.bzl",
         "//latex/private:latex_library.bzl",
         "//latex/private:latex_pkg.bzl",
-        "//latex/private:latex_serve.bzl",
         "//latex/private:latex_serve_web.bzl",
         "//latex/private:latex_test.bzl",
         # latex_document.bzl loads BuildSettingInfo from skylib's

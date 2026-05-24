@@ -52,7 +52,6 @@ Loaded from `@rules_latex//latex:defs.bzl`:
 - `latex_pkg(name, srcs)`
 - `latex_test(name, main, srcs, deps = [], outfmt = "pdf", cache = None, forbidden_patterns = [], forbidden_patterns_replace = False, required_patterns = [])`
 - `latex_cache_snapshot(name, main, srcs, deps = [], output)`
-- `latex_serve(name, document, poll_interval_ms = 250, open_pdf = True)`
 - `latex_serve_web(name, document, port = 8765, poll_interval_ms = 80, debounce_ms = 250, debounce_max_ms = 1500)`
 - `LatexInfo` provider (for users authoring their own rules)
 
@@ -194,18 +193,40 @@ The wrapper also propagates `LC_ALL=C.UTF-8` (some downstream helpers like
 
 ### 4.7 Live preview
 
-Two preview rules ship with v0.1:
+One preview rule ships as of v0.6:
 
-* `latex_serve` — a watcher loop that opens the PDF in the system
-  viewer and lets the viewer's own auto-reload handle subsequent
-  updates. Minimal: ~200 LOC of Python + a shell launcher.
 * `latex_serve_web` — a tiny localhost HTTP server with PDF.js for
-  in-browser rendering and Server-Sent Events for "reload" pushes.
-  Overleaf-style experience without the cloud round-trip.
+  in-browser rendering and a WebSocket push transport (SSE
+  fallback) for "the manifest changed, here are the new chunks"
+  delivery. Overleaf-style experience without the cloud round-trip.
+  Comes with page navigation, in-document search, outline sidebar,
+  build-log drawer, theme toggle, and SyncTeX two-way sync.
 
-Both rules are intentionally implemented as thin watchers around
-`bazel build`, not separately-driven Tectonic processes. The
-justification:
+> **Historical note.** Earlier releases (v0.1 → v0.5) also shipped
+> a `latex_serve` rule that opened the document in the system PDF
+> viewer (`open` on macOS, `xdg-open` on Linux, `start` on
+> Windows). The design relied on the viewer to detect the
+> file-on-disk change and reload — which used to be true for
+> macOS Preview, Linux Evince/Okular, and a handful of other
+> viewers. Over time that contract eroded: macOS Preview's
+> auto-reload became unreliable after the Sonoma sandbox changes,
+> Adobe Acrobat never watched the file in the first place, and
+> users hitting either default would see "saves don't appear" and
+> have no in-rule way to diagnose it. v0.6 drops the rule rather
+> than ship a viewer-specific workaround (AppleScript force-
+> reload, plugin recommendations, etc.); the browser preview
+> covers the use case better in every dimension that matters
+> (faster reload, page navigation, search, theme, no scroll loss
+> across rebuilds). Users who genuinely prefer a native viewer
+> can still open the rebuilt PDF themselves from any reload-aware
+> viewer — Skim, Sioyek, Zathura, PDF Expert all work — pointed
+> at `bazel-bin/.../<doc>.pdf`. The rule wasn't doing anything
+> for them that they couldn't do with `bazel build` + their own
+> tooling.
+
+`latex_serve_web` is intentionally implemented as a thin watcher
+around `bazel build`, not a separately-driven Tectonic process.
+The justification:
 
 * **Same toolchain, sandbox, and cache as a regular build.** A document
   that builds happily in `bazel build` and CI but breaks in

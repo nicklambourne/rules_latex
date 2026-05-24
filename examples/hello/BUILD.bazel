@@ -3,7 +3,7 @@
 The simplest possible rules_latex usage: a single .tex file, a tiny
 shared preamble, and a target that compiles them. Also demonstrates
 the reproducible mode, the manual cache snapshot path, the live
-preview rules, and the latex_test regression-testing rule.
+preview rule, and the latex_test regression-testing rule.
 
 For real-world document shapes (letter, CV, paper, thesis, beamer)
 see the sibling example directories.
@@ -14,7 +14,6 @@ load(
     "latex_cache_snapshot",
     "latex_document",
     "latex_library",
-    "latex_serve",
     "latex_serve_web",
     "latex_test",
 )
@@ -67,14 +66,11 @@ latex_cache_snapshot(
     deps = [":preamble"],
 )
 
-# Live-preview workflow: opens the PDF in the system viewer and
-# rebuilds on every source save.
-latex_serve(
-    name = "hello_serve",
-    document = ":hello_offline",
-)
-
 # In-browser live-preview workflow: http://127.0.0.1:8765/
+# Edits to hello.tex rebuild the document and push the changed PDF
+# chunks to the browser tab over WebSocket. Includes page nav,
+# in-doc search, outline sidebar, build-log drawer, and a
+# light/dark theme toggle.
 latex_serve_web(
     name = "hello_serve_web",
     document = ":hello_offline",

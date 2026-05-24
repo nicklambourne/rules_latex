@@ -4,6 +4,51 @@ All notable changes to `rules_latex` are documented here. This project follows
 [Semantic Versioning](https://semver.org/) once v1.0.0 is reached; before
 that, expect breaking changes in any v0.x release.
 
+## [Unreleased]
+
+### Removed
+
+- **`latex_serve` rule (system-PDF-viewer live preview).** The
+  rule opened the built document in `open` / `xdg-open` /
+  `start` and relied on the PDF viewer to detect the file-on-
+  disk change and reload itself. That contract eroded:
+  - macOS Preview's auto-reload became unreliable after the
+    Sonoma sandbox changes and stopped firing dependably by
+    Sequoia.
+  - Adobe Acrobat never watched the file on macOS and locks it
+    on Windows.
+  - Users hitting either default viewer would see "saves don't
+    appear in the preview" with no in-rule way to diagnose it.
+
+  v0.6 drops the rule rather than ship a viewer-specific
+  workaround (AppleScript force-reload, plugin recommendations,
+  etc.). `latex_serve_web` (introduced in v0.2 and overhauled in
+  v0.5) covers the use case better in every dimension that
+  matters — faster reload via WebSocket chunk push, page
+  navigation, in-doc search, outline sidebar, build-log drawer,
+  light/dark theme, native text selection.
+
+  **Migration:** if your `BUILD.bazel` has
+  ```python
+  latex_serve(name = "doc_live", document = ":doc")
+  ```
+  swap to
+  ```python
+  latex_serve_web(name = "doc_live", document = ":doc")
+  ```
+  and run `bazel run //:doc_live` as before. The browser tab
+  opens automatically and refreshes on save. Users who genuinely
+  prefer a native PDF viewer can keep one open against
+  `bazel-bin/<pkg>/<doc>.pdf` — every `bazel build` keeps that
+  path fresh — but the viewer must support file-watch reload
+  (Skim, Sioyek, Zathura, PDF Expert all do; Preview and
+  Acrobat don't).
+
+  Files removed: `latex/private/latex_serve.bzl`,
+  `latex/private/serve_watcher.py.tpl`. The
+  `latex_serve` symbol is no longer exported from
+  `@rules_latex//latex:defs.bzl`.
+
 ## [0.5.0] - 2026-05-24
 
 The headline of this release is a full overhaul of the

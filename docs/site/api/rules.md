@@ -7,7 +7,7 @@ Load symbols from here:
     load("@rules_latex//latex:defs.bzl",
          "latex_document", "latex_library", "latex_pkg",
          "latex_test", "latex_cache_snapshot",
-         "latex_serve", "latex_serve_web")
+         "latex_serve_web")
 
 
 ## Rules
@@ -16,7 +16,6 @@ Load symbols from here:
 - [latex_document](#latex_document)
 - [latex_library](#latex_library)
 - [latex_pkg](#latex_pkg)
-- [latex_serve](#latex_serve)
 - [latex_serve_web](#latex_serve_web)
 - [latex_test](#latex_test)
 
@@ -126,29 +125,6 @@ A bundle of resource files (images, bib, fonts) consumed by documents.
 | :------------- | :------------- | :------------- | :------------- | :------------- |
 | <a id="latex_pkg-name"></a>name |  A unique name for this target.   | <a href="https://bazel.build/concepts/labels#target-names">Name</a> | required |  |
 | <a id="latex_pkg-srcs"></a>srcs |  Resource files exposed by this package.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | required |  |
-
-
-<a id="latex_serve"></a>
-
-## latex_serve
-
-<pre>
-load("@rules_latex//latex:defs.bzl", "latex_serve")
-
-latex_serve(<a href="#latex_serve-name">name</a>, <a href="#latex_serve-document">document</a>, <a href="#latex_serve-open_pdf">open_pdf</a>, <a href="#latex_serve-poll_interval_ms">poll_interval_ms</a>)
-</pre>
-
-Watch a latex_document's sources and rebuild on every save.
-
-**ATTRIBUTES**
-
-
-| Name  | Description | Type | Mandatory | Default |
-| :------------- | :------------- | :------------- | :------------- | :------------- |
-| <a id="latex_serve-name"></a>name |  A unique name for this target.   | <a href="https://bazel.build/concepts/labels#target-names">Name</a> | required |  |
-| <a id="latex_serve-document"></a>document |  The latex_document (or any rule providing LatexInfo) to watch and rebuild.   | <a href="https://bazel.build/concepts/labels">Label</a> | required |  |
-| <a id="latex_serve-open_pdf"></a>open_pdf |  If True, open the built PDF in the system's default viewer after the first successful build.   | Boolean | optional |  `True`  |
-| <a id="latex_serve-poll_interval_ms"></a>poll_interval_ms |  How often the watcher checks for source-file changes, in milliseconds. Polling-based to avoid third-party dependencies; bumping this trades latency for CPU.   | Integer | optional |  `250`  |
 
 
 <a id="latex_serve_web"></a>
