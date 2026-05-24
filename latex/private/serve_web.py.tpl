@@ -68,6 +68,12 @@ OPEN_ON_START = bool(int("{{OPEN_ON_START}}"))
 PDFJS_LIB_RUNFILE = "{{PDFJS_LIB_RUNFILE}}"
 PDFJS_WORKER_RUNFILE = "{{PDFJS_WORKER_RUNFILE}}"
 
+# How long (seconds) to cache the git branch/dirty/sha lookup
+# behind /status. The UI duration ticker polls /status once per
+# second; without caching that's three `git` subprocess invocations
+# per second per connected tab. 2s feels live without burning CPU.
+GIT_INFO_TTL_S = 2.0
+
 # Path (within runfiles) to the pure-Python PDF chunker. Loaded
 # lazily on first successful build to compute the content-addressed
 # manifest for incremental PDF transfer. See tools/pdf_chunks.py
@@ -378,6 +384,13 @@ class BuildState:
         # browser falls back to whole-PDF transport when this is
         # None.
         self._pdf_manifest: object | None = None  # tools.pdf_chunks.Manifest | None
+        # Lazy git-state cache for the status footer badge. Keys:
+        # (branch, dirty, short_sha). Refreshed on demand from
+        # /status; cached for GIT_INFO_TTL_S to avoid running git
+        # per request — /status is hit ~1×/s by the duration
+        # ticker so cheap-but-not-free matters.
+        self._git_info: tuple[str | None, bool, str | None] | None = None
+        self._git_info_at: float = 0.0
         # WebSocket connections subscribed to push updates. Values
         # are the set of chunk hashes the client claims to already
         # have cached (sent via the "hello" message right after
@@ -635,9 +648,9 @@ class BuildState:
             if entry is not None:
                 self._ws_conns[id(conn)] = (entry[0], new_known)
 
-    def snapshot(self) -> dict[str, object]:
+    def snapshot(self, workspace: Path | None = None) -> dict[str, object]:
         with self._lock:
-            return {
+            out = {
                 "build_count": self._build_count,
                 "last_success": self._last_success,
                 "last_elapsed_seconds": round(self._last_elapsed, 3),
@@ -645,6 +658,62 @@ class BuildState:
                 "last_message": self._last_message,
                 "synctex_enabled": SYNCTEX_ENABLED,
             }
+        if workspace is not None:
+            branch, dirty, short_sha = self.get_git_info(workspace)
+            out["git_branch"] = branch
+            out["git_dirty"] = dirty
+            out["git_short_sha"] = short_sha
+        return out
+
+    def get_git_info(
+        self, workspace: Path
+    ) -> tuple[str | None, bool, str | None]:
+        """Return (branch_name, is_dirty, short_sha) for ``workspace``.
+
+        Cached for ``GIT_INFO_TTL_S`` to keep /status responses
+        snappy under the ~1×/s polling the duration ticker drives.
+        Returns ``(None, False, None)`` if ``workspace`` isn't a git
+        repo or any of the git subprocesses fail.
+        """
+        now = time.time()
+        with self._lock:
+            cached = self._git_info
+            age = now - self._git_info_at
+        if cached is not None and age < GIT_INFO_TTL_S:
+            return cached
+
+        branch: str | None = None
+        dirty: bool = False
+        short_sha: str | None = None
+        try:
+            branch_proc = subprocess.run(
+                ["git", "-C", str(workspace), "branch", "--show-current"],
+                capture_output=True, text=True, timeout=2,
+            )
+            if branch_proc.returncode == 0:
+                branch = branch_proc.stdout.strip() or None
+            # Even on a detached HEAD (empty branch), report dirty
+            # state + sha so the user still sees something useful.
+            status_proc = subprocess.run(
+                ["git", "-C", str(workspace), "status", "--porcelain"],
+                capture_output=True, text=True, timeout=2,
+            )
+            if status_proc.returncode == 0:
+                dirty = bool(status_proc.stdout.strip())
+            sha_proc = subprocess.run(
+                ["git", "-C", str(workspace), "rev-parse", "--short", "HEAD"],
+                capture_output=True, text=True, timeout=2,
+            )
+            if sha_proc.returncode == 0:
+                short_sha = sha_proc.stdout.strip() or None
+        except (subprocess.SubprocessError, OSError, FileNotFoundError):
+            pass
+
+        info = (branch, dirty, short_sha)
+        with self._lock:
+            self._git_info = info
+            self._git_info_at = now
+        return info
 
     def get_synctex(self, path: Path) -> SyncTeXIndex | None:
         """Return a parsed SyncTeXIndex, re-parsing if the file has changed.
@@ -1025,23 +1094,141 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
 <meta charset="utf-8">
 <title>{document_name} – live preview</title>
 <style>
+  /* ---------- Theme tokens ----------
+     Dark is the default. The light overrides are applied via
+     `prefers-color-scheme` when the user hasn't explicitly
+     picked a theme (data-theme attribute not "dark"), and
+     unconditionally when data-theme="light".
+
+     We deliberately keep the .page-wrap PDF surface white in
+     both themes — flipping it would invert the document
+     content, which users don't want from a preview app. */
+  :root {{
+    --bg:               #2b2b2b;
+    --bg-elevated:      #1d1d1d;
+    --bg-overlay:       #1a1a1a;
+    --surface:          #262626;
+    --surface-hover:    #3a3a3a;
+    --surface-active:   #444;
+    --border:           #000;
+    --surface-border:   #3a3a3a;
+    --text:             #e8e8e8;
+    --text-muted:       #cfcfcf;
+    --text-faded:       #888;
+    --text-disabled:    #666;
+    --accent:           #4a8a78;
+    --status-ok-bg:     #1e3a1e;
+    --status-ok-text:   #b4f0b4;
+    --status-fail-bg:   #4a1818;
+    --status-fail-text: #ffb4b4;
+    --status-bld-bg:    #3a3a1e;
+    --status-bld-text:  #f0f0b4;
+    --status-idle-bg:   #333;
+    --status-idle-text: #aaa;
+    --fit-active-bg:    #2c4a40;
+    --fit-active-text:  #b4f0d0;
+    --search-noresults: #3a1a1a;
+    --selection-bg:     rgba(64, 160, 220, 0.35);
+    --find-bg:          rgba(255, 230, 100, 0.45);
+    --find-cur-bg:      rgba(255, 165, 60, 0.7);
+    --find-cur-border:  rgba(255, 200, 100, 0.95);
+    --sync-result:      #b4d8f0;
+    --page-shadow:      0 2px 8px rgba(0,0,0,0.4);
+    --dirty-marker:     #f0b840;
+  }}
+  /* Light palette — applied either when the user has chosen
+     "light" explicitly OR when "auto" + system prefers light. */
+  @media (prefers-color-scheme: light) {{
+    :root:not([data-theme="dark"]) {{
+      --bg:               #f4f4f4;
+      --bg-elevated:      #ffffff;
+      --bg-overlay:       #ededed;
+      --surface:          #ffffff;
+      --surface-hover:    #e6e6e6;
+      --surface-active:   #d8d8d8;
+      --border:           #d0d0d0;
+      --surface-border:   #d0d0d0;
+      --text:             #1d1d1d;
+      --text-muted:       #444;
+      --text-faded:       #777;
+      --text-disabled:    #b0b0b0;
+      --accent:           #2c8d85;
+      --status-ok-bg:     #d4edd4;
+      --status-ok-text:   #1d5a1d;
+      --status-fail-bg:   #f4cccc;
+      --status-fail-text: #6a1818;
+      --status-bld-bg:    #f4e8b0;
+      --status-bld-text:  #6a5a18;
+      --status-idle-bg:   #e0e0e0;
+      --status-idle-text: #555;
+      --fit-active-bg:    #d0ede2;
+      --fit-active-text:  #1a5547;
+      --search-noresults: #f4d0d0;
+      --selection-bg:     rgba(44, 141, 133, 0.25);
+      --find-bg:          rgba(255, 210, 60, 0.55);
+      --find-cur-bg:      rgba(255, 145, 30, 0.75);
+      --find-cur-border:  rgba(200, 110, 30, 0.95);
+      --sync-result:      #1d6088;
+      --page-shadow:      0 2px 8px rgba(0,0,0,0.15);
+      --dirty-marker:     #c07a18;
+    }}
+  }}
+  /* Explicit overrides win over both default + media query. */
+  :root[data-theme="light"] {{
+    --bg:               #f4f4f4;
+    --bg-elevated:      #ffffff;
+    --bg-overlay:       #ededed;
+    --surface:          #ffffff;
+    --surface-hover:    #e6e6e6;
+    --surface-active:   #d8d8d8;
+    --border:           #d0d0d0;
+    --surface-border:   #d0d0d0;
+    --text:             #1d1d1d;
+    --text-muted:       #444;
+    --text-faded:       #777;
+    --text-disabled:    #b0b0b0;
+    --accent:           #2c8d85;
+    --status-ok-bg:     #d4edd4;
+    --status-ok-text:   #1d5a1d;
+    --status-fail-bg:   #f4cccc;
+    --status-fail-text: #6a1818;
+    --status-bld-bg:    #f4e8b0;
+    --status-bld-text:  #6a5a18;
+    --status-idle-bg:   #e0e0e0;
+    --status-idle-text: #555;
+    --fit-active-bg:    #d0ede2;
+    --fit-active-text:  #1a5547;
+    --search-noresults: #f4d0d0;
+    --selection-bg:     rgba(44, 141, 133, 0.25);
+    --find-bg:          rgba(255, 210, 60, 0.55);
+    --find-cur-bg:      rgba(255, 145, 30, 0.75);
+    --find-cur-border:  rgba(200, 110, 30, 0.95);
+    --sync-result:      #1d6088;
+    --page-shadow:      0 2px 8px rgba(0,0,0,0.15);
+    --dirty-marker:     #c07a18;
+  }}
+
   * {{ box-sizing: border-box; }}
   body {{
     font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    margin: 0; background: #2b2b2b; color: #e8e8e8;
-    display: grid; grid-template-rows: auto 1fr auto;
+    margin: 0; background: var(--bg); color: var(--text);
+    /* Flex column: header / [search-bar if open] / viewer / footer.
+       #viewer claims the remaining vertical space via flex: 1.
+       Using flex (not grid) so the search bar's `[hidden]` /
+       `display: none` collapses cleanly without leaving a dead
+       row in the layout. */
+    display: flex; flex-direction: column;
     height: 100vh;
   }}
+  #viewer {{ flex: 1 1 0; min-height: 0; }}
   header {{
     display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
-    padding: 8px 12px; background: #1d1d1d;
-    border-bottom: 1px solid #000;
+    padding: 8px 12px; background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border);
   }}
   header h1 {{
     margin: 0; font-size: 13px; font-weight: 600;
     letter-spacing: 0.02em;
-    /* Truncate long document names so they don't push the
-       controls off-screen on narrow viewports. */
     max-width: 30vw;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }}
@@ -1050,21 +1237,19 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
     font-variant-numeric: tabular-nums;
     transition: background 0.2s;
   }}
-  #status.ok      {{ background: #1e3a1e; color: #b4f0b4; }}
-  #status.fail    {{ background: #4a1818; color: #ffb4b4; }}
-  #status.building {{ background: #3a3a1e; color: #f0f0b4; }}
-  #status.idle    {{ background: #333; color: #aaa; }}
+  #status.ok       {{ background: var(--status-ok-bg);   color: var(--status-ok-text); }}
+  #status.fail     {{ background: var(--status-fail-bg); color: var(--status-fail-text); }}
+  #status.building {{ background: var(--status-bld-bg);  color: var(--status-bld-text); }}
+  #status.idle     {{ background: var(--status-idle-bg); color: var(--status-idle-text); }}
 
-  /* Generic chrome controls — buttons + the inline anchor we
-     style as a button (download). */
   .control-group {{
     display: flex; gap: 2px; align-items: center;
-    background: #262626; border: 1px solid #3a3a3a; border-radius: 5px;
-    padding: 2px;
+    background: var(--surface); border: 1px solid var(--surface-border);
+    border-radius: 5px; padding: 2px;
   }}
   .control-group > button,
   .control-group > a {{
-    background: transparent; color: #e8e8e8; border: none;
+    background: transparent; color: var(--text); border: none;
     padding: 3px 9px; border-radius: 3px;
     font: inherit; cursor: pointer; line-height: 1;
     min-width: 24px; text-align: center; text-decoration: none;
@@ -1072,30 +1257,25 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
     font-variant-numeric: tabular-nums;
   }}
   .control-group > button:hover,
-  .control-group > a:hover {{ background: #3a3a3a; }}
+  .control-group > a:hover {{ background: var(--surface-hover); }}
   .control-group > button:active,
-  .control-group > a:active {{ background: #444; }}
+  .control-group > a:active {{ background: var(--surface-active); }}
   .control-group > button:disabled {{
-    color: #666; cursor: default; background: transparent;
+    color: var(--text-disabled); cursor: default; background: transparent;
   }}
-  /* Active fit-mode highlight */
   .control-group > button.active {{
-    background: #2c4a40; color: #b4f0d0;
+    background: var(--fit-active-bg); color: var(--fit-active-text);
   }}
 
-  /* Page navigation: editable number input that looks like part
-     of a fixed label. */
   #page-counter {{
     display: inline-flex; align-items: center; gap: 4px;
-    padding: 3px 6px; color: #cfcfcf;
+    padding: 3px 6px; color: var(--text-muted);
     font-variant-numeric: tabular-nums;
   }}
   #page-input {{
     background: transparent; color: inherit; border: none;
     width: 3ch; text-align: right; padding: 0;
     font: inherit; font-variant-numeric: tabular-nums;
-    /* Hide the spinner buttons; we drive nav via the side
-       buttons + keyboard, the input is just for typing a target. */
     -moz-appearance: textfield;
   }}
   #page-input::-webkit-outer-spin-button,
@@ -1103,29 +1283,23 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
     -webkit-appearance: none; margin: 0;
   }}
   #page-input:focus {{
-    outline: 1px solid #4a8a78; outline-offset: 1px;
-    background: #1a1a1a;
+    outline: 1px solid var(--accent); outline-offset: 1px;
+    background: var(--bg-overlay);
   }}
-  #page-counter .page-sep {{ color: #777; }}
-  #page-total {{ color: #cfcfcf; min-width: 1ch; }}
+  #page-counter .page-sep {{ color: var(--text-faded); }}
+  #page-total {{ color: var(--text-muted); min-width: 1ch; }}
+
   #viewer {{
-    overflow: auto; padding: 16px; background: #2b2b2b;
+    overflow: auto; padding: 16px; background: var(--bg);
     text-align: center;
-    /* `position: relative` so .synctex-flash overlays (which are
-       absolutely positioned inside the viewer) anchor to the
-       scrollable content area rather than the page. */
     position: relative;
   }}
-  /* One page = a positioned wrap containing the canvas + the
-     transparent text-layer overlay. Wrap dimensions match the
-     rendered viewport in CSS pixels so the text layer's absolute
-     children sit exactly on top of glyphs. */
   .page-wrap {{
     position: relative;
     display: block;
     margin: 0 auto 12px;
     background: white;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    box-shadow: var(--page-shadow);
   }}
   .page-wrap canvas {{
     display: block;
@@ -1133,11 +1307,6 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
   }}
   body.synctex .page-wrap canvas {{ --canvas-cursor: crosshair; }}
 
-  /* PDF.js text layer: invisible text overlay for selection +
-     find. Each child span is absolutely positioned and sized to
-     match the corresponding glyph in the canvas. Colour
-     transparent so visually nothing changes; selection colour
-     comes from ::selection. */
   .text-layer {{
     position: absolute; inset: 0;
     overflow: hidden;
@@ -1145,8 +1314,6 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
     line-height: 1.0;
     text-align: left;
     user-select: text;
-    /* PDF.js applies --scale-factor on the container in its
-       TextLayer.render() path; CSS uses it to scale spans. */
     --scale-factor: 1;
   }}
   .text-layer > span,
@@ -1157,53 +1324,46 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
     cursor: text;
     transform-origin: 0% 0%;
   }}
-  .text-layer ::selection {{
-    background: rgba(64, 160, 220, 0.35);
-  }}
-  /* Find-match highlight: visible because the text itself is
-     transparent — the colour shows through. The "current" match
-     gets a stronger background and an outline. */
+  .text-layer ::selection {{ background: var(--selection-bg); }}
   .text-layer .find-match {{
-    background: rgba(255, 230, 100, 0.45);
-    border-radius: 1px;
+    background: var(--find-bg); border-radius: 1px;
   }}
   .text-layer .find-match.find-match-current {{
-    background: rgba(255, 165, 60, 0.7);
-    outline: 1px solid rgba(255, 200, 100, 0.95);
+    background: var(--find-cur-bg);
+    outline: 1px solid var(--find-cur-border);
   }}
 
-  /* Find bar */
   #search-bar {{
     display: flex; gap: 6px; align-items: center;
-    padding: 6px 10px; background: #1a1a1a;
-    border-bottom: 1px solid #000;
+    padding: 6px 10px; background: var(--bg-overlay);
+    border-bottom: 1px solid var(--border);
     font-variant-numeric: tabular-nums;
   }}
   #search-bar[hidden] {{ display: none; }}
   #search-input {{
     flex: 0 1 280px;
-    background: #2a2a2a; color: #e8e8e8;
-    border: 1px solid #3a3a3a; border-radius: 4px;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--surface-border); border-radius: 4px;
     padding: 4px 8px; font: inherit;
   }}
   #search-input:focus {{
-    outline: 1px solid #4a8a78; outline-offset: 0;
+    outline: 1px solid var(--accent); outline-offset: 0;
   }}
-  #search-input.no-results {{
-    background: #3a1a1a;
-  }}
-  #search-count {{ color: #888; min-width: 5ch; }}
+  #search-input.no-results {{ background: var(--search-noresults); }}
+  #search-count {{ color: var(--text-faded); min-width: 5ch; }}
   #search-bar button {{
-    background: #262626; color: #e8e8e8;
-    border: 1px solid #3a3a3a; border-radius: 4px;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--surface-border); border-radius: 4px;
     padding: 3px 9px; font: inherit; cursor: pointer;
     min-width: 28px;
   }}
-  #search-bar button:hover {{ background: #3a3a3a; }}
-  #search-bar button:disabled {{ color: #555; cursor: default; }}
-  /* Forward-sync flash overlay: a transient yellow box at the
+  #search-bar button:hover {{ background: var(--surface-hover); }}
+  #search-bar button:disabled {{ color: var(--text-disabled); cursor: default; }}
+
+  /* Forward-sync flash overlay: a transient highlight at the
      synctex location, fades out over ~1.5s. Position is set in
-     JS based on the PDF.js viewport math. */
+     JS based on the PDF.js viewport math. Colours are
+     theme-independent (sits on top of the white PDF surface). */
   .synctex-flash {{
     position: absolute;
     background: rgba(255, 230, 80, 0.45);
@@ -1217,15 +1377,26 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
     15%  {{ opacity: 1.0; }}
     100% {{ opacity: 0.0; }}
   }}
-  #empty {{ color: #888; padding: 32px; }}
+  #empty {{ color: var(--text-faded); padding: 32px; }}
   footer {{
-    padding: 6px 12px; background: #1d1d1d;
-    border-top: 1px solid #000;
-    font-size: 12px; color: #888;
+    padding: 6px 12px; background: var(--bg-elevated);
+    border-top: 1px solid var(--border);
+    font-size: 12px; color: var(--text-faded);
     min-height: 28px;
+    display: flex; gap: 12px; align-items: center;
   }}
-  #sync-result {{ color: #b4d8f0; font-family: ui-monospace, monospace; }}
-  #sync-result a {{ color: #b4d8f0; text-decoration: underline; }}
+  #git-badge {{
+    display: inline-flex; align-items: center; gap: 4px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+  }}
+  #git-branch {{ color: var(--text-muted); }}
+  #git-dirty {{ color: var(--dirty-marker); font-size: 9px; }}
+  #sync-result {{
+    color: var(--sync-result);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }}
+  #sync-result a {{ color: var(--sync-result); text-decoration: underline; }}
 </style>
 </head>
 <body class="{synctex_body_class}">
@@ -1256,6 +1427,8 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
     <a id="download-pdf" href="/pdf" download="{document_name}.pdf"
        title="Download PDF" aria-label="Download PDF">⤓</a>
     <button id="fullscreen" title="Fullscreen (f)" aria-label="Toggle fullscreen">⛶</button>
+    <button id="theme-toggle" title="Theme (auto/dark/light, t to cycle)"
+            aria-label="Cycle theme">⊙</button>
   </div>
 
   <div id="status" class="idle">connecting…</div>
@@ -1275,6 +1448,9 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
 </div>
 <div id="viewer"><div id="empty">waiting for first build…</div></div>
 <footer>
+  <span id="git-badge" hidden>
+    <span id="git-branch"></span><span id="git-dirty" hidden title="Working tree has uncommitted changes">●</span>
+  </span>
   <span id="sync-result">{synctex_hint}</span>
 </footer>
 
@@ -1606,17 +1782,72 @@ async function renderAllPages(pdf) {{
   await refreshStatus();
 }}
 
+// Cached latest /status response. The status pill ticks every
+// second so the "Xs ago" suffix stays current without re-fetching;
+// re-fetch happens on build events (via SSE/WS reload).
+let _lastStatus = null;
+
 async function refreshStatus() {{
   try {{
     const r = await fetch("/status");
     const s = await r.json();
-    if (s.last_success) {{
-      setStatus("ok", `✓ ${{s.last_message}} · build #${{s.build_count}}`);
-    }} else {{
-      setStatus("fail", `${{s.last_message}}`);
-    }}
+    _lastStatus = s;
+    _renderStatus();
+    _updateGitBadge(s);
   }} catch (e) {{
     setStatus("fail", "server unreachable");
+  }}
+}}
+
+function _formatAge(sec) {{
+  if (sec < 5) return "just now";
+  if (sec < 60) return `${{Math.floor(sec)}} s ago`;
+  if (sec < 3600) {{
+    const m = Math.floor(sec / 60);
+    return m === 1 ? "1 min ago" : `${{m}} min ago`;
+  }}
+  const h = Math.floor(sec / 3600);
+  return h === 1 ? "1 h ago" : `${{h}} h ago`;
+}}
+
+function _renderStatus() {{
+  if (!_lastStatus) return;
+  const s = _lastStatus;
+  if (s.last_success) {{
+    const elapsed = (s.last_elapsed_seconds || 0).toFixed(2);
+    const ageSec = Math.max(0, (Date.now() / 1000) - s.last_finished_at);
+    setStatus(
+      "ok",
+      `✓ ${{elapsed}} s · build #${{s.build_count}} · ${{_formatAge(ageSec)}}`,
+    );
+  }} else {{
+    setStatus("fail", `${{s.last_message}}`);
+  }}
+}}
+
+// Tick the "Xs ago" suffix every second without polling /status.
+setInterval(_renderStatus, 1000);
+
+function _updateGitBadge(s) {{
+  const badge = document.getElementById("git-badge");
+  const branchEl = document.getElementById("git-branch");
+  const dirtyEl = document.getElementById("git-dirty");
+  if (!badge) return;
+  if (s.git_branch) {{
+    branchEl.textContent = s.git_branch;
+    if (s.git_short_sha) {{
+      branchEl.title = `at ${{s.git_short_sha}}`;
+    }}
+    dirtyEl.hidden = !s.git_dirty;
+    badge.hidden = false;
+  }} else if (s.git_short_sha) {{
+    // Detached HEAD: show short sha + dirty marker.
+    branchEl.textContent = s.git_short_sha;
+    branchEl.title = "detached HEAD";
+    dirtyEl.hidden = !s.git_dirty;
+    badge.hidden = false;
+  }} else {{
+    badge.hidden = true;
   }}
 }}
 
@@ -2266,8 +2497,54 @@ document.addEventListener("keydown", (e) => {{
       pageInput.focus();
       pageInput.select();
       break;
+    case "t":
+      _cycleTheme();
+      break;
   }}
 }});
+
+// -- Theme toggle --
+//
+// Three states: auto (follows system prefers-color-scheme), dark
+// (forced dark), light (forced light). Persisted in localStorage so
+// the choice survives reloads. `t` cycles between them.
+const THEMES = ["auto", "dark", "light"];
+const THEME_ICONS = {{ auto: "⊙", dark: "☾", light: "☀" }};
+const themeBtn = document.getElementById("theme-toggle");
+let _theme;
+try {{
+  _theme = localStorage.getItem("rules_latex_theme") || "auto";
+  if (!THEMES.includes(_theme)) _theme = "auto";
+}} catch {{
+  // localStorage can throw under restrictive sandbox policies
+  // (e.g. data: URLs, file:// with --disable-storage). Fall back
+  // to auto and accept that the choice won't persist.
+  _theme = "auto";
+}}
+
+function _applyTheme() {{
+  if (_theme === "auto") {{
+    document.documentElement.removeAttribute("data-theme");
+  }} else {{
+    document.documentElement.setAttribute("data-theme", _theme);
+  }}
+  themeBtn.textContent = THEME_ICONS[_theme];
+  themeBtn.title = `Theme: ${{_theme}} (t to cycle)`;
+}}
+
+function _cycleTheme() {{
+  const i = THEMES.indexOf(_theme);
+  _theme = THEMES[(i + 1) % THEMES.length];
+  try {{
+    localStorage.setItem("rules_latex_theme", _theme);
+  }} catch {{
+    // Best-effort persistence; ignore.
+  }}
+  _applyTheme();
+}}
+
+themeBtn.addEventListener("click", _cycleTheme);
+_applyTheme();
 
 renderDocument();
 refreshStatus();
@@ -2445,7 +2722,9 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
         if path == "/status":
-            body = json.dumps(self.state.snapshot()).encode("utf-8")
+            body = json.dumps(
+                self.state.snapshot(workspace=self.workspace),
+            ).encode("utf-8")
             self._send(HTTPStatus.OK, body, "application/json")
             return
         if path == "/events":
