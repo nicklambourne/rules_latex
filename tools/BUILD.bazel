@@ -4,8 +4,8 @@
 
 package(default_visibility = ["//visibility:public"])
 
-# Five scripts and a shared library that drive the rules_latex
-# tectonic action paths:
+# Six scripts and shared libraries that drive the rules_latex
+# tectonic action paths and the live-preview server:
 #
 #   - staging.py: shared layout logic (main-rooted staging).
 #   - tectonic_populate_cache.py: TectonicPopulateCache action wrapper
@@ -18,6 +18,10 @@ package(default_visibility = ["//visibility:public"])
 #     used by the serve script to content-address the compiled
 #     PDF's indirect objects, so the browser only re-fetches the
 #     chunks that actually changed between rebuilds.
+#   - ws_server.py: RFC 6455 stdlib WebSocket server, consumed by
+#     the live-preview server to push PDF chunks proactively after
+#     each rebuild. Stdlib-only, no third-party deps. See
+#     tests/py/test_ws_server.py for protocol coverage.
 #
 # Exposed as plain files rather than py_binary because we deliberately
 # don't take a `rules_python` dependency for stdlib-only tools — see
@@ -28,4 +32,5 @@ exports_files([
     "tectonic_compile.py",
     "serve_cache.py",
     "pdf_chunks.py",
+    "ws_server.py",
 ])
