@@ -400,7 +400,7 @@ class BuildState:
                 self._listeners.remove(q)
 
     def broadcast_event(self, event: str) -> None:
-        """Push an arbitrary event payload to every SSE listener.
+        """Push an arbitrary event payload to every connected listener.
 
         Used by /sync/forward to push a JSON-encoded "jump"
         message to the browser. The reload / build-failed events
@@ -408,9 +408,15 @@ class BuildState:
         through ``record_build`` for the locking + history book-
         keeping that those events also need; jump events are
         stateless and don't.
+
+        Fans out to both SSE and WS subscribers. The payload is
+        already a JSON string (jump events are the only current
+        caller), so it goes onto the SSE queues verbatim and is
+        sent as a WS text frame.
         """
         with self._lock:
             listeners = list(self._listeners)
+            ws_snapshot = [entry[0] for entry in self._ws_conns.values()]
         for q in listeners:
             try:
                 q.put(event, timeout=0.1)
@@ -418,6 +424,14 @@ class BuildState:
                 # Slow listener; drop the event. The forward-sync
                 # source can retry; nothing else depends on the
                 # event arriving.
+                pass
+        for conn in ws_snapshot:
+            try:
+                conn.send_text(event)
+            except Exception:
+                # Mirror the SSE policy: drop and let the read
+                # loop on the handler thread tear down the
+                # connection. The forward-sync source retries.
                 pass
 
     def record_build(self, success: bool, elapsed: float, message: str) -> None:
@@ -569,9 +583,12 @@ class BuildState:
         are stable for the lifetime of any manifest that references
         them.
         """
-        chunk_list = []
+        # Match the JSON shape of /pdf-manifest exactly — the
+        # browser feeds both into ChunkedTransport without caring
+        # which transport delivered them.
+        ranges = []
         for c in manifest.chunks:
-            chunk_list.append({
+            ranges.append({
                 "objectId": c.object_id,
                 "start": c.start,
                 "end": c.end,
@@ -580,7 +597,7 @@ class BuildState:
         manifest_payload = json.dumps({
             "type": "manifest",
             "pdfSize": manifest.pdf_size,
-            "chunks": chunk_list,
+            "ranges": ranges,
             "skeletonRanges": [
                 [r[0], r[1]] for r in manifest.skeleton_ranges
             ],
@@ -1419,30 +1436,184 @@ function escapeHtml(s) {{
     c => ({{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}}[c]));
 }}
 
-const evtSrc = new EventSource("/events");
-evtSrc.onmessage = (e) => {{
-  if (e.data === "reload") {{
-    renderDocument();
-  }} else if (e.data === "build-failed" || e.data === "hello") {{
-    refreshStatus();
-  }} else if (e.data.startsWith("{{")) {{
-    // JSON-encoded events. Currently only "jump" (forward-sync
-    // from an editor / CLI), but the discriminator lives in
-    // `type` so future event shapes can land here too.
+// -----------------------------------------------------------------------
+// Live-update transport
+// -----------------------------------------------------------------------
+//
+// Prefer a WebSocket to /ws — the server pushes the manifest plus
+// any chunks we don't already have in a single duplex burst,
+// saving the manifest-fetch + chunk-fetch round-trips the SSE
+// flow needs. If WS fails to open (older server, proxy that
+// doesn't speak Upgrade, CORS, etc.) we fall back transparently
+// to SSE + /chunk/<hash> over HTTP.
+//
+// The first page-load always uses the HTTP path (renderDocument()
+// at the bottom of this file); the WS connection inherits whatever
+// chunkCache state that left behind by sending its "hello" with
+// the keys we already have. The server uses that to skip chunks
+// the browser doesn't need.
+
+let _sseSource = null;  // EventSource | null
+let _wsConn = null;     // WebSocket | null
+// Pending state for one WS push: we get the manifest first, then
+// zero or more binary frames, then we render when all expected
+// chunks have arrived. If the manifest changes mid-batch we
+// just overwrite — the latest manifest wins.
+let _wsPendingManifest = null;
+let _wsPendingHashes = new Set();
+
+function _hexFromBytes(bytes) {{
+  // Hot path during chunk delivery — avoid the array+join allocation
+  // in favour of direct string concatenation against a lookup table.
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) {{
+    const b = bytes[i];
+    s += (b < 0x10 ? "0" : "") + b.toString(16);
+  }}
+  return s;
+}}
+
+function _handleWsMessage(ev) {{
+  if (typeof ev.data === "string") {{
     let msg;
     try {{
-      msg = JSON.parse(e.data);
+      msg = JSON.parse(ev.data);
     }} catch {{
       return;
     }}
-    if (msg && msg.type === "jump") {{
+    if (!msg || !msg.type) return;
+    if (msg.type === "manifest") {{
+      _wsPendingManifest = msg;
+      _wsPendingHashes = new Set();
+      for (const r of msg.ranges) {{
+        if (!chunkCache.has(r.hash)) _wsPendingHashes.add(r.hash);
+      }}
+      if (_wsPendingHashes.size === 0) {{
+        _flushWsRender();
+      }}
+    }} else if (msg.type === "build-failed") {{
+      // The status banner will flash red via refreshStatus.
+      // Keep the existing rendered PDF in place — it's still
+      // the last good version.
+      refreshStatus();
+    }} else if (msg.type === "jump") {{
       jumpToPdfLocation(msg);
     }}
+    return;
   }}
-}};
-evtSrc.onerror = () => {{
-  setStatus("fail", "lost connection to server");
-}};
+  // Binary frame: <32 bytes raw sha256><payload>.
+  const bytes = new Uint8Array(ev.data);
+  if (bytes.length < 32) return;
+  const hash = _hexFromBytes(bytes.subarray(0, 32));
+  const payload = bytes.subarray(32);
+  // Copy out of the underlying ArrayBuffer so the cache entry
+  // isn't tied to whatever view PDF.js may have on the next
+  // message. Allocates, but chunks are bounded in size.
+  rememberChunk(hash, new Uint8Array(payload));
+  _wsPendingHashes.delete(hash);
+  if (_wsPendingHashes.size === 0 && _wsPendingManifest) {{
+    _flushWsRender();
+  }}
+}}
+
+async function _flushWsRender() {{
+  const manifest = _wsPendingManifest;
+  _wsPendingManifest = null;
+  _wsPendingHashes = new Set();
+  if (!manifest) return;
+  setStatus("building", "rendering…");
+  try {{
+    const transport = new ChunkedTransport(manifest);
+    const loadingTask = pdfjsLib.getDocument({{ range: transport }});
+    const pdf = await loadingTask.promise;
+    currentDoc = pdf;
+    await renderAllPages(pdf);
+  }} catch (err) {{
+    setStatus("fail", `render error: ${{err.message || err}}`);
+    console.error(err);
+  }}
+}}
+
+function _startWebSocket() {{
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const url = `${{proto}}//${{location.host}}/ws`;
+  let ws;
+  try {{
+    ws = new WebSocket(url);
+  }} catch (err) {{
+    _startSSE();
+    return;
+  }}
+  ws.binaryType = "arraybuffer";
+
+  let opened = false;
+  ws.addEventListener("open", () => {{
+    opened = true;
+    // Announce our chunk-cache state so the server only pushes
+    // chunks we don't already have. After a hard reload this set
+    // is empty; after a soft (in-page) state change it carries
+    // over from whatever renderDocument() populated on first load.
+    try {{
+      ws.send(JSON.stringify({{
+        type: "hello",
+        have: Array.from(chunkCache.keys()),
+      }}));
+    }} catch {{
+      // Send failed; the onclose handler will fall back.
+    }}
+  }});
+
+  ws.addEventListener("message", _handleWsMessage);
+
+  ws.addEventListener("close", () => {{
+    _wsConn = null;
+    if (!opened) {{
+      // Never connected — fall back to SSE so live-reload still
+      // works. Status banner only flips on if SSE also fails.
+      _startSSE();
+    }} else if (!_sseSource) {{
+      // Mid-session disconnect; bring up SSE as a safety net.
+      // The user will get a chance to reconnect WS on next page
+      // refresh.
+      _startSSE();
+      setStatus("fail", "live-reload reconnecting via SSE…");
+    }}
+  }});
+
+  ws.addEventListener("error", () => {{
+    // The browser fires 'error' before 'close' for connection-
+    // refused style failures. We do all the fallback work in
+    // 'close' so nothing here.
+  }});
+
+  _wsConn = ws;
+}}
+
+function _startSSE() {{
+  if (_sseSource) return;
+  const evtSrc = new EventSource("/events");
+  evtSrc.onmessage = (e) => {{
+    if (e.data === "reload") {{
+      renderDocument();
+    }} else if (e.data === "build-failed" || e.data === "hello") {{
+      refreshStatus();
+    }} else if (e.data.startsWith("{{")) {{
+      let msg;
+      try {{
+        msg = JSON.parse(e.data);
+      }} catch {{
+        return;
+      }}
+      if (msg && msg.type === "jump") {{
+        jumpToPdfLocation(msg);
+      }}
+    }}
+  }};
+  evtSrc.onerror = () => {{
+    setStatus("fail", "lost connection to server");
+  }};
+  _sseSource = evtSrc;
+}}
 
 // Forward-sync target: scroll the named page into view, then briefly
 // flash a highlight overlay at the PDF-coordinate box. The overlay
@@ -1519,6 +1690,11 @@ document.getElementById("zoom-reset").addEventListener("click", () => {{
 
 renderDocument();
 refreshStatus();
+// Live-update transport: try WS first; falls back to SSE on
+// connection failure. Existing SSE listeners (build-failed,
+// reload, jump events) get the same payloads via the WS path
+// when it's up.
+_startWebSocket();
 </script>
 </body>
 </html>
