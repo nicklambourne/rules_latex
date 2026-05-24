@@ -824,6 +824,36 @@ These are deliberately out of scope for v0.1 but worth flagging.
     [GitHub issue #2](https://github.com/nicklambourne/rules_latex/issues/2)
     along with the triggers that would justify revisiting.
 
+    **Triggers accumulating in favour of revisiting:**
+
+    - *Frontend (JS / CSS) coverage gap.* The UI overhaul series
+      (UI PRs 1–7) shipped ~1500 lines of browser-side code —
+      page navigation, in-document search, text-layer selection,
+      outline sidebar, build-log drawer, theme toggle, keyboard
+      shortcuts. None of it has automated tests because the repo
+      has no JS test harness, and adding one means either taking
+      a Bazel-managed Node toolchain (`rules_nodejs`) or driving
+      a headless browser test (Playwright via Python — which
+      means `rules_python` anyway). The Python-side `BuildState`
+      tests under `tests/py/test_build_state_*.py` exercise the
+      server contract (push transport, log retention, git info
+      caching) but stop at the JS boundary. Each new piece
+      of UI behaviour that ships without a regression test
+      widens the surface area where a future change can break
+      something silently.
+
+    - *`OffscreenCanvas` rendering* (issue #50) would push the
+      JS surface area further — render workers, message-passing
+      protocols, fallback paths. Hard to ship without browser
+      tests without burning a lot of debugging time on UI bugs
+      that a `expect(canvas).toRenderPage(3)` check would have
+      caught.
+
+    None of these have flipped the decision yet (the
+    stdlib-only convention is still load-bearing for the
+    "single-binary, content-addressed serve script" story in
+    §4.7), but each one is recorded so the threshold is visible.
+
 12. **Automatic transitive CTAN dep resolution.** As of v0.4
     (`ctan_packages`), users list each post-2022 CTAN package
     explicitly. When a package transitively requires *another*

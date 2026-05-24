@@ -68,7 +68,9 @@ buildifier --mode=fix tests/ctan/BUILD.bazel   # auto-fix one file
 - **System `python3`, no `rules_python`.** Tooling under `tools/` is
   stdlib-only. Python unit tests run as `sh_test` wrappers around
   `python3 -m unittest`. See [DESIGN.md §5 item #11](DESIGN.md) for
-  the trade-off and the triggers that would justify revisiting.
+  the trade-off and the triggers that would justify revisiting
+  (the JS test-harness gap left by the UI overhaul is recorded
+  there as one such trigger).
 - **Each `examples/<name>` is its own Bazel workspace** with its own
   `MODULE.bazel` (via `examples/MODULE.bazel`). Running `bazel build
   //examples/cv:cv` from the repo root fails with "package is
