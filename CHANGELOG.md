@@ -4,7 +4,13 @@ All notable changes to `rules_latex` are documented here. This project follows
 [Semantic Versioning](https://semver.org/) once v1.0.0 is reached; before
 that, expect breaking changes in any v0.x release.
 
-## [Unreleased]
+## [0.5.0] - 2026-05-24
+
+The headline of this release is a full overhaul of the
+`latex_serve_web` live preview: faster reload transport, a real
+PDF viewer chrome (page nav, search, outline, build log), and a
+light/dark theme. Server contract is unchanged — `latex_document`,
+`latex_test`, and the toolchain layer are identical to v0.4.2.
 
 ### Added
 
@@ -36,6 +42,117 @@ that, expect breaking changes in any v0.x release.
   [DESIGN.md §5.7](https://github.com/nicklambourne/rules_latex/blob/master/DESIGN.md)
   for the historical context. Resolves
   [#9](https://github.com/nicklambourne/rules_latex/issues/9).
+
+- **Live-preview chrome overhaul.** The header is now a proper
+  PDF viewer control bar instead of three zoom buttons:
+
+  - **Page navigation** — `‹ N / M ›` with an editable page input
+    (`Enter` to jump). `IntersectionObserver` tracks current page
+    on scroll.
+  - **Zoom** — real `%` (was lying as `100%`), plus dedicated
+    fit-width `↔` and fit-page `▭` buttons that auto-recompute
+    on window resize.
+  - **Download** — `⤓` link to `/pdf` with a download attr matching
+    the document name.
+  - **Fullscreen** — `⛶` toggles `requestFullscreen` on the viewer.
+  - **Keyboard** — `PageUp`/`PageDown`, `Home`/`End`, `+`/`-`/`0`,
+    `w` (fit width), `p` (fit page), `f` (fullscreen), `g` (focus
+    page input), `s` (toggle outline), `l` (toggle log), `t`
+    (cycle theme), `Ctrl/⌘+F` (find).
+
+- **In-document search.** `Ctrl/⌘+F` (or the `⌕` header button)
+  opens a find bar above the viewer. Substring match, case-
+  insensitive, highlights matches in the PDF.js text layer with
+  the current match in a stronger accent colour and scrolled into
+  view. `Enter` / `Shift+Enter` cycle next/prev with wrap-around.
+
+- **Selectable PDF text.** Each rendered page now carries a PDF.js
+  `TextLayer` overlay so the user can select-and-copy text in the
+  preview — the canvas-only render in v0.4.x had no selectable
+  text at all.
+
+- **Outline sidebar.** Documents with hyperref bookmarks (any
+  `\section` / `\subsection` / `\chapter` etc.) get a collapsible
+  left sidebar with clickable section nav. Auto-shows on first
+  render that produces an outline; the toggle button stays hidden
+  for documents without sections. Current-section is highlighted
+  as you scroll. Show/hide preference persists via `localStorage`.
+
+- **Build-log drawer.** Collapsible bottom drawer that exposes the
+  latest `bazel build` stdout+stderr (capped at 64 KiB,
+  head-trimmed). Header shows a summary tail (the last non-empty
+  line — usually `Build completed successfully` or the actual
+  error); expand for the full log in a scrollable `<pre>`. Auto-
+  expands on the first failed build of a session unless the user
+  has explicitly closed it. Copy-to-clipboard button. New `/log`
+  HTTP endpoint + `log-update` WS push event.
+
+- **Build status + git context.** The status pill now shows
+  `✓ 1.42 s · build #5 · 12 s ago` with a live-ticking "Xs ago"
+  suffix (no extra polling — the ticker only restrings the cached
+  status). Footer gains a git badge showing branch + dirty
+  marker, with the short HEAD SHA in the tooltip. Server-side
+  `BuildState.get_git_info()` shells out to git with a 2-second
+  TTL cache so the per-second status poll doesn't spawn three
+  subprocesses per tick.
+
+- **Light / dark / auto theme.** Full palette refactor onto CSS
+  variables. The new `⊙` button cycles `auto` → `dark` → `light`
+  (keyboard `t`); `auto` follows `prefers-color-scheme`. Choice
+  persists via `localStorage`. The PDF page surface stays white
+  in both themes (flipping it would invert document content).
+
+- **Polish details.** Inline data-URI SVG favicon in the project's
+  teal accent, 2px accent stripe under the header to pull the
+  same colour into the most-visible chrome edge, redesigned empty
+  state with a pulsing teal glyph + helpful hint
+  (`prefers-reduced-motion`-aware).
+
+- **Unit tests for `BuildState` helpers.** 40 new test cases
+  covering `set_log` truncation contract, `get_git_info` caching
+  + non-git fallback, `broadcast_chunks` / `broadcast_event` /
+  `broadcast_ws_build_failed` / `broadcast_log_update` fan-out
+  ordering and isolation, `_combine_output` stderr-after-stdout
+  invariant. See `tests/py/test_build_state_*.py`.
+
+### Changed
+
+- **WS manifest payload uses the `ranges` key** matching the
+  existing `/pdf-manifest` JSON shape, so `ChunkedTransport`
+  consumes both transports through the same code path.
+
+- **Forward-sync (SyncTeX `POST /sync/forward`) events fan out
+  to both SSE and WS clients** so editor-jump UX works the same
+  regardless of which transport the connected browser tab chose.
+
+- **`run_bazel_build` signature** gains a fourth element
+  (`combined_output`); all internal call sites updated. The
+  serve script captures the combined stdout+stderr per build and
+  hands it to `BuildState.set_log`, which feeds the new
+  `/log` endpoint. No effect on the rule-side action protocol.
+
+- **README release badge** now filters tags to `v*` so the
+  shields.io semver sort no longer mistakes the
+  `biber-mirror-v2.21` tag for a project release.
+
+### Documentation
+
+- **DESIGN.md §5.7** (WebSocket transport) marked SHIPPED with
+  the original deferral rationale preserved as an audit trail.
+- **DESIGN.md §5 #11** (rules_python trade-off) picks up a
+  sub-section recording the JS test-harness gap from the UI
+  overhaul as one of the accumulating triggers that would justify
+  revisiting the stdlib-only convention.
+- **DESIGN.md §5 #13** (new) tracks live-preview render perf for
+  long docs: viewport-gated canvas paint, off-screen swap,
+  canvas reuse on unchanged geometry, OffscreenCanvas worker
+  rendering. Punted for v0.5.0; see
+  [#50](https://github.com/nicklambourne/rules_latex/issues/50).
+- **`docs/site/about/design.md`** rewrites the "Why SSE not
+  WebSockets?" section as "Why WebSocket *and* Server-Sent
+  Events?" — the answer is now both.
+- **`docs/site/getting-started/live-preview.md`** adds a wire-
+  format table for the WS push transport.
 
 ## [0.4.2] - 2026-05-24
 

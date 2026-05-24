@@ -107,6 +107,8 @@ See the [Design rationale](about/design.md) for the full story.
 | `ctan_packages` (auto-resolved transitive closure) | Stable since v0.4.2 |
 | `tectonic.toolchain(modern_biblatex = True)` (3.18+ styles) | Stable since v0.4.2 |
 | SyncTeX forward-sync | Stable since v0.4.2 |
+| WebSocket push transport for live preview | Stable since v0.5.0 |
+| In-doc search, outline sidebar, build-log drawer, theme toggle | Stable since v0.5.0 |
 | Linux arm64 biber | Not vendored — use `biber_strategy = "system"` ([#10][issue-10]) |
 
 [issue-10]: https://github.com/nicklambourne/rules_latex/issues/10
