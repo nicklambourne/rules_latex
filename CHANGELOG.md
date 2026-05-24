@@ -18,21 +18,23 @@ that, expect breaking changes in any v0.x release.
   pull round-trips on the hot path.
 
   Hand-rolled stdlib WebSocket server at
-  [`tools/ws_server.py`](tools/ws_server.py) (RFC 6455 — handshake,
-  framing, ping/pong, fragmentation, close). No third-party
-  dependency, no `rules_python` adoption needed; the
-  `permessage-deflate` and subprotocol corners of the spec are
-  skipped deliberately (chunks are already FlateDecode'd, no
-  need for subprotocols on a single-peer transport).
+  [`tools/ws_server.py`](https://github.com/nicklambourne/rules_latex/blob/master/tools/ws_server.py)
+  (RFC 6455 — handshake, framing, ping/pong, fragmentation,
+  close). No third-party dependency, no `rules_python` adoption
+  needed; the `permessage-deflate` and subprotocol corners of
+  the spec are skipped deliberately (chunks are already
+  FlateDecode'd, no need for subprotocols on a single-peer
+  transport).
 
   SSE remains at `/events` as a transparent fallback for clients
   that can't upgrade (proxies that don't speak `Upgrade`,
   deployments that fail to load `ws_server.py` on the server
   side, etc.). The user-visible UX is unchanged on the SSE path;
-  WS just makes rebuild-to-render lower-latency. See
-  [docs/site/getting-started/live-preview.md#websocket-push-transport](docs/site/getting-started/live-preview.md#websocket-push-transport)
+  WS just makes rebuild-to-render lower-latency. See the
+  [live-preview docs](https://nicklambourne.github.io/rules_latex/getting-started/live-preview/#websocket-push-transport)
   for the wire format and
-  [DESIGN.md §5.7](DESIGN.md) for the historical context. Resolves
+  [DESIGN.md §5.7](https://github.com/nicklambourne/rules_latex/blob/master/DESIGN.md)
+  for the historical context. Resolves
   [#9](https://github.com/nicklambourne/rules_latex/issues/9).
 
 ## [0.4.2] - 2026-05-24
