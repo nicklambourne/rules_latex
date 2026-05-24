@@ -5,7 +5,7 @@
 # rules_latex
 
 [![CI](https://github.com/nicklambourne/rules_latex/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/nicklambourne/rules_latex/actions/workflows/ci.yml)
-[![Latest release](https://img.shields.io/github/v/release/nicklambourne/rules_latex?label=release&sort=semver)](https://github.com/nicklambourne/rules_latex/releases)
+[![Latest release](https://img.shields.io/github/v/release/nicklambourne/rules_latex?label=release&sort=semver&filter=v*)](https://github.com/nicklambourne/rules_latex/releases)
 [![License](https://img.shields.io/github/license/nicklambourne/rules_latex)](./LICENSE)
 [![Bazel 8–9](https://img.shields.io/badge/bazel-8.0%20%E2%80%93%209.1-43A047)](./.bazelversion)
 
