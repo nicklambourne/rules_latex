@@ -100,7 +100,7 @@ See the [Design rationale](about/design.md) for the full story.
 |---|---|
 | Core rules (`document`, `library`, `pkg`, `test`) | Stable since v0.1.0 |
 | Toolchain (`tectonic`, `bundle`, `biber`) | Stable since v0.2.0 |
-| Live preview (`serve`, `serve_web`) | Stable since v0.2.0 |
+| Live preview (`serve_web`) | Stable since v0.2.0 (system-viewer `serve` removed in v0.6.0) |
 | SyncTeX reverse-sync | Stable since v0.2.0 |
 | Implicit cache pipeline | Stable since v0.2.0 |
 | Self-hosted PDF.js | Stable since v0.2.0 |

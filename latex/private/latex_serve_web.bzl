@@ -1,10 +1,11 @@
 """The `latex_serve_web` rule.
 
-`latex_serve_web` is the in-browser counterpart to `latex_serve`. It
-runs a small HTTP server on localhost, watches the document's
-transitive sources, rebuilds via `bazel build` on every save, and
-pushes a 'reload' event over Server-Sent Events. The connected
-browser tab re-renders the PDF via PDF.js, preserving scroll position
+`latex_serve_web` is the live-preview rule. It runs a small HTTP
+server on localhost, watches the document's transitive sources,
+rebuilds via `bazel build` on every save, and pushes the changed
+PDF chunks to the connected browser tab over WebSocket (with SSE
+as fallback). The PDF is rendered via PDF.js, with scroll
+position, zoom level, and current page preserved across reloads
 so editing doesn't bounce you back to page 1.
 
 Typical usage:
@@ -35,9 +36,8 @@ Design notes:
   and is served at `/_pdfjs/pdf.mjs` and `/_pdfjs/pdf.worker.mjs` by
   the running server. No CDN dependency at preview time.
 
-* The rebuild path is identical to `latex_serve`: shells out to
-  `bazel build`, so live mode and CI use the same toolchain, sandbox,
-  and cache. See `DESIGN.md` §4.7.
+* The rebuild path shells out to `bazel build`, so live mode and CI
+  use the same toolchain, sandbox, and cache. See `DESIGN.md` §4.7.
 
 * Implicit-pipeline serve acceleration. When the served document
   takes the implicit-cache pipeline (no `cache=`, no toolchain

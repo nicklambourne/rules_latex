@@ -115,46 +115,57 @@ full [user guide](https://nicklambourne.github.io/rules_latex/).
 | [`latex_pkg`](./latex/private/latex_pkg.bzl) | Group non-LaTeX resources (images, fonts, `.bib` files) that documents may need. |
 | [`latex_test`](./latex/private/latex_test.bzl) | Compile a document under `bazel test` and assert on patterns in the tectonic log file (e.g. fail on `LaTeX Error:`). |
 | [`latex_cache_snapshot`](./latex/private/latex_cache_snapshot.bzl) | `bazel run`-able command that captures a small, per-document offline cache snapshot for hermetic builds. |
-| [`latex_serve`](./latex/private/latex_serve.bzl) | `bazel run`-able live-preview loop: watches the document's sources, rebuilds via `bazel build` on every save, opens the PDF in the system viewer. |
-| [`latex_serve_web`](./latex/private/latex_serve_web.bzl) | Like `latex_serve`, but exposes the preview as a localhost HTTP page rendered with PDF.js — Overleaf-style in-browser preview with auto-refresh on save. |
+| [`latex_serve_web`](./latex/private/latex_serve_web.bzl) | `bazel run`-able live-preview loop: watches the document's sources, rebuilds via `bazel build` on every save, and serves the result as a localhost HTTP page rendered with PDF.js — Overleaf-style in-browser preview with auto-refresh, search, outline sidebar, and a build-log drawer. |
 
-All seven are loaded from `@rules_latex//latex:defs.bzl`.
+All six are loaded from `@rules_latex//latex:defs.bzl`.
 
 ## Features
 
 ### Live preview
 
-Two flavours, both `bazel run`-able. Each wraps the same file
-watcher around your `latex_document` target; the difference is
-where the rendered PDF shows up.
+`latex_serve_web` is a `bazel run`-able watcher that rebuilds your
+document on every save and pushes the result to a localhost HTTP
+page rendered with PDF.js.
 
 ```bash
-bazel run //:cv_live        # local: opens cv.pdf in your system viewer
-bazel run //:cv_web         # browser: http://127.0.0.1:8765/
+bazel run //:cv_serve_web   # http://127.0.0.1:8765/
 ```
-
-**`latex_serve` (local viewer)** — watches the document's transitive
-sources, triggers a `bazel build` on every save, then opens (or
-re-opens) the resulting PDF in the OS-default viewer
-(Preview.app / Skim / Okular / SumatraPDF / …). Because the rebuild
-goes through Bazel's action cache, the edit-to-update loop is in
-the 2–3 s range once the cache is warm. Useful when you'd rather
-stay in a native PDF viewer — Skim's text-search and annotation
-flow, Preview's gesture zoom — than a browser tab.
-
-**`latex_serve_web` (browser preview)** — same watcher, but serves a
-self-hosted PDF.js page on `127.0.0.1:<port>`:
 
 - **PDF.js, vendored** — no CDN, works on disconnected networks,
   doesn't leak the document to a third-party host.
-- **SSE auto-reload** — the browser tab refreshes the moment the new
-  PDF lands. Scroll position, zoom level, and page number are
-  preserved across reloads, so a 90-page thesis doesn't snap back
-  to page 1 on every save.
+- **WebSocket push transport** — after each successful rebuild the
+  server pushes only the changed PDF chunks (content-addressed by
+  SHA-256) to the connected tab in a single duplex burst. SSE
+  remains at `/events` as a transparent fallback for clients that
+  can't upgrade. Scroll position, zoom level, and current page
+  are preserved across reloads, so a 90-page thesis doesn't snap
+  back to page 1 on every save.
+- **Page navigation, zoom, fit modes, fullscreen, download** — a
+  proper PDF-viewer chrome with keyboard shortcuts (PageUp/Down,
+  Home/End, +/-/0, w/p, f, g, t, Ctrl+F, …).
+- **In-document search** — `Ctrl+F` opens a find bar that
+  highlights matches across the document with next/prev nav.
+- **Selectable text** — PDF.js text-layer overlay means you can
+  select and copy text from the preview natively.
+- **Outline sidebar** — when the document has hyperref bookmarks
+  (any `\section` / `\subsection` / `\chapter`), a collapsible
+  left sidebar shows them as clickable nav, with the current
+  section highlighted as you scroll.
+- **Build-log drawer** — a collapsible bottom panel exposes the
+  latest `bazel build` stdout+stderr. Auto-expands on the first
+  failed build of a session so the error is one click (or zero)
+  away from where you saw the failure.
+- **Status pill** — `✓ 1.42 s · build #5 · 12 s ago` with a live-
+  ticking "Xs ago" suffix; footer shows current git branch + dirty
+  marker so you know which state you're previewing.
+- **Light / dark / auto theme** — full palette driven by CSS
+  variables; `auto` follows `prefers-color-scheme`. `t` cycles.
 - **Click-to-source via SyncTeX** — when the document declares
   `synctex = True`, clicking a glyph in the preview jumps your
   editor to the matching `.tex` line via the generated
-  `.synctex.gz` index.
+  `.synctex.gz` index. The reverse direction (`POST /sync/forward`)
+  lets editor plugins jump the preview to a source location with a
+  brief highlight flash.
 - **VS Code-family terminal detection** — when invoked from
   VS Code / Cursor / Windsurf / VSCodium, the preview opens in
   the editor's built-in Simple Browser by default instead of a
@@ -165,6 +176,14 @@ self-hosted PDF.js page on `127.0.0.1:<port>`:
 - **Configurable port and debouncer** — `port`, `poll_interval_ms`,
   `debounce_ms`, and `debounce_max_ms` are all rule attributes for
   noisy filesystems or shared dev hosts.
+
+> Earlier releases (v0.4.x and below) also shipped a `latex_serve`
+> rule that opened the document in the system PDF viewer. It was
+> removed in v0.6.0 because the two viewers most users would
+> default to on macOS — Preview and Acrobat — don't reliably
+> auto-reload when the PDF changes on disk, leaving users with a
+> stale preview and no clear hint why. See the [migration note
+> in CHANGELOG](./CHANGELOG.md).
 
 ### Bibliography (biblatex / biber)
 

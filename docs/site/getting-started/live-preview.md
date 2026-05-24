@@ -1,44 +1,29 @@
 # Live preview
 
-`rules_latex` ships two live-preview rules for the
-"edit-the-source-watch-the-PDF-update" workflow. Both watch the
-document's transitive sources via `LatexInfo` and rebuild via
-`bazel build` on every save.
+`rules_latex` ships `latex_serve_web` for the
+"edit-the-source-watch-the-PDF-update" workflow. It watches the
+document's transitive sources via `LatexInfo` and rebuilds via
+`bazel build` on every save, pushing the result to a localhost
+HTTP page rendered with PDF.js.
 
-## `latex_serve` — system PDF viewer
-
-```python
-load("@rules_latex//latex:defs.bzl", "latex_document", "latex_serve")
-
-latex_document(name = "cv", main = "cv.tex", srcs = ["cv.tex"])
-
-latex_serve(
-    name = "cv_live",
-    document = ":cv",
-)
-```
-
-```bash
-bazel run //:cv_live
-# Watching cv.tex
-# Built bazel-bin/cv.pdf in 3.2s. Opened in Preview.
-```
-
-The PDF opens once in your system viewer (Preview on macOS,
-`xdg-open` on Linux, `start` on Windows). Subsequent rebuilds rely on
-the viewer's own auto-reload behaviour:
-
-| Viewer | Auto-reload? |
-|--------|---------------|
-| macOS Preview | :material-check: |
-| Linux Evince | :material-check: |
-| Linux Okular | :material-check: |
-| Adobe Reader | :material-close: (locks the file) |
-| Chrome PDF viewer | :material-close: (manual refresh) |
+!!! info "`latex_serve` was removed in v0.6.0"
+    Earlier releases also exposed a `latex_serve` rule that
+    opened the document in the system PDF viewer (macOS
+    Preview, Linux Evince/Okular, Adobe Reader, etc.) and
+    relied on the viewer's own auto-reload-on-disk-change
+    behaviour to refresh the preview after each rebuild. That
+    contract eroded — macOS Preview's auto-reload became
+    unreliable after the Sonoma sandbox changes, Adobe never
+    watched the file on macOS — and v0.6 removed the rule
+    rather than ship a viewer-specific workaround. If you
+    prefer a native PDF viewer, point a reload-aware one (Skim,
+    Sioyek, Zathura, PDF Expert) at
+    `bazel-bin/.../<doc>.pdf` directly — `bazel build` keeps
+    that path fresh on every save.
 
 ## `latex_serve_web` — in-browser preview
 
-For an Overleaf-style experience, declare a `latex_serve_web` target:
+Declare a `latex_serve_web` target alongside your `latex_document`:
 
 ```python
 load("@rules_latex//latex:defs.bzl", "latex_document", "latex_serve_web")
@@ -175,16 +160,16 @@ what most editors and users expect for a "jump-to" action.
 
 ## Architecture
 
-Both rules synthesise a small launcher script that:
+`latex_serve_web` synthesises a small launcher script that:
 
 1. Polls the watched paths every 250 ms via `os.stat`.
 2. Shells out to `bazel build <document_label>` on change.
-3. `latex_serve` opens the PDF once; `latex_serve_web` keeps a tiny
-   HTTP server alive and pushes updates to connected browser tabs
-   over WebSocket (see below) with an SSE fallback.
+3. Keeps a tiny HTTP server alive and pushes updates to
+   connected browser tabs over WebSocket (see below) with an
+   SSE fallback.
 
-Both use the same `bazel build` invocation as a normal build, which
-means **live-mode behaviour is identical to CI** — no "works locally,
+The same `bazel build` invocation as a normal build, which means
+**live-mode behaviour is identical to CI** — no "works locally,
 fails in CI" drift. See
 [DESIGN.md §4.7](https://github.com/nicklambourne/rules_latex/blob/master/DESIGN.md#47-live-preview)
 for the rationale.
