@@ -1209,6 +1209,12 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
   }}
 
   * {{ box-sizing: border-box; }}
+  /* Explicit display values on .control-group buttons and
+     #search-bar (inline-flex / flex / etc.) outrank the
+     browser's UA hidden-attribute rule by specificity, so an
+     element with the [hidden] attribute would still render.
+     Restore that semantic globally with !important. */
+  [hidden] {{ display: none !important; }}
   body {{
     font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     margin: 0; background: var(--bg); color: var(--text);
@@ -1220,7 +1226,55 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
     display: flex; flex-direction: column;
     height: 100vh;
   }}
-  #viewer {{ flex: 1 1 0; min-height: 0; }}
+  /* The middle row holds the optional TOC sidebar + the viewer.
+     #main takes the remaining vertical space from body; sidebar
+     + viewer split it horizontally. */
+  #main {{
+    flex: 1 1 0; min-height: 0;
+    display: flex; flex-direction: row;
+  }}
+  #sidebar {{
+    width: 240px; flex: 0 0 auto;
+    overflow-y: auto;
+    background: var(--bg-elevated);
+    border-right: 1px solid var(--border);
+    padding: 8px 0;
+    font-size: 12px;
+  }}
+  #sidebar[hidden] {{ display: none; }}
+  #sidebar-header {{
+    padding: 4px 14px 8px;
+    color: var(--text-faded);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 10px;
+  }}
+  #toc {{
+    list-style: none; margin: 0; padding: 0;
+  }}
+  #toc ol {{
+    list-style: none; margin: 0; padding-left: 14px;
+  }}
+  #toc li {{ margin: 0; }}
+  #toc a {{
+    display: block;
+    padding: 3px 14px;
+    color: var(--text-muted);
+    text-decoration: none;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    border-left: 2px solid transparent;
+  }}
+  #toc a:hover {{
+    background: var(--surface-hover);
+    color: var(--text);
+  }}
+  #toc a.current {{
+    background: var(--surface);
+    color: var(--text);
+    border-left-color: var(--accent);
+  }}
+  #viewer {{ flex: 1 1 0; min-width: 0; }}
   header {{
     display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
     padding: 8px 12px; background: var(--bg-elevated);
@@ -1423,6 +1477,8 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
   </div>
 
   <div class="control-group" id="extras">
+    <button id="sidebar-toggle" title="Toggle outline sidebar (s)"
+            aria-label="Toggle outline sidebar" hidden>☰</button>
     <button id="search-toggle" title="Find in document (Ctrl/⌘+F)" aria-label="Find in document">⌕</button>
     <a id="download-pdf" href="/pdf" download="{document_name}.pdf"
        title="Download PDF" aria-label="Download PDF">⤓</a>
@@ -1446,7 +1502,16 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
           aria-label="Next match">›</button>
   <button id="search-close" title="Close (Esc)" aria-label="Close search">✕</button>
 </div>
-<div id="viewer"><div id="empty">waiting for first build…</div></div>
+<div id="main">
+  <!-- TOC sidebar — populated from pdf.getOutline() after each
+       successful render. Hidden by default; auto-shows on the
+       first render that produces an outline. -->
+  <aside id="sidebar" hidden aria-label="Document outline">
+    <div id="sidebar-header">Outline</div>
+    <ol id="toc"></ol>
+  </aside>
+  <div id="viewer"><div id="empty">waiting for first build…</div></div>
+</div>
 <footer>
   <span id="git-badge" hidden>
     <span id="git-branch"></span><span id="git-dirty" hidden title="Working tree has uncommitted changes">●</span>
@@ -1702,6 +1767,11 @@ async function renderDocument() {{
     }}
     currentDoc = pdf;
     _setTotalPages(pdf.numPages);
+    // Outline rendering is independent of the per-page render
+    // path; kick it off in the background so the canvas paint
+    // doesn't wait on getOutline / getDestination round-trips.
+    _renderOutline(pdf).catch((err) =>
+      console.warn("outline render failed:", err));
     // If we're in a fit mode, recompute scale against the new
     // document's first page before rendering — otherwise the
     // page-count change may shift the layout out from under us.
@@ -2133,6 +2203,128 @@ function jumpToPdfLocation(msg) {{
 }}
 
 // -----------------------------------------------------------------------
+// TOC sidebar
+// -----------------------------------------------------------------------
+//
+// Driven by pdf.getOutline(), which surfaces the bookmarks that
+// hyperref emits for sectioning commands (section / subsection /
+// chapter / etc.). Each entry has a title plus a `dest` reference
+// (string for named dests, array for explicit). We resolve the
+// dest to a page number via pdf.getDestination + pdf.getPageIndex
+// and feed that to jumpToPage.
+
+const sidebar = document.getElementById("sidebar");
+const tocEl = document.getElementById("toc");
+const sidebarToggleBtn = document.getElementById("sidebar-toggle");
+let _outlineEntries = [];  // flat list of {{pageNum, link}} for current-section tracking
+
+async function _renderOutline(pdf) {{
+  _outlineEntries = [];
+  tocEl.replaceChildren();
+  let outline = null;
+  try {{
+    outline = await pdf.getOutline();
+  }} catch (err) {{
+    console.warn("getOutline failed:", err);
+  }}
+  if (!outline || outline.length === 0) {{
+    sidebar.hidden = true;
+    sidebarToggleBtn.hidden = true;
+    return;
+  }}
+  sidebarToggleBtn.hidden = false;
+  // Auto-show sidebar on first render that produces an outline,
+  // unless the user has explicitly hidden it (persisted state).
+  let userPref;
+  try {{
+    userPref = localStorage.getItem("rules_latex_sidebar");
+  }} catch {{
+    userPref = null;
+  }}
+  sidebar.hidden = userPref === "hidden";
+  tocEl.appendChild(await _buildOutlineList(pdf, outline));
+  _updateCurrentOutlineEntry();
+}}
+
+async function _buildOutlineList(pdf, items) {{
+  const ol = document.createElement("ol");
+  for (const item of items) {{
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.textContent = item.title;
+    a.href = "#";
+    // Resolve destination → page number lazily on click to avoid
+    // a flurry of getDestination calls at outline render time
+    // (~one round-trip to the worker each).
+    a.addEventListener("click", async (e) => {{
+      e.preventDefault();
+      const n = await _resolveDestPage(pdf, item.dest);
+      if (n) jumpToPage(n);
+    }});
+    // Pre-resolve the page number in the background so the
+    // current-section highlight can track scroll position.
+    _resolveDestPage(pdf, item.dest).then((n) => {{
+      if (n) {{
+        a.dataset.pageNumber = String(n);
+        _outlineEntries.push({{ pageNum: n, link: a }});
+        _outlineEntries.sort((x, y) => x.pageNum - y.pageNum);
+        _updateCurrentOutlineEntry();
+      }}
+    }}).catch(() => {{}});
+    li.appendChild(a);
+    if (item.items && item.items.length) {{
+      li.appendChild(await _buildOutlineList(pdf, item.items));
+    }}
+    ol.appendChild(li);
+  }}
+  return ol;
+}}
+
+async function _resolveDestPage(pdf, dest) {{
+  if (!dest) return null;
+  try {{
+    let explicit = dest;
+    if (typeof dest === "string") {{
+      explicit = await pdf.getDestination(dest);
+    }}
+    if (!explicit || !explicit.length) return null;
+    const ref = explicit[0];
+    const idx = await pdf.getPageIndex(ref);
+    return idx + 1;
+  }} catch (err) {{
+    return null;
+  }}
+}}
+
+function _updateCurrentOutlineEntry() {{
+  // Highlight the deepest outline entry whose page <= currentPageNum.
+  if (_outlineEntries.length === 0) return;
+  let best = null;
+  for (const entry of _outlineEntries) {{
+    if (entry.pageNum <= currentPageNum) best = entry;
+    else break;  // sorted, can stop
+  }}
+  for (const e of _outlineEntries) e.link.classList.remove("current");
+  if (best) {{
+    best.link.classList.add("current");
+    // Keep the highlighted entry visible in the sidebar if the
+    // sidebar's overflowing.
+    best.link.scrollIntoView({{ block: "nearest" }});
+  }}
+}}
+
+sidebarToggleBtn.addEventListener("click", () => {{
+  sidebar.hidden = !sidebar.hidden;
+  try {{
+    localStorage.setItem(
+      "rules_latex_sidebar", sidebar.hidden ? "hidden" : "shown",
+    );
+  }} catch {{
+    /* persistence best-effort */
+  }}
+}});
+
+// -----------------------------------------------------------------------
 // In-document search
 // -----------------------------------------------------------------------
 //
@@ -2320,6 +2512,7 @@ function _attachPageObserver() {{
     if (bestPage !== currentPageNum) {{
       currentPageNum = bestPage;
       _updatePageCounter();
+      _updateCurrentOutlineEntry();
     }}
   }}, {{ root: viewer, threshold: [0.1, 0.5, 0.9] }});
   for (const wrap of viewer.querySelectorAll(".page-wrap")) {{
@@ -2499,6 +2692,10 @@ document.addEventListener("keydown", (e) => {{
       break;
     case "t":
       _cycleTheme();
+      break;
+    case "s":
+      // Toggle the outline sidebar (when one is available).
+      if (!sidebarToggleBtn.hidden) sidebarToggleBtn.click();
       break;
   }}
 }});
