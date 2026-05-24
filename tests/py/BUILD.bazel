@@ -22,6 +22,7 @@ _TEST_DATA = [
     "//tools:staging.py",
     "//tools:tectonic_compile.py",
     "//tools:tectonic_populate_cache.py",
+    "//tools:ws_server.py",
 ]
 
 sh_test(
@@ -108,6 +109,13 @@ sh_test(
     data = _TEST_DATA + ["test_populate_cache_resolve.py"],
 )
 
+sh_test(
+    name = "test_ws_server",
+    srcs = ["run_pytest.sh"],
+    args = ["tests/py/test_ws_server.py"],
+    data = _TEST_DATA + ["test_ws_server.py"],
+)
+
 test_suite(
     name = "py_tests",
     tests = [
@@ -123,5 +131,6 @@ test_suite(
         ":test_staging",
         ":test_synctex_parser",
         ":test_watcher_debouncer",
+        ":test_ws_server",
     ],
 )
