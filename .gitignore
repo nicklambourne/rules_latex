@@ -3,9 +3,10 @@ bazel-*
 .bazelrc.user
 MODULE.bazel.lock
 
-# Editors
+# Editors / agent scratch
 .idea/
 .vscode/
+.claude/
 *.swp
 .DS_Store
 

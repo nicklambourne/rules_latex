@@ -1033,13 +1033,17 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
     height: 100vh;
   }}
   header {{
-    display: flex; gap: 12px; align-items: center;
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
     padding: 8px 12px; background: #1d1d1d;
     border-bottom: 1px solid #000;
   }}
   header h1 {{
     margin: 0; font-size: 13px; font-weight: 600;
     letter-spacing: 0.02em;
+    /* Truncate long document names so they don't push the
+       controls off-screen on narrow viewports. */
+    max-width: 30vw;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }}
   #status {{
     margin-left: auto; padding: 3px 9px; border-radius: 4px;
@@ -1050,12 +1054,60 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
   #status.fail    {{ background: #4a1818; color: #ffb4b4; }}
   #status.building {{ background: #3a3a1e; color: #f0f0b4; }}
   #status.idle    {{ background: #333; color: #aaa; }}
-  #zoom-controls {{ display: flex; gap: 6px; }}
-  #zoom-controls button {{
-    background: #333; color: #e8e8e8; border: 1px solid #555;
-    padding: 3px 9px; border-radius: 4px; font: inherit; cursor: pointer;
+
+  /* Generic chrome controls — buttons + the inline anchor we
+     style as a button (download). */
+  .control-group {{
+    display: flex; gap: 2px; align-items: center;
+    background: #262626; border: 1px solid #3a3a3a; border-radius: 5px;
+    padding: 2px;
   }}
-  #zoom-controls button:hover {{ background: #444; }}
+  .control-group > button,
+  .control-group > a {{
+    background: transparent; color: #e8e8e8; border: none;
+    padding: 3px 9px; border-radius: 3px;
+    font: inherit; cursor: pointer; line-height: 1;
+    min-width: 24px; text-align: center; text-decoration: none;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-variant-numeric: tabular-nums;
+  }}
+  .control-group > button:hover,
+  .control-group > a:hover {{ background: #3a3a3a; }}
+  .control-group > button:active,
+  .control-group > a:active {{ background: #444; }}
+  .control-group > button:disabled {{
+    color: #666; cursor: default; background: transparent;
+  }}
+  /* Active fit-mode highlight */
+  .control-group > button.active {{
+    background: #2c4a40; color: #b4f0d0;
+  }}
+
+  /* Page navigation: editable number input that looks like part
+     of a fixed label. */
+  #page-counter {{
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 6px; color: #cfcfcf;
+    font-variant-numeric: tabular-nums;
+  }}
+  #page-input {{
+    background: transparent; color: inherit; border: none;
+    width: 3ch; text-align: right; padding: 0;
+    font: inherit; font-variant-numeric: tabular-nums;
+    /* Hide the spinner buttons; we drive nav via the side
+       buttons + keyboard, the input is just for typing a target. */
+    -moz-appearance: textfield;
+  }}
+  #page-input::-webkit-outer-spin-button,
+  #page-input::-webkit-inner-spin-button {{
+    -webkit-appearance: none; margin: 0;
+  }}
+  #page-input:focus {{
+    outline: 1px solid #4a8a78; outline-offset: 1px;
+    background: #1a1a1a;
+  }}
+  #page-counter .page-sep {{ color: #777; }}
+  #page-total {{ color: #cfcfcf; min-width: 1ch; }}
   #viewer {{
     overflow: auto; padding: 16px; background: #2b2b2b;
     text-align: center;
@@ -1100,11 +1152,32 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
 <body class="{synctex_body_class}">
 <header>
   <h1>{document_name}</h1>
-  <div id="zoom-controls">
-    <button id="zoom-out" title="Zoom out">−</button>
-    <button id="zoom-reset" title="Reset zoom">100%</button>
-    <button id="zoom-in" title="Zoom in">+</button>
+
+  <div class="control-group" id="page-nav" title="Page navigation">
+    <button id="page-prev" title="Previous page (Page Up)" aria-label="Previous page">‹</button>
+    <span id="page-counter">
+      <input id="page-input" type="number" min="1" value="1"
+             aria-label="Current page (press g to focus, Enter to jump)" />
+      <span class="page-sep">/</span>
+      <span id="page-total" aria-label="Total pages">?</span>
+    </span>
+    <button id="page-next" title="Next page (Page Down)" aria-label="Next page">›</button>
   </div>
+
+  <div class="control-group" id="zoom-controls" title="Zoom">
+    <button id="zoom-out" title="Zoom out (−)" aria-label="Zoom out">−</button>
+    <button id="zoom-display" title="Reset zoom (0)" aria-label="Reset zoom to default">100%</button>
+    <button id="zoom-in" title="Zoom in (+)" aria-label="Zoom in">+</button>
+    <button id="fit-width" title="Fit width (w)" aria-label="Fit page width to viewer">↔</button>
+    <button id="fit-page" title="Fit whole page (p)" aria-label="Fit whole page to viewer">▭</button>
+  </div>
+
+  <div class="control-group" id="extras">
+    <a id="download-pdf" href="/pdf" download="{document_name}.pdf"
+       title="Download PDF" aria-label="Download PDF">⤓</a>
+    <button id="fullscreen" title="Fullscreen (f)" aria-label="Toggle fullscreen">⛶</button>
+  </div>
+
   <div id="status" class="idle">connecting…</div>
 </header>
 <div id="viewer"><div id="empty">waiting for first build…</div></div>
@@ -1120,8 +1193,23 @@ const SYNCTEX_ENABLED = {synctex_enabled};
 const viewer = document.getElementById("viewer");
 const statusEl = document.getElementById("status");
 const syncResultEl = document.getElementById("sync-result");
+const pageInput = document.getElementById("page-input");
+const pageTotalEl = document.getElementById("page-total");
+const pagePrevBtn = document.getElementById("page-prev");
+const pageNextBtn = document.getElementById("page-next");
+const zoomDisplayEl = document.getElementById("zoom-display");
+const fitWidthBtn = document.getElementById("fit-width");
+const fitPageBtn = document.getElementById("fit-page");
+const fullscreenBtn = document.getElementById("fullscreen");
+const downloadLink = document.getElementById("download-pdf");
 let currentDoc = null;
+let currentPageNum = 1;
 let scale = 1.5;
+// Zoom mode: "manual" (user picked a fixed scale via +/-/0),
+// "fit-width" (track viewer.clientWidth), or "fit-page" (fit
+// both dimensions). The fit modes auto-recompute on window
+// resize; manual sticks to whatever value the user set.
+let scaleMode = "manual";
 // Map canvas DOM element -> its rendered viewport (so click handlers
 // can convert client coords back to PDF coords).
 const canvasViewports = new WeakMap();
@@ -1344,7 +1432,15 @@ async function renderDocument() {{
       pdf = await loadingTask.promise;
     }}
     currentDoc = pdf;
-    await renderAllPages(pdf);
+    _setTotalPages(pdf.numPages);
+    // If we're in a fit mode, recompute scale against the new
+    // document's first page before rendering — otherwise the
+    // page-count change may shift the layout out from under us.
+    if (scaleMode !== "manual") {{
+      await _applyFitMode();
+    }} else {{
+      await renderAllPages(pdf);
+    }}
   }} catch (err) {{
     setStatus("fail", `render error: ${{err.message || err}}`);
     console.error(err);
@@ -1377,6 +1473,10 @@ async function renderAllPages(pdf) {{
   }}
   viewer.replaceChildren(fresh);
   viewer.scrollTo(prevScroll);
+  // Re-attach IntersectionObserver to the new canvases so the
+  // page counter tracks scroll position. Throws away the old
+  // observer entries automatically.
+  _attachPageObserver();
   await refreshStatus();
 }}
 
@@ -1675,17 +1775,214 @@ function jumpToPdfLocation(msg) {{
     `(page ${{msg.page}})`;
 }}
 
-document.getElementById("zoom-in").addEventListener("click", () => {{
-  scale = Math.min(scale * 1.2, 4.0);
-  if (currentDoc) renderAllPages(currentDoc);
+// -----------------------------------------------------------------------
+// Page navigation + zoom controls
+// -----------------------------------------------------------------------
+//
+// Current-page tracking uses IntersectionObserver to find the canvas
+// whose intersection with the viewer is largest; we update the
+// header counter from that. Jump-to-page is a scrollIntoView on
+// the matching canvas (each is tagged with data-page-number).
+// Fit-to-width / fit-to-page modes recompute scale from the
+// viewer's clientWidth/Height on resize; manual mode (set by
+// +/-/0) ignores resize.
+
+let _pageObserver = null;
+
+function _attachPageObserver() {{
+  if (_pageObserver) _pageObserver.disconnect();
+  _pageObserver = new IntersectionObserver((entries) => {{
+    // Pick the canvas with the highest intersectionRatio.
+    let bestRatio = 0;
+    let bestPage = currentPageNum;
+    for (const entry of entries) {{
+      if (entry.intersectionRatio > bestRatio) {{
+        bestRatio = entry.intersectionRatio;
+        const n = parseInt(entry.target.dataset.pageNumber, 10);
+        if (!isNaN(n)) bestPage = n;
+      }}
+    }}
+    if (bestPage !== currentPageNum) {{
+      currentPageNum = bestPage;
+      _updatePageCounter();
+    }}
+  }}, {{ root: viewer, threshold: [0.1, 0.5, 0.9] }});
+  for (const canvas of viewer.querySelectorAll("canvas")) {{
+    _pageObserver.observe(canvas);
+  }}
+}}
+
+function _updatePageCounter() {{
+  // Don't overwrite the input while the user is typing in it.
+  if (document.activeElement !== pageInput) {{
+    pageInput.value = String(currentPageNum);
+  }}
+  pagePrevBtn.disabled = currentPageNum <= 1;
+  pageNextBtn.disabled =
+    currentDoc !== null && currentPageNum >= currentDoc.numPages;
+}}
+
+function _setTotalPages(n) {{
+  pageTotalEl.textContent = String(n);
+  pageInput.max = String(n);
+  _updatePageCounter();
+}}
+
+function jumpToPage(n) {{
+  if (!currentDoc) return;
+  n = Math.max(1, Math.min(currentDoc.numPages, n | 0));
+  const canvas = viewer.querySelector(`canvas[data-page-number="${{n}}"]`);
+  if (canvas) {{
+    canvas.scrollIntoView({{ behavior: "smooth", block: "start" }});
+    currentPageNum = n;
+    _updatePageCounter();
+  }}
+}}
+
+pageInput.addEventListener("keydown", (e) => {{
+  if (e.key === "Enter") {{
+    e.preventDefault();
+    const n = parseInt(pageInput.value, 10);
+    if (!isNaN(n)) jumpToPage(n);
+    pageInput.blur();
+  }} else if (e.key === "Escape") {{
+    pageInput.blur();
+  }}
 }});
-document.getElementById("zoom-out").addEventListener("click", () => {{
-  scale = Math.max(scale / 1.2, 0.4);
+pageInput.addEventListener("blur", _updatePageCounter);
+pagePrevBtn.addEventListener("click", () => jumpToPage(currentPageNum - 1));
+pageNextBtn.addEventListener("click", () => jumpToPage(currentPageNum + 1));
+
+// -- Zoom --
+
+function _updateZoomUI() {{
+  zoomDisplayEl.textContent = `${{Math.round(scale * 100)}}%`;
+  fitWidthBtn.classList.toggle("active", scaleMode === "fit-width");
+  fitPageBtn.classList.toggle("active", scaleMode === "fit-page");
+}}
+
+function _setManualScale(s) {{
+  scaleMode = "manual";
+  scale = Math.max(0.25, Math.min(4.0, s));
+  _updateZoomUI();
   if (currentDoc) renderAllPages(currentDoc);
+}}
+
+async function _applyFitMode() {{
+  if (!currentDoc) return;
+  const page = await currentDoc.getPage(currentPageNum);
+  const base = page.getViewport({{ scale: 1 }});
+  // 16 px padding on each side of #viewer, minus a bit for the
+  // scrollbar (~14 px on most platforms).
+  const padding = 32;
+  const scrollbar = 14;
+  const availW = Math.max(100, viewer.clientWidth - padding - scrollbar);
+  if (scaleMode === "fit-width") {{
+    scale = availW / base.width;
+  }} else if (scaleMode === "fit-page") {{
+    const availH = Math.max(100, viewer.clientHeight - padding);
+    scale = Math.min(availW / base.width, availH / base.height);
+  }}
+  scale = Math.max(0.25, Math.min(4.0, scale));
+  _updateZoomUI();
+  await renderAllPages(currentDoc);
+}}
+
+function _setFitMode(mode) {{
+  scaleMode = mode;
+  _applyFitMode();
+}}
+
+document.getElementById("zoom-in").addEventListener("click",
+  () => _setManualScale(scale * 1.2));
+document.getElementById("zoom-out").addEventListener("click",
+  () => _setManualScale(scale / 1.2));
+document.getElementById("zoom-display").addEventListener("click",
+  () => _setManualScale(1.5));
+fitWidthBtn.addEventListener("click", () => _setFitMode("fit-width"));
+fitPageBtn.addEventListener("click", () => _setFitMode("fit-page"));
+
+// Resize: only re-fit when in a fit mode; manual scale shouldn't
+// change underneath the user.
+let _resizeTimer = null;
+window.addEventListener("resize", () => {{
+  if (scaleMode === "manual") return;
+  // Debounce so we don't thrash renderAllPages during a drag.
+  if (_resizeTimer) clearTimeout(_resizeTimer);
+  _resizeTimer = setTimeout(() => {{ _applyFitMode(); }}, 150);
 }});
-document.getElementById("zoom-reset").addEventListener("click", () => {{
-  scale = 1.5;
-  if (currentDoc) renderAllPages(currentDoc);
+
+// -- Download --
+// The download attribute on the anchor handles most of the work;
+// we just keep the filename in sync with the document name.
+// (Already set via the template substitution; nothing dynamic
+// needed here.)
+
+// -- Fullscreen --
+fullscreenBtn.addEventListener("click", () => {{
+  if (document.fullscreenElement) {{
+    document.exitFullscreen();
+  }} else {{
+    viewer.requestFullscreen().catch(() => {{}});
+  }}
+}});
+
+// -- Keyboard shortcuts --
+//
+// Skipped entirely if the user is typing in an input/textarea.
+// All shortcuts use unmodified keys so they don't conflict with
+// browser chrome (Ctrl+F for find lands in PR 2).
+document.addEventListener("keydown", (e) => {{
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+  switch (e.key) {{
+    case "PageDown":
+      e.preventDefault();
+      jumpToPage(currentPageNum + 1);
+      break;
+    case "PageUp":
+      e.preventDefault();
+      jumpToPage(currentPageNum - 1);
+      break;
+    case "Home":
+      e.preventDefault();
+      jumpToPage(1);
+      break;
+    case "End":
+      e.preventDefault();
+      if (currentDoc) jumpToPage(currentDoc.numPages);
+      break;
+    case "+":
+    case "=":
+      _setManualScale(scale * 1.2);
+      break;
+    case "-":
+    case "_":
+      _setManualScale(scale / 1.2);
+      break;
+    case "0":
+      _setManualScale(1.5);
+      break;
+    case "w":
+      _setFitMode("fit-width");
+      break;
+    case "p":
+      _setFitMode("fit-page");
+      break;
+    case "f":
+      if (document.fullscreenElement) {{
+        document.exitFullscreen();
+      }} else {{
+        viewer.requestFullscreen().catch(() => {{}});
+      }}
+      break;
+    case "g":
+      e.preventDefault();
+      pageInput.focus();
+      pageInput.select();
+      break;
+  }}
 }});
 
 renderDocument();
