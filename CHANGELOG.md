@@ -4,6 +4,37 @@ All notable changes to `rules_latex` are documented here. This project follows
 [Semantic Versioning](https://semver.org/) once v1.0.0 is reached; before
 that, expect breaking changes in any v0.x release.
 
+## [Unreleased]
+
+### Added
+
+- **WebSocket push transport for live-preview reloads.**
+  `latex_serve_web` now exposes a `/ws` endpoint that, after each
+  successful rebuild, pushes the chunk manifest plus any PDF
+  chunks the connected client doesn't already have — in a single
+  duplex burst, no client poll needed. Compared to the previous
+  SSE-only flow (reload event → `/pdf-manifest` fetch → one
+  `/chunk/<hash>` fetch per missing chunk), this saves two
+  pull round-trips on the hot path.
+
+  Hand-rolled stdlib WebSocket server at
+  [`tools/ws_server.py`](tools/ws_server.py) (RFC 6455 — handshake,
+  framing, ping/pong, fragmentation, close). No third-party
+  dependency, no `rules_python` adoption needed; the
+  `permessage-deflate` and subprotocol corners of the spec are
+  skipped deliberately (chunks are already FlateDecode'd, no
+  need for subprotocols on a single-peer transport).
+
+  SSE remains at `/events` as a transparent fallback for clients
+  that can't upgrade (proxies that don't speak `Upgrade`,
+  deployments that fail to load `ws_server.py` on the server
+  side, etc.). The user-visible UX is unchanged on the SSE path;
+  WS just makes rebuild-to-render lower-latency. See
+  [docs/site/getting-started/live-preview.md#websocket-push-transport](docs/site/getting-started/live-preview.md#websocket-push-transport)
+  for the wire format and
+  [DESIGN.md §5.7](DESIGN.md) for the historical context. Resolves
+  [#9](https://github.com/nicklambourne/rules_latex/issues/9).
+
 ## [0.4.2] - 2026-05-24
 
 ### Fixed

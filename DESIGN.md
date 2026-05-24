@@ -755,23 +755,37 @@ These are deliberately out of scope for v0.1 but worth flagging.
    Tracked in
    [GitHub issue #8](https://github.com/nicklambourne/rules_latex/issues/8)
    — to close when the issue is updated.
-7. **WebSocket-based live-reload channel.** `latex_serve_web` currently
-   uses Server-Sent Events for the server→browser "reload" signal, which
-   is unidirectional. WebSockets would allow the browser to push state
-   back (current scroll position, current zoom, "I'm idle, debounce
-   builds", typed-ahead source edits, etc.) over the same connection
-   and would also handle binary frames more naturally if we ever wanted
-   to push PDF deltas instead of triggering a re-fetch. The cost is
-   non-trivial: Python's stdlib doesn't ship a WebSocket server, so
-   we'd either hand-roll RFC 6455 frame handling (~100–200 lines of
-   security-relevant Python) or take a third-party dep that pulls in
-   `rules_python` (see issue #2). Neither is justified by the v0.1
-   feature set: the one duplex feature we want (SyncTeX forward-sync
-   from a CLI to the browser) is solvable with a `POST /sync/forward`
-   endpoint that piggybacks on the existing SSE channel for the
-   resulting jump event. Revisit if a future feature genuinely needs
-   duplex binary comms. Tracked in
-   [GitHub issue #9](https://github.com/nicklambourne/rules_latex/issues/9).
+7. **WebSocket push transport for live-reload. SHIPPED.**
+   Originally deferred (the section below is the original
+   rationale, preserved for context). What changed: even with
+   PDF chunking the SSE flow still cost two pull round-trips per
+   rebuild — a `/pdf-manifest` fetch followed by one
+   `/chunk/<hash>` per missing chunk. WebSocket lets the server
+   push the manifest plus the missing chunk bytes in a single
+   duplex burst, saving both round-trips on the hot path. We
+   hand-rolled the RFC 6455 slice we needed in
+   [`tools/ws_server.py`](tools/ws_server.py) (~430 LOC incl.
+   docstrings, stdlib-only — see issue #2) to avoid the
+   third-party-dep cost; the implementation skips
+   `permessage-deflate` (chunks are already FlateDecode'd) and
+   subprotocols. SSE remains at `/events` as a transparent
+   fallback for clients that can't upgrade (proxies that don't
+   speak `Upgrade`, deployments that fail to load the WS module,
+   etc.). User-facing docs:
+   [docs/site/getting-started/live-preview.md#websocket-push-transport](docs/site/getting-started/live-preview.md#websocket-push-transport).
+   Tracked in
+   [GitHub issue #9](https://github.com/nicklambourne/rules_latex/issues/9)
+   — to close when the issue is updated.
+
+   *Original (now-superseded) deferral rationale, kept for the
+   audit trail:* `latex_serve_web` originally used Server-Sent
+   Events only. The cost of WebSockets was non-trivial (~100-200
+   LOC of security-relevant Python for RFC 6455 framing, or a
+   third-party dep + `rules_python`) and the only duplex feature
+   on the early roadmap (SyncTeX forward-sync) was solvable with
+   a `POST /sync/forward` endpoint over the existing SSE channel.
+   The threshold for moving was "we'd actually save round-trips
+   on the hot path." Server-pushed PDF deltas hit that bar.
 8. **Modern biblatex / fresh TeX Live bundle.** **Partially
    resolved.** §4.10 originally listed five graded options; we
    shipped a sixth (a toolchain-side overlay via `-Z search-path`)
