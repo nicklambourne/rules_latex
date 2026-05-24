@@ -74,6 +74,13 @@ PDFJS_WORKER_RUNFILE = "{{PDFJS_WORKER_RUNFILE}}"
 # per second per connected tab. 2s feels live without burning CPU.
 GIT_INFO_TTL_S = 2.0
 
+# Max bytes of bazel stdout+stderr retained on the server for
+# the build-log drawer. Trimmed from the head (bazel errors of
+# interest live near the end of the output). 64 KiB covers a
+# few hundred lines, more than enough to debug typical compile
+# failures without holding pathological logs forever.
+LOG_MAX_BYTES = 64 * 1024
+
 # Path (within runfiles) to the pure-Python PDF chunker. Loaded
 # lazily on first successful build to compute the content-addressed
 # manifest for incremental PDF transfer. See tools/pdf_chunks.py
@@ -391,6 +398,13 @@ class BuildState:
         # ticker so cheap-but-not-free matters.
         self._git_info: tuple[str | None, bool, str | None] | None = None
         self._git_info_at: float = 0.0
+        # Latest build's combined stdout+stderr, truncated to
+        # LOG_MAX_BYTES from the tail (the bazel error of interest
+        # is almost always near the end). ``_log_id`` increments
+        # per build so the WS client can dedupe pushes vs. its
+        # last fetch.
+        self._log_text: str = ""
+        self._log_id: int = 0
         # WebSocket connections subscribed to push updates. Values
         # are the set of chunk hashes the client claims to already
         # have cached (sent via the "hello" message right after
@@ -494,6 +508,40 @@ class BuildState:
             return self._pdf_manifest
 
     # -------------------------------------------------------------
+    # Build log (drawer transport)
+    # -------------------------------------------------------------
+
+    def set_log(self, text: str) -> int:
+        """Replace the retained build output and return the new id.
+
+        Truncates from the head (keeping the tail, where bazel
+        errors usually are) to stay under ``LOG_MAX_BYTES``. Callers
+        broadcast the returned id to clients so they know to refetch
+        ``/log`` without polling.
+        """
+        if text is None:
+            text = ""
+        # Encode-trim-decode to bound bytes regardless of multi-byte
+        # characters in error messages (e.g. en dashes from
+        # latexmk).
+        encoded = text.encode("utf-8", errors="replace")
+        if len(encoded) > LOG_MAX_BYTES:
+            encoded = encoded[-LOG_MAX_BYTES:]
+            # Drop the partial leading character if we sliced inside
+            # a multi-byte sequence.
+            encoded = b"... (truncated)\n" + encoded.lstrip(
+                bytes(range(0x80, 0xC0)),
+            )
+        with self._lock:
+            self._log_text = encoded.decode("utf-8", errors="replace")
+            self._log_id += 1
+            return self._log_id
+
+    def get_log(self) -> tuple[int, str]:
+        with self._lock:
+            return (self._log_id, self._log_text)
+
+    # -------------------------------------------------------------
     # WebSocket push transport
     # -------------------------------------------------------------
     #
@@ -578,6 +626,28 @@ class BuildState:
                 # handler thread will tear it down. Don't drop
                 # here to avoid mutating the registry from the
                 # watcher thread for transient socket errors.
+                pass
+
+    def broadcast_log_update(self, log_id: int, success: bool) -> None:
+        """Notify every WS client that the build log has new content.
+
+        The client refetches /log on receipt (rather than us pushing
+        the text inline) so the small "did the build succeed" hot
+        path doesn't carry a multi-KB payload on every save.
+        """
+        with self._lock:
+            snapshot = [entry[0] for entry in self._ws_conns.values()]
+        if not snapshot:
+            return
+        payload = json.dumps({
+            "type": "log-update",
+            "logId": log_id,
+            "success": success,
+        })
+        for conn in snapshot:
+            try:
+                conn.send_text(payload)
+            except Exception:
                 pass
 
     def _send_to_ws(
@@ -757,10 +827,16 @@ def snapshot_mtimes(paths: list[Path]) -> dict[Path, float]:
 def run_bazel_build(
     workspace: Path,
     cache_ctx: "ServeCacheContext | None" = None,
-) -> tuple[bool, float, str]:
+) -> tuple[bool, float, str, str]:
     """Run `bazel build <DOCUMENT_LABEL>` from the workspace root.
 
-    Returns (success, elapsed_seconds, summary_message).
+    Returns (success, elapsed_seconds, summary_message, combined_output).
+
+    ``combined_output`` is the bazel stdout + stderr (concatenated,
+    stderr last so the "BUILD FAILED" message lands at the bottom).
+    Captured fresh on every call, including the re-prime retry path;
+    callers can hand it to ``BuildState.set_log`` so the live-preview
+    UI's build-log drawer can display it.
 
     When ``cache_ctx`` is provided (i.e. the document takes the
     implicit-pipeline path and ``latex_serve_web`` has primed a
@@ -813,10 +889,13 @@ def run_bazel_build(
             False,
             time.monotonic() - start,
             "ERROR: bazel not found on PATH",
+            "bazel binary not found on PATH; install Bazel or set the\n"
+            "PATH so this serve target can find it.\n",
         )
     elapsed = time.monotonic() - start
+    combined = _combine_output(result.stdout, result.stderr)
     if result.returncode == 0:
-        return (True, elapsed, f"built in {elapsed:.2f}s")
+        return (True, elapsed, f"built in {elapsed:.2f}s", combined)
     # Auto-recovery: if the failure looks like a missing cached
     # resource and we have a cache to re-prime, do so and retry the
     # build exactly once.
@@ -836,7 +915,10 @@ def run_bazel_build(
             sys.stderr.write(f"latex_serve_web: re-prime failed: {e}\n")
             sys.stderr.write(result.stderr)
             sys.stderr.flush()
-            return (False, elapsed, f"BUILD FAILED ({elapsed:.2f}s)")
+            return (
+                False, elapsed, f"BUILD FAILED ({elapsed:.2f}s)",
+                combined + f"\nlatex_serve_web: re-prime failed: {e}\n",
+            )
         # Retry the build with the freshly-primed cache.
         cmd_retry = list(cmd)
         # Update the nonce because run_prime bumped the snapshot's
@@ -857,12 +939,21 @@ def run_bazel_build(
         )
         retry_elapsed = time.monotonic() - retry_start
         total_elapsed = time.monotonic() - start
+        retry_combined = _combine_output(result.stdout, result.stderr)
+        # Stitch both runs' output together so the drawer shows what
+        # tripped the re-prime as well as what succeeded after.
+        all_combined = (
+            combined
+            + "\nlatex_serve_web: re-primed cache; retrying build...\n"
+            + retry_combined
+        )
         if result.returncode == 0:
             return (
                 True,
                 total_elapsed,
                 f"built in {total_elapsed:.2f}s (after re-prime; "
                 f"retry {retry_elapsed:.2f}s)",
+                all_combined,
             )
         sys.stderr.write(result.stderr)
         sys.stderr.flush()
@@ -870,12 +961,26 @@ def run_bazel_build(
             False,
             total_elapsed,
             f"BUILD FAILED after re-prime ({total_elapsed:.2f}s)",
+            all_combined,
         )
     # Surface stderr to the operator's console; the browser only sees
-    # the summary string.
+    # the summary string + the captured log via /log.
     sys.stderr.write(result.stderr)
     sys.stderr.flush()
-    return (False, elapsed, f"BUILD FAILED ({elapsed:.2f}s)")
+    return (False, elapsed, f"BUILD FAILED ({elapsed:.2f}s)", combined)
+
+
+def _combine_output(stdout: str, stderr: str) -> str:
+    """Concatenate stdout + stderr into a single transcript for
+    the build-log drawer. Stderr last so the BUILD FAILED line lands
+    at the bottom where the user looks first.
+    """
+    parts = []
+    if stdout:
+        parts.append(stdout.rstrip("\n"))
+    if stderr:
+        parts.append(stderr.rstrip("\n"))
+    return ("\n\n".join(parts) + "\n") if parts else ""
 
 
 @dataclass
@@ -1002,9 +1107,11 @@ def watcher_loop(
 
     # Initial build so the first browser page-load has something to
     # display.
-    success, elapsed, msg = run_bazel_build(workspace, cache_ctx)
+    success, elapsed, msg, output = run_bazel_build(workspace, cache_ctx)
     print(f"latex_serve_web: initial build: {msg}", flush=True)
     state.record_build(success, elapsed, msg)
+    log_id = state.set_log(output)
+    state.broadcast_log_update(log_id, success)
     if success:
         _compute_manifest_post_build(state, workspace, pdf_chunks_ctx)
 
@@ -1071,9 +1178,11 @@ def watcher_loop(
                 flush=True,
             )
 
-        success, elapsed, msg = run_bazel_build(workspace, cache_ctx)
+        success, elapsed, msg, output = run_bazel_build(workspace, cache_ctx)
         print(f"  {msg}", flush=True)
         state.record_build(success, elapsed, msg)
+        log_id = state.set_log(output)
+        state.broadcast_log_update(log_id, success)
         if success:
             _compute_manifest_post_build(state, workspace, pdf_chunks_ctx)
         else:
@@ -1451,6 +1560,83 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
   }}
   #sync-result a {{ color: var(--sync-result); text-decoration: underline; }}
+
+  /* Build-log drawer. Lives between #main and footer in the body's
+     flex column. Collapsed state shows just the header; expanded
+     reveals a fixed-height pre region underneath. Header is
+     keyboard-focusable for accessibility. */
+  #log-drawer {{
+    background: var(--bg-elevated);
+    border-top: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    flex: 0 0 auto;
+    overflow: hidden;
+  }}
+  #log-drawer.collapsed #log-body {{ display: none; }}
+  #log-drawer:not(.collapsed) #log-body {{ display: block; }}
+  #log-drawer[data-build-success="false"] #log-header {{
+    color: var(--status-fail-text);
+  }}
+  #log-drawer[data-build-success="false"] #log-summary::before {{
+    content: "✗ ";
+    color: var(--status-fail-text);
+  }}
+  #log-drawer[data-build-success="true"] #log-summary::before {{
+    content: "";
+  }}
+  #log-header {{
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 12px;
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+    font-size: 11px;
+    border-bottom: 1px solid transparent;
+  }}
+  #log-drawer:not(.collapsed) #log-header {{
+    border-bottom: 1px solid var(--border);
+  }}
+  #log-header:hover {{ background: var(--surface-hover); }}
+  #log-header:focus {{
+    outline: 1px solid var(--accent); outline-offset: -1px;
+  }}
+  #log-caret {{
+    font-size: 9px;
+    transition: transform 0.15s ease;
+    color: var(--text-faded);
+  }}
+  #log-drawer:not(.collapsed) #log-caret {{
+    transform: rotate(90deg);
+  }}
+  #log-title {{ font-weight: 600; }}
+  #log-summary {{
+    color: var(--text-faded);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 10px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 50vw;
+  }}
+  #log-copy {{
+    background: transparent; color: var(--text-faded); border: none;
+    padding: 0 6px; border-radius: 3px;
+    font: inherit; cursor: pointer;
+  }}
+  #log-copy:hover {{ background: var(--surface-hover); color: var(--text); }}
+  #log-body {{
+    margin: 0; padding: 8px 12px;
+    background: var(--bg-overlay);
+    color: var(--text);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    max-height: 240px;
+    overflow: auto;
+    white-space: pre-wrap;
+    /* Slight word-break so very long unsplittable runs (paths
+       in bazel output, hash digests) don't force a horizontal
+       scrollbar across the whole drawer. */
+    overflow-wrap: anywhere;
+  }}
 </style>
 </head>
 <body class="{synctex_body_class}">
@@ -1479,6 +1665,8 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
   <div class="control-group" id="extras">
     <button id="sidebar-toggle" title="Toggle outline sidebar (s)"
             aria-label="Toggle outline sidebar" hidden>☰</button>
+    <button id="log-toggle" title="Toggle build log (l)"
+            aria-label="Toggle build log">≣</button>
     <button id="search-toggle" title="Find in document (Ctrl/⌘+F)" aria-label="Find in document">⌕</button>
     <a id="download-pdf" href="/pdf" download="{document_name}.pdf"
        title="Download PDF" aria-label="Download PDF">⤓</a>
@@ -1511,6 +1699,21 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
     <ol id="toc"></ol>
   </aside>
   <div id="viewer"><div id="empty">waiting for first build…</div></div>
+</div>
+
+<!-- Build log drawer: collapsed by default, auto-expands on a
+     failed build, persists open/closed across reloads. Click the
+     header to toggle, or use `l`. -->
+<div id="log-drawer" class="collapsed" data-build-success="true">
+  <div id="log-header" role="button" tabindex="0"
+       aria-expanded="false" title="Toggle build log (l)">
+    <span id="log-caret">▸</span>
+    <span id="log-title">Build log</span>
+    <span id="log-summary" aria-live="polite"></span>
+    <span style="flex:1"></span>
+    <button id="log-copy" title="Copy log to clipboard">⎘</button>
+  </div>
+  <pre id="log-body" aria-label="Build output"></pre>
 </div>
 <footer>
   <span id="git-badge" hidden>
@@ -2023,6 +2226,8 @@ function _handleWsMessage(ev) {{
       // Keep the existing rendered PDF in place — it's still
       // the last good version.
       refreshStatus();
+    }} else if (msg.type === "log-update") {{
+      _handleLogUpdate(msg);
     }} else if (msg.type === "jump") {{
       jumpToPdfLocation(msg);
     }}
@@ -2122,8 +2327,17 @@ function _startSSE() {{
   evtSrc.onmessage = (e) => {{
     if (e.data === "reload") {{
       renderDocument();
+      // SSE doesn't carry log-update events; pull on each reload
+      // so the drawer still tracks build output for fallback
+      // clients (assume success — the drawer's auto-expand only
+      // fires for failed builds, which SSE delivers as the
+      // "build-failed" branch below).
+      _handleLogUpdate({{ success: true }});
     }} else if (e.data === "build-failed" || e.data === "hello") {{
       refreshStatus();
+      if (e.data === "build-failed") {{
+        _handleLogUpdate({{ success: false }});
+      }}
     }} else if (e.data.startsWith("{{")) {{
       let msg;
       try {{
@@ -2200,6 +2414,136 @@ function jumpToPdfLocation(msg) {{
     `← <strong>${{escapeHtml(msg.file)}}</strong>:` +
     `<strong>${{msg.line}}</strong> ` +
     `(page ${{msg.page}})`;
+}}
+
+// -----------------------------------------------------------------------
+// Build-log drawer
+// -----------------------------------------------------------------------
+//
+// /log returns the latest build's combined stdout+stderr keyed by
+// an integer id that the server bumps per build. The WS push
+// transport notifies us with {{type: "log-update", logId, success}}
+// so we can refetch without polling. Auto-expands on the first
+// failed build of a session; honours the user's manual collapse
+// after that (persisted to localStorage).
+
+const logDrawer = document.getElementById("log-drawer");
+const logHeader = document.getElementById("log-header");
+const logBody = document.getElementById("log-body");
+const logSummary = document.getElementById("log-summary");
+const logToggleBtn = document.getElementById("log-toggle");
+const logCopyBtn = document.getElementById("log-copy");
+
+let _logFetchedId = -1;
+// User-driven open state: null = "follow auto rules", true/false =
+// pinned by the user. Persisted to localStorage.
+let _logUserOpen = null;
+try {{
+  const v = localStorage.getItem("rules_latex_log_open");
+  if (v === "true") _logUserOpen = true;
+  else if (v === "false") _logUserOpen = false;
+}} catch {{
+  /* localStorage may be blocked; ignore */
+}}
+
+function _setLogOpen(open) {{
+  logDrawer.classList.toggle("collapsed", !open);
+  logHeader.setAttribute("aria-expanded", open ? "true" : "false");
+  if (open) {{
+    // Tail-scroll: most users want the latest output visible.
+    logBody.scrollTop = logBody.scrollHeight;
+  }}
+}}
+
+function _persistLogOpen(open) {{
+  _logUserOpen = open;
+  try {{
+    localStorage.setItem("rules_latex_log_open", open ? "true" : "false");
+  }} catch {{
+    /* best-effort */
+  }}
+}}
+
+async function _fetchLog() {{
+  try {{
+    const r = await fetch("/log");
+    if (!r.ok) return;
+    const data = await r.json();
+    if (data.id === _logFetchedId) return;
+    _logFetchedId = data.id;
+    logBody.textContent = data.text || "";
+    _renderLogSummary(data.text);
+    // Auto-scroll to tail when refreshed and visible.
+    if (!logDrawer.classList.contains("collapsed")) {{
+      logBody.scrollTop = logBody.scrollHeight;
+    }}
+  }} catch {{
+    /* /log failures aren't fatal */
+  }}
+}}
+
+function _renderLogSummary(text) {{
+  // Show the last non-empty line in the summary — usually that's
+  // either "Build completed successfully" or the actual error
+  // line, which is exactly what the user wants to see at a glance
+  // without expanding the drawer.
+  if (!text) {{
+    logSummary.textContent = "(no output)";
+    return;
+  }}
+  const lines = text.split(/\\r?\\n/).filter(s => s.trim() !== "");
+  logSummary.textContent = lines.length ? lines[lines.length - 1] : "";
+}}
+
+function _handleLogUpdate(msg) {{
+  logDrawer.setAttribute(
+    "data-build-success", msg.success === false ? "false" : "true",
+  );
+  _fetchLog();
+  // Auto-expand on failure if the user hasn't explicitly closed
+  // the drawer this session. If they have an explicit user
+  // preference, honour it (so a user who closed it stays closed,
+  // even on subsequent failures — they can re-open manually).
+  if (msg.success === false && _logUserOpen !== false) {{
+    _setLogOpen(true);
+  }} else if (_logUserOpen !== null) {{
+    _setLogOpen(_logUserOpen);
+  }}
+}}
+
+function _toggleLog() {{
+  const open = logDrawer.classList.contains("collapsed");
+  _setLogOpen(open);
+  _persistLogOpen(open);
+}}
+
+logHeader.addEventListener("click", _toggleLog);
+logHeader.addEventListener("keydown", (e) => {{
+  if (e.key === "Enter" || e.key === " ") {{
+    e.preventDefault();
+    _toggleLog();
+  }}
+}});
+logToggleBtn.addEventListener("click", _toggleLog);
+logCopyBtn.addEventListener("click", async (e) => {{
+  // Stop the click from bubbling to logHeader which would toggle
+  // open/closed when the user only meant to copy.
+  e.stopPropagation();
+  try {{
+    await navigator.clipboard.writeText(logBody.textContent);
+    logCopyBtn.textContent = "✓";
+    setTimeout(() => {{ logCopyBtn.textContent = "⎘"; }}, 1200);
+  }} catch {{
+    logCopyBtn.textContent = "✗";
+    setTimeout(() => {{ logCopyBtn.textContent = "⎘"; }}, 1200);
+  }}
+}});
+
+// Apply the persisted user preference on first paint. If unset,
+// stay collapsed — the drawer will auto-expand on the first
+// failed build via _handleLogUpdate.
+if (_logUserOpen !== null) {{
+  _setLogOpen(_logUserOpen);
 }}
 
 // -----------------------------------------------------------------------
@@ -2697,6 +3041,9 @@ document.addEventListener("keydown", (e) => {{
       // Toggle the outline sidebar (when one is available).
       if (!sidebarToggleBtn.hidden) sidebarToggleBtn.click();
       break;
+    case "l":
+      _toggleLog();
+      break;
   }}
 }});
 
@@ -2745,6 +3092,7 @@ _applyTheme();
 
 renderDocument();
 refreshStatus();
+_fetchLog();  // populate the drawer with whatever the server has on first paint
 // Live-update transport: try WS first; falls back to SSE on
 // connection failure. Existing SSE listeners (build-failed,
 // reload, jump events) get the same payloads via the WS path
@@ -2922,6 +3270,11 @@ class Handler(BaseHTTPRequestHandler):
             body = json.dumps(
                 self.state.snapshot(workspace=self.workspace),
             ).encode("utf-8")
+            self._send(HTTPStatus.OK, body, "application/json")
+            return
+        if path == "/log":
+            log_id, text = self.state.get_log()
+            body = json.dumps({"id": log_id, "text": text}).encode("utf-8")
             self._send(HTTPStatus.OK, body, "application/json")
             return
         if path == "/events":
