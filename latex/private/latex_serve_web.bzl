@@ -94,6 +94,7 @@ def _latex_serve_web_impl(ctx):
     pdfjs_lib = ctx.file._pdfjs_lib
     pdfjs_worker = ctx.file._pdfjs_worker
     pdf_chunks_lib = ctx.file._pdf_chunks_lib
+    ws_server_lib = ctx.file._ws_server_lib
 
     # Decide whether to plumb in the serve-time cache override.
     # Only the implicit-pipeline path needs it; documents with
@@ -202,6 +203,7 @@ def _latex_serve_web_impl(ctx):
             "{{PDFJS_WORKER_RUNFILE}}": pdfjs_worker.short_path,
             "{{OPEN_ON_START}}": "1" if ctx.attr.open_on_start else "0",
             "{{PDF_CHUNKS_RUNFILE}}": pdf_chunks_lib.short_path,
+            "{{WS_SERVER_RUNFILE}}": ws_server_lib.short_path,
             "{{ENABLE_SERVE_CACHE}}": "1" if enable_serve_cache else "",
             "{{SERVE_CACHE_RUNFILE}}": prime_serve_cache_path,
             "{{PRIME_MAIN_RUNFILE}}": prime_main_path,
@@ -233,7 +235,7 @@ exec "$PYTHON" "$RUNFILES/{server}" "$BUILD_WORKSPACE_DIRECTORY" "$RUNFILES" "$@
 
     runfiles = ctx.runfiles(
         files = (
-            [server_script, pdfjs_lib, pdfjs_worker, pdf_chunks_lib] +
+            [server_script, pdfjs_lib, pdfjs_worker, pdf_chunks_lib, ws_server_lib] +
             serve_cache_runfiles
         ),
     )
@@ -325,6 +327,15 @@ latex_serve_web = rule(
                   "Loaded dynamically from runfiles by the serve " +
                   "script; see tools/pdf_chunks.py.",
             default = "//tools:pdf_chunks.py",
+            allow_single_file = True,
+        ),
+        "_ws_server_lib": attr.label(
+            doc = "Stdlib WebSocket server (RFC 6455) used by the " +
+                  "/ws endpoint to push the manifest + missing PDF " +
+                  "chunks proactively after each rebuild. Loaded " +
+                  "dynamically from runfiles by the serve script; " +
+                  "see tools/ws_server.py.",
+            default = "//tools:ws_server.py",
             allow_single_file = True,
         ),
     },
