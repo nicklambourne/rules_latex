@@ -969,6 +969,48 @@ These are deliberately out of scope for v0.1 but worth flagging.
     caveat — the biblatex 3.21 / biber 2.21 overlay reaches
     tectonic via `-Z search-path` as designed.
 
+13. **Live-preview page rendering performance.** `latex_serve_web`'s
+    `renderAllPages()` synchronously renders *every* PDF page into
+    its own canvas on each reload, regardless of whether the page
+    is in the viewport. On a short doc (CV, hello example) this is
+    invisible. On a 50-page thesis the user perceives a blank
+    moment + a perceptible per-page render cost on every save.
+
+    **Why it's bearable today:** the WS chunk-push transport (item
+    #7 above) keeps the bytes-on-the-wire cost minimal — only
+    changed PDF chunks transit — so the bottleneck is canvas
+    paint, not network. And the page-wraps are dimensioned from
+    the viewport before paint, so scroll-position survives the
+    rebuild even with the blank moment in between.
+
+    **What would help, in rough order of value vs. cost:**
+
+    - **IntersectionObserver-gated canvas paint.** Render only
+      the page-wraps currently in (or near) the viewport.
+      Off-screen wraps get the dimensioned placeholder + a render
+      callback that fires when they scroll in. Same approach
+      mainstream PDF viewers use. Probably 80% of the win.
+
+    - **Off-screen swap.** Build the new canvases into a detached
+      DocumentFragment, then swap them in atomically once they're
+      all ready, so the user never sees the blank intermediate
+      state. Cheap, mostly cosmetic.
+
+    - **Reuse canvases when only chunks changed.** If the new
+      manifest's `pdfSize` and per-page geometry match the old,
+      re-paint into existing canvases rather than tearing them
+      down and rebuilding the DOM. Subtler — needs PDF.js to
+      cancel the previous page render before issuing the new one.
+
+    - **Web worker rendering.** PDF.js v5 supports OffscreenCanvas
+      rendering off the main thread. Mostly avoids main-thread
+      jank during the paint storm, doesn't reduce total work.
+
+    None of these change the network or correctness story. They're
+    pure latency/jank improvements that get more valuable as
+    documents get longer. Tracked in
+    [GitHub issue #50](https://github.com/nicklambourne/rules_latex/issues/50).
+
 ## 6. Versioning
 
 `rules_latex` will follow semver post-1.0. Pre-1.0 releases (v0.x) can break

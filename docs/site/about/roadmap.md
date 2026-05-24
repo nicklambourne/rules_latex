@@ -19,6 +19,7 @@ This page is a friendlier summary of what's planned.
 |---------|--------|-------|
 | Modern biblatex (3.18+) via own TeX Live bundle | Watching upstream | [#1][issue-1] |
 | Tectonic v2 workspace mode (`Tectonic.toml`) | Considered | — |
+| Live-preview render perf for long docs (viewport-gated canvas paint, off-screen swap, canvas reuse) | Punted | [#50][issue-50] |
 
 ## Long-term
 
@@ -29,6 +30,7 @@ This page is a friendlier summary of what's planned.
 | Reproducibility of PDF output across platforms (font handling) | Speculative |
 
 [issue-1]: https://github.com/nicklambourne/rules_latex/issues/1
+[issue-50]: https://github.com/nicklambourne/rules_latex/issues/50
 
 ## Performance follow-ups
 
