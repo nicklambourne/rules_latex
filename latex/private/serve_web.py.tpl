@@ -1116,12 +1116,91 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
        scrollable content area rather than the page. */
     position: relative;
   }}
-  #viewer canvas {{
-    display: block; margin: 0 auto 12px; background: white;
+  /* One page = a positioned wrap containing the canvas + the
+     transparent text-layer overlay. Wrap dimensions match the
+     rendered viewport in CSS pixels so the text layer's absolute
+     children sit exactly on top of glyphs. */
+  .page-wrap {{
+    position: relative;
+    display: block;
+    margin: 0 auto 12px;
+    background: white;
     box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  }}
+  .page-wrap canvas {{
+    display: block;
     cursor: var(--canvas-cursor, default);
   }}
-  body.synctex #viewer canvas {{ --canvas-cursor: crosshair; }}
+  body.synctex .page-wrap canvas {{ --canvas-cursor: crosshair; }}
+
+  /* PDF.js text layer: invisible text overlay for selection +
+     find. Each child span is absolutely positioned and sized to
+     match the corresponding glyph in the canvas. Colour
+     transparent so visually nothing changes; selection colour
+     comes from ::selection. */
+  .text-layer {{
+    position: absolute; inset: 0;
+    overflow: hidden;
+    opacity: 1;
+    line-height: 1.0;
+    text-align: left;
+    user-select: text;
+    /* PDF.js applies --scale-factor on the container in its
+       TextLayer.render() path; CSS uses it to scale spans. */
+    --scale-factor: 1;
+  }}
+  .text-layer > span,
+  .text-layer > br {{
+    color: transparent;
+    position: absolute;
+    white-space: pre;
+    cursor: text;
+    transform-origin: 0% 0%;
+  }}
+  .text-layer ::selection {{
+    background: rgba(64, 160, 220, 0.35);
+  }}
+  /* Find-match highlight: visible because the text itself is
+     transparent — the colour shows through. The "current" match
+     gets a stronger background and an outline. */
+  .text-layer .find-match {{
+    background: rgba(255, 230, 100, 0.45);
+    border-radius: 1px;
+  }}
+  .text-layer .find-match.find-match-current {{
+    background: rgba(255, 165, 60, 0.7);
+    outline: 1px solid rgba(255, 200, 100, 0.95);
+  }}
+
+  /* Find bar */
+  #search-bar {{
+    display: flex; gap: 6px; align-items: center;
+    padding: 6px 10px; background: #1a1a1a;
+    border-bottom: 1px solid #000;
+    font-variant-numeric: tabular-nums;
+  }}
+  #search-bar[hidden] {{ display: none; }}
+  #search-input {{
+    flex: 0 1 280px;
+    background: #2a2a2a; color: #e8e8e8;
+    border: 1px solid #3a3a3a; border-radius: 4px;
+    padding: 4px 8px; font: inherit;
+  }}
+  #search-input:focus {{
+    outline: 1px solid #4a8a78; outline-offset: 0;
+  }}
+  #search-input.no-results {{
+    background: #3a1a1a;
+  }}
+  #search-count {{ color: #888; min-width: 5ch; }}
+  #search-bar button {{
+    background: #262626; color: #e8e8e8;
+    border: 1px solid #3a3a3a; border-radius: 4px;
+    padding: 3px 9px; font: inherit; cursor: pointer;
+    min-width: 28px;
+  }}
+  #search-bar button:hover {{ background: #3a3a3a; }}
+  #search-bar button:disabled {{ color: #555; cursor: default; }}
   /* Forward-sync flash overlay: a transient yellow box at the
      synctex location, fades out over ~1.5s. Position is set in
      JS based on the PDF.js viewport math. */
@@ -1173,6 +1252,7 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
   </div>
 
   <div class="control-group" id="extras">
+    <button id="search-toggle" title="Find in document (Ctrl/⌘+F)" aria-label="Find in document">⌕</button>
     <a id="download-pdf" href="/pdf" download="{document_name}.pdf"
        title="Download PDF" aria-label="Download PDF">⤓</a>
     <button id="fullscreen" title="Fullscreen (f)" aria-label="Toggle fullscreen">⛶</button>
@@ -1180,6 +1260,19 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
 
   <div id="status" class="idle">connecting…</div>
 </header>
+
+<!-- Find bar: slides down from above the viewer when active. -->
+<div id="search-bar" hidden>
+  <input id="search-input" type="search" placeholder="Find in document…"
+         aria-label="Search query"
+         autocomplete="off" spellcheck="false" />
+  <span id="search-count" aria-live="polite">0 / 0</span>
+  <button id="search-prev" title="Previous match (Shift+Enter)"
+          aria-label="Previous match">‹</button>
+  <button id="search-next" title="Next match (Enter)"
+          aria-label="Next match">›</button>
+  <button id="search-close" title="Close (Esc)" aria-label="Close search">✕</button>
+</div>
 <div id="viewer"><div id="empty">waiting for first build…</div></div>
 <footer>
   <span id="sync-result">{synctex_hint}</span>
@@ -1454,6 +1547,17 @@ async function renderAllPages(pdf) {{
   for (let i = 1; i <= pdf.numPages; i++) {{
     const page = await pdf.getPage(i);
     const viewport = page.getViewport({{ scale }});
+
+    // Each page lives inside a .page-wrap that holds the canvas
+    // and the text-layer overlay. Wrap is sized to the viewport's
+    // CSS pixels so the text layer's absolutely-positioned spans
+    // sit exactly on top of canvas glyphs.
+    const wrap = document.createElement("div");
+    wrap.className = "page-wrap";
+    wrap.style.width = `${{viewport.width}}px`;
+    wrap.style.height = `${{viewport.height}}px`;
+    wrap.dataset.pageNumber = String(i);
+
     const canvas = document.createElement("canvas");
     // Render at devicePixelRatio for crisp output on HiDPI displays;
     // CSS pins the displayed size to the un-scaled viewport dimensions.
@@ -1469,14 +1573,36 @@ async function renderAllPages(pdf) {{
     if (SYNCTEX_ENABLED) {{
       canvas.addEventListener("click", onCanvasClick);
     }}
-    fresh.appendChild(canvas);
+    wrap.appendChild(canvas);
+
+    // Text layer: enables native selection + drives Ctrl+F search.
+    // Failures here don't break the canvas — chunking-style
+    // graceful degradation.
+    try {{
+      const textLayerEl = document.createElement("div");
+      textLayerEl.className = "text-layer";
+      textLayerEl.style.setProperty("--scale-factor", String(viewport.scale));
+      wrap.appendChild(textLayerEl);
+      const tl = new pdfjsLib.TextLayer({{
+        textContentSource: page.streamTextContent(),
+        container: textLayerEl,
+        viewport,
+      }});
+      await tl.render();
+    }} catch (err) {{
+      console.warn(`text layer render failed for page ${{i}}:`, err);
+    }}
+
+    fresh.appendChild(wrap);
   }}
   viewer.replaceChildren(fresh);
   viewer.scrollTo(prevScroll);
-  // Re-attach IntersectionObserver to the new canvases so the
-  // page counter tracks scroll position. Throws away the old
-  // observer entries automatically.
+  // Re-attach IntersectionObserver to the new page wraps so the
+  // page counter tracks scroll position.
   _attachPageObserver();
+  // Re-run any active search against the freshly-rendered text
+  // layers. If no search is active this is a no-op.
+  if (_searchQuery) _runSearch();
   await refreshStatus();
 }}
 
@@ -1776,6 +1902,164 @@ function jumpToPdfLocation(msg) {{
 }}
 
 // -----------------------------------------------------------------------
+// In-document search
+// -----------------------------------------------------------------------
+//
+// Drives the find bar shown above the viewer (Ctrl+F to open). We
+// walk the per-page text layer spans and highlight whole spans whose
+// text contains the query case-insensitively. The "current" match
+// gets a stronger background and is scrolled into view. Substring-
+// level highlighting is a possible polish; whole-span is enough to
+// see context.
+//
+// State survives across renderAllPages: when a new build lands, the
+// text layers are recreated and _runSearch re-applies the highlight
+// to the new spans so the search experience doesn't reset on
+// rebuild.
+
+const searchBar = document.getElementById("search-bar");
+const searchInput = document.getElementById("search-input");
+const searchCountEl = document.getElementById("search-count");
+const searchPrevBtn = document.getElementById("search-prev");
+const searchNextBtn = document.getElementById("search-next");
+const searchCloseBtn = document.getElementById("search-close");
+const searchToggleBtn = document.getElementById("search-toggle");
+
+let _searchQuery = "";
+let _searchMatches = [];  // [{{ pageNum, span }}]
+let _searchCurrent = -1;
+
+function _openSearch() {{
+  searchBar.hidden = false;
+  searchInput.focus();
+  searchInput.select();
+}}
+
+function _closeSearch() {{
+  searchBar.hidden = true;
+  _searchQuery = "";
+  for (const m of _searchMatches) {{
+    m.span.classList.remove("find-match", "find-match-current");
+  }}
+  _searchMatches = [];
+  _searchCurrent = -1;
+  _updateSearchCount();
+}}
+
+function _updateSearchCount() {{
+  if (_searchMatches.length === 0) {{
+    searchCountEl.textContent = _searchQuery ? "0 / 0" : "";
+    searchInput.classList.toggle(
+      "no-results", _searchQuery !== "" && _searchMatches.length === 0,
+    );
+  }} else {{
+    searchCountEl.textContent =
+      `${{_searchCurrent + 1}} / ${{_searchMatches.length}}`;
+    searchInput.classList.remove("no-results");
+  }}
+  searchPrevBtn.disabled = _searchMatches.length === 0;
+  searchNextBtn.disabled = _searchMatches.length === 0;
+}}
+
+function _setSearchCurrent(idx) {{
+  if (_searchMatches.length === 0) {{
+    _searchCurrent = -1;
+    return;
+  }}
+  // Wrap around so prev from match 0 goes to last, next from last
+  // wraps to 0 — matches the UX most viewers ship.
+  idx = ((idx % _searchMatches.length) + _searchMatches.length)
+        % _searchMatches.length;
+  if (_searchCurrent >= 0 && _searchMatches[_searchCurrent]) {{
+    _searchMatches[_searchCurrent].span.classList.remove("find-match-current");
+  }}
+  _searchCurrent = idx;
+  const m = _searchMatches[idx];
+  m.span.classList.add("find-match-current");
+  m.span.scrollIntoView({{ block: "center", behavior: "smooth" }});
+  _updateSearchCount();
+}}
+
+function _runSearch() {{
+  // Clear previous highlights, recompute matches against the
+  // current DOM. Called whenever the query changes or after the
+  // text layers are re-rendered (post-build).
+  for (const m of _searchMatches) {{
+    m.span.classList.remove("find-match", "find-match-current");
+  }}
+  _searchMatches = [];
+  _searchCurrent = -1;
+
+  const q = _searchQuery.toLowerCase();
+  if (!q) {{
+    _updateSearchCount();
+    return;
+  }}
+
+  // Walk page-wraps in document order so match indices match
+  // visual order in the doc.
+  const wraps = viewer.querySelectorAll(".page-wrap");
+  for (const wrap of wraps) {{
+    const pageNum = parseInt(wrap.dataset.pageNumber, 10);
+    const spans = wrap.querySelectorAll(".text-layer > span");
+    for (const span of spans) {{
+      if (span.textContent.toLowerCase().includes(q)) {{
+        span.classList.add("find-match");
+        _searchMatches.push({{ pageNum, span }});
+      }}
+    }}
+  }}
+
+  if (_searchMatches.length > 0) {{
+    _setSearchCurrent(0);
+  }} else {{
+    _updateSearchCount();
+  }}
+}}
+
+// Debounce typing so we don't run a full DOM walk on every
+// keystroke; 80 ms is below the perception threshold but coalesces
+// fast bursts.
+let _searchDebounce = null;
+searchInput.addEventListener("input", () => {{
+  _searchQuery = searchInput.value;
+  if (_searchDebounce) clearTimeout(_searchDebounce);
+  _searchDebounce = setTimeout(() => {{ _runSearch(); }}, 80);
+}});
+
+searchInput.addEventListener("keydown", (e) => {{
+  if (e.key === "Enter") {{
+    e.preventDefault();
+    if (e.shiftKey) _setSearchCurrent(_searchCurrent - 1);
+    else _setSearchCurrent(_searchCurrent + 1);
+  }} else if (e.key === "Escape") {{
+    e.preventDefault();
+    _closeSearch();
+  }}
+}});
+
+searchPrevBtn.addEventListener("click",
+  () => _setSearchCurrent(_searchCurrent - 1));
+searchNextBtn.addEventListener("click",
+  () => _setSearchCurrent(_searchCurrent + 1));
+searchCloseBtn.addEventListener("click", _closeSearch);
+searchToggleBtn.addEventListener("click", () => {{
+  if (searchBar.hidden) _openSearch();
+  else _closeSearch();
+}});
+
+// Ctrl+F / Cmd+F intercept. Captured at the document level so it
+// works regardless of focus. We don't preventDefault unless we
+// actually open the bar, so users can still use the browser's
+// own find if they prefer it from somewhere we don't capture.
+document.addEventListener("keydown", (e) => {{
+  if ((e.ctrlKey || e.metaKey) && e.key === "f") {{
+    e.preventDefault();
+    _openSearch();
+  }}
+}});
+
+// -----------------------------------------------------------------------
 // Page navigation + zoom controls
 // -----------------------------------------------------------------------
 //
@@ -1792,7 +2076,7 @@ let _pageObserver = null;
 function _attachPageObserver() {{
   if (_pageObserver) _pageObserver.disconnect();
   _pageObserver = new IntersectionObserver((entries) => {{
-    // Pick the canvas with the highest intersectionRatio.
+    // Pick the page-wrap with the highest intersectionRatio.
     let bestRatio = 0;
     let bestPage = currentPageNum;
     for (const entry of entries) {{
@@ -1807,8 +2091,8 @@ function _attachPageObserver() {{
       _updatePageCounter();
     }}
   }}, {{ root: viewer, threshold: [0.1, 0.5, 0.9] }});
-  for (const canvas of viewer.querySelectorAll("canvas")) {{
-    _pageObserver.observe(canvas);
+  for (const wrap of viewer.querySelectorAll(".page-wrap")) {{
+    _pageObserver.observe(wrap);
   }}
 }}
 
@@ -1831,9 +2115,9 @@ function _setTotalPages(n) {{
 function jumpToPage(n) {{
   if (!currentDoc) return;
   n = Math.max(1, Math.min(currentDoc.numPages, n | 0));
-  const canvas = viewer.querySelector(`canvas[data-page-number="${{n}}"]`);
-  if (canvas) {{
-    canvas.scrollIntoView({{ behavior: "smooth", block: "start" }});
+  const wrap = viewer.querySelector(`.page-wrap[data-page-number="${{n}}"]`);
+  if (wrap) {{
+    wrap.scrollIntoView({{ behavior: "smooth", block: "start" }});
     currentPageNum = n;
     _updatePageCounter();
   }}
