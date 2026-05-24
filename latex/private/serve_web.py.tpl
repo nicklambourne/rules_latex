@@ -75,6 +75,14 @@ PDFJS_WORKER_RUNFILE = "{{PDFJS_WORKER_RUNFILE}}"
 # /chunk/<hash> below for the wire shape consumed by the browser.
 PDF_CHUNKS_RUNFILE = "{{PDF_CHUNKS_RUNFILE}}"
 
+# Path (within runfiles) to the stdlib WebSocket server module
+# (tools/ws_server.py). Used by the /ws endpoint to push the
+# manifest + missing chunks proactively after each rebuild,
+# saving the round-trip a pure-SSE flow would need. SSE remains
+# wired up at /events as a fallback for clients that can't
+# upgrade (CORS proxies, etc).
+WS_SERVER_RUNFILE = "{{WS_SERVER_RUNFILE}}"
+
 # Serve-time cache management. Non-empty only when the document
 # takes the implicit-pipeline path; see latex/private/latex_serve_web.bzl
 # and tools/serve_cache.py for the full design.
@@ -370,6 +378,15 @@ class BuildState:
         # browser falls back to whole-PDF transport when this is
         # None.
         self._pdf_manifest: object | None = None  # tools.pdf_chunks.Manifest | None
+        # WebSocket connections subscribed to push updates. Values
+        # are the set of chunk hashes the client claims to already
+        # have cached (sent via the "hello" message right after
+        # upgrade), so we only push chunks it doesn't already know.
+        # Keyed by id() to avoid making WebSocketConnection hashable
+        # by identity-via-default (it's mutable). Map preserves
+        # insertion order which we don't rely on; the iteration is
+        # for broadcast, not ordering-sensitive.
+        self._ws_conns: dict[int, tuple[object, set[str]]] = {}
 
     def add_listener(self) -> "queue.Queue[str]":
         q: queue.Queue[str] = queue.Queue(maxsize=8)
@@ -448,6 +465,158 @@ class BuildState:
     def get_manifest(self) -> object | None:
         with self._lock:
             return self._pdf_manifest
+
+    # -------------------------------------------------------------
+    # WebSocket push transport
+    # -------------------------------------------------------------
+    #
+    # The /ws endpoint registers a WebSocketConnection with us via
+    # add_ws(). After each successful build we push the manifest
+    # plus any chunks the client hasn't seen yet (it told us its
+    # cache state on connect via the "hello" message → ws_set_known).
+    # SSE remains wired at /events as a fallback for clients that
+    # can't upgrade.
+
+    def add_ws(self, conn: object) -> None:
+        """Register a fresh WebSocket connection with no known chunks."""
+        with self._lock:
+            self._ws_conns[id(conn)] = (conn, set())
+
+    def drop_ws(self, conn: object) -> None:
+        """Deregister. Safe to call multiple times."""
+        with self._lock:
+            self._ws_conns.pop(id(conn), None)
+
+    def ws_set_known(self, conn: object, hashes: set[str]) -> None:
+        """Replace the client-cache-state for one connection.
+
+        Called on receipt of the "hello" message and any subsequent
+        "have" updates. We trust the client's claim; the worst-case
+        consequence of a lie is a missing chunk → fetch fallback
+        via /chunk/<hash>, the same path the SSE flow uses today.
+        """
+        with self._lock:
+            entry = self._ws_conns.get(id(conn))
+            if entry is not None:
+                self._ws_conns[id(conn)] = (entry[0], set(hashes))
+
+    def push_to_ws(self, conn: object, chunks_dir: Path) -> None:
+        """Push the current manifest + missing chunks to one client.
+
+        Used on initial connection (after the "hello" arrives) and
+        anywhere else we need to bring a single client up to date
+        without disturbing the others.
+        """
+        with self._lock:
+            manifest = self._pdf_manifest
+            entry = self._ws_conns.get(id(conn))
+        if manifest is None or entry is None:
+            return
+        self._send_to_ws(entry[0], manifest, entry[1], chunks_dir)
+
+    def broadcast_chunks(self, chunks_dir: Path) -> None:
+        """Push the current manifest + missing chunks to every client.
+
+        Called from the watcher thread after each successful build's
+        manifest is installed. A failed send drops the offending
+        connection from the registry — the WS read loop on the
+        handler thread will exit on the next iteration and clean
+        up the rest.
+        """
+        with self._lock:
+            manifest = self._pdf_manifest
+            snapshot = list(self._ws_conns.values())
+        if manifest is None:
+            return
+        for conn, known in snapshot:
+            self._send_to_ws(conn, manifest, known, chunks_dir)
+
+    def broadcast_ws_build_failed(self, message: str) -> None:
+        """Notify every WS client that the latest build failed.
+
+        Parallels the SSE "build-failed" event so WS clients can
+        show the same banner without having to also subscribe to
+        /events. Encoded as a JSON text frame.
+        """
+        with self._lock:
+            snapshot = [entry[0] for entry in self._ws_conns.values()]
+        if not snapshot:
+            return
+        payload = json.dumps({"type": "build-failed", "message": message})
+        for conn in snapshot:
+            try:
+                conn.send_text(payload)
+            except Exception:
+                # Connection is broken; the read loop on the
+                # handler thread will tear it down. Don't drop
+                # here to avoid mutating the registry from the
+                # watcher thread for transient socket errors.
+                pass
+
+    def _send_to_ws(
+        self,
+        conn: object,
+        manifest: object,
+        known: set[str],
+        chunks_dir: Path,
+    ) -> None:
+        """Serialize one manifest + push the chunks the client lacks.
+
+        Updates the per-connection ``known`` set on success so the
+        next push only sends genuinely new chunks. Read directly
+        from the chunks directory rather than holding chunk bytes
+        in memory — content-addressing means the bytes on disk
+        are stable for the lifetime of any manifest that references
+        them.
+        """
+        chunk_list = []
+        for c in manifest.chunks:
+            chunk_list.append({
+                "objectId": c.object_id,
+                "start": c.start,
+                "end": c.end,
+                "hash": c.hash,
+            })
+        manifest_payload = json.dumps({
+            "type": "manifest",
+            "pdfSize": manifest.pdf_size,
+            "chunks": chunk_list,
+            "skeletonRanges": [
+                [r[0], r[1]] for r in manifest.skeleton_ranges
+            ],
+        })
+        try:
+            conn.send_text(manifest_payload)
+        except Exception:
+            return
+
+        new_known = set(known)
+        for c in manifest.chunks:
+            if c.hash in known:
+                continue
+            chunk_path = chunks_dir / c.hash
+            try:
+                chunk_bytes = chunk_path.read_bytes()
+            except OSError:
+                # Chunk was GC'd from disk between manifest
+                # installation and now. Skip — client will
+                # fall back to /chunk/<hash> over HTTP for it.
+                continue
+            # Binary frame layout: <32 bytes raw sha256><payload>.
+            # Client peels the first 32 bytes off to identify
+            # which chunk this is. Saves a manifest-keyed JSON
+            # wrapper per chunk.
+            frame = bytes.fromhex(c.hash) + chunk_bytes
+            try:
+                conn.send_binary(frame)
+            except Exception:
+                return
+            new_known.add(c.hash)
+
+        with self._lock:
+            entry = self._ws_conns.get(id(conn))
+            if entry is not None:
+                self._ws_conns[id(conn)] = (entry[0], new_known)
 
     def snapshot(self) -> dict[str, object]:
         with self._lock:
@@ -821,6 +990,11 @@ def watcher_loop(
         state.record_build(success, elapsed, msg)
         if success:
             _compute_manifest_post_build(state, workspace, pdf_chunks_ctx)
+        else:
+            # Tell WS clients the build failed so they can show the
+            # same banner SSE clients get from the "build-failed"
+            # event. Parallel to the SSE path inside record_build.
+            state.broadcast_ws_build_failed(msg)
 
 
 # -----------------------------------------------------------------------------
@@ -1399,6 +1573,10 @@ class Handler(BaseHTTPRequestHandler):
     pdfjs_lib_bytes: bytes
     pdfjs_worker_bytes: bytes
     pdf_chunks_ctx: "PdfChunksContext | None" = None
+    # ws_server.py module loaded dynamically from runfiles in main();
+    # None if it failed to load, in which case /ws responds 503 and
+    # clients fall back to SSE + /chunk/<hash> over HTTP.
+    ws_server_mod: object | None = None
     # Per-request flag set by do_HEAD; consumed by end_headers
     # (overridden below) to suppress body writes for HEAD.
     _head_mode: bool = False
@@ -1515,6 +1693,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/events":
             self._stream_events()
+            return
+        if path == "/ws":
+            self._handle_ws_upgrade()
             return
         self._send(
             HTTPStatus.NOT_FOUND,
@@ -1935,6 +2116,124 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             self.state.drop_listener(q)
 
+    # -------------------------------------------------------------
+    # WebSocket upgrade (/ws)
+    # -------------------------------------------------------------
+
+    def _handle_ws_upgrade(self) -> None:
+        """Upgrade an HTTP request to WebSocket and drive the session.
+
+        Runs synchronously on the ``ThreadingHTTPServer``-spawned
+        per-connection thread, so we hold this thread for the
+        lifetime of the WS session (typically until the browser
+        tab closes). The HTTP machinery won't try to read another
+        request from this connection once we return — we set
+        ``self.close_connection = True`` before handing off.
+
+        SSE (``/events``) is unaffected and continues to serve
+        clients that can't or don't upgrade.
+        """
+        if self.ws_server_mod is None or self.pdf_chunks_ctx is None:
+            # Either the WS server module failed to load at startup
+            # or chunking isn't available for this document — in
+            # either case, the SSE+chunk-pull flow still works and
+            # is what the client should fall back to.
+            self._send(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                b"WebSocket transport unavailable; use /events + /chunk/<hash>",
+                "text/plain; charset=utf-8",
+            )
+            return
+
+        # email.message.Message exposes a multi-value dict; lower-
+        # cased keys for the spec-mandated case-insensitive lookup
+        # the ws_server module does.
+        headers = {k.lower(): v for k, v in self.headers.items()}
+
+        try:
+            self.ws_server_mod.accept_websocket(
+                method=self.command,
+                headers=headers,
+                write=self.connection.sendall,
+            )
+        except self.ws_server_mod.WebSocketHandshakeError as exc:
+            self._send(
+                HTTPStatus.BAD_REQUEST,
+                str(exc).encode("utf-8"),
+                "text/plain; charset=utf-8",
+            )
+            return
+
+        # From here on the socket is ours; the request/response
+        # framing the HTTP handler relies on is gone.
+        self.close_connection = True
+
+        conn = self.ws_server_mod.WebSocketConnection(self.connection)
+        self.state.add_ws(conn)
+        try:
+            # Push the current manifest as soon as we have one —
+            # even if the client hasn't sent its hello yet — because
+            # most browsers will have no cache on first connect and
+            # would otherwise wait for the next build to see the PDF.
+            self.state.push_to_ws(conn, self.pdf_chunks_ctx.chunks_dir)
+
+            while True:
+                try:
+                    msg = conn.recv()
+                except self.ws_server_mod.WebSocketError as exc:
+                    # Protocol violation by the peer. Close with
+                    # PROTOCOL_ERROR and exit.
+                    try:
+                        conn.close(
+                            code=self.ws_server_mod.CloseCode.PROTOCOL_ERROR,
+                            reason=str(exc)[:120],
+                        )
+                    except Exception:
+                        pass
+                    break
+                if msg is None:
+                    break
+                if msg.opcode == self.ws_server_mod.OP_TEXT:
+                    self._handle_ws_text(conn, msg.payload)
+                # Binary frames from the client are reserved for
+                # future use; ignore for now rather than erroring.
+        finally:
+            self.state.drop_ws(conn)
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def _handle_ws_text(self, conn: object, payload: bytes) -> None:
+        """Dispatch one text frame from the client.
+
+        Currently handles only the ``hello`` message, which carries
+        the client's known-chunks cache state. Unknown messages are
+        ignored — the client and server can extend the protocol
+        without breaking each other.
+        """
+        try:
+            data = json.loads(payload.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return
+        if not isinstance(data, dict):
+            return
+        msg_type = data.get("type")
+        if msg_type == "hello":
+            have = data.get("have", [])
+            if isinstance(have, list):
+                self.state.ws_set_known(
+                    conn,
+                    {h for h in have if isinstance(h, str)},
+                )
+                # Re-push: now that we know the client's cache, we
+                # can skip pushing chunks it already has.
+                if self.pdf_chunks_ctx is not None:
+                    self.state.push_to_ws(
+                        conn,
+                        self.pdf_chunks_ctx.chunks_dir,
+                    )
+
 
 # -----------------------------------------------------------------------------
 # Editor detection
@@ -2284,6 +2583,42 @@ def _build_pdf_chunks_context(
     return PdfChunksContext(module=module, chunks_dir=chunks_dir)
 
 
+def _load_ws_server_module(runfiles: Path) -> object | None:
+    """Load tools/ws_server.py from runfiles. Returns ``None`` on
+    failure — caller treats that as "no /ws endpoint available" and
+    clients fall back to SSE + chunk pull over HTTP.
+    """
+    ws_lib = runfiles / WS_SERVER_RUNFILE
+    if not ws_lib.is_file():
+        sys.stderr.write(
+            "latex_serve_web: ws_server.py missing from runfiles at "
+            f"{ws_lib}; /ws will respond 503 and clients will fall "
+            "back to SSE.\n",
+        )
+        return None
+
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("ws_server", ws_lib)
+    if spec is None or spec.loader is None:
+        sys.stderr.write(
+            "latex_serve_web: failed to import ws_server.py; "
+            "falling back to SSE for live-reload.\n",
+        )
+        return None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["ws_server"] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as e:
+        sys.stderr.write(
+            f"latex_serve_web: ws_server.py exec failed: {e}; "
+            "falling back to SSE for live-reload.\n",
+        )
+        return None
+    return module
+
+
 # Age (seconds) below which a chunk is considered "fresh" and not
 # eligible for GC even if it isn't in the current manifest. Lets
 # the user undo a recent edit without re-fetching the body chunk
@@ -2379,6 +2714,10 @@ def _compute_manifest_post_build(
     if manifest is not None:
         keep = {c.hash for c in manifest.chunks}
         _gc_chunks(pdf_chunks_ctx.chunks_dir, keep)
+        # Push the fresh manifest + any newly-introduced chunks to
+        # every connected WebSocket client. Saves the round-trip
+        # SSE-flow clients need to discover-then-fetch.
+        state.broadcast_chunks(pdf_chunks_ctx.chunks_dir)
 
 
 def main() -> int:
@@ -2427,12 +2766,19 @@ def main() -> int:
     # optimization, never a correctness requirement.
     pdf_chunks_ctx = _build_pdf_chunks_context(workspace, runfiles)
 
+    # Load the WebSocket server module (tools/ws_server.py) for the
+    # /ws push transport. On any failure we leave it as None — /ws
+    # then responds 503 and the client falls back to SSE + chunk
+    # pull, same correctness, just one extra round-trip.
+    ws_server_mod = _load_ws_server_module(runfiles)
+
     state = BuildState()
     Handler.state = state
     Handler.workspace = workspace
     Handler.pdfjs_lib_bytes = pdfjs_lib_path.read_bytes()
     Handler.pdfjs_worker_bytes = pdfjs_worker_path.read_bytes()
     Handler.pdf_chunks_ctx = pdf_chunks_ctx
+    Handler.ws_server_mod = ws_server_mod
 
     # SO_REUSEADDR lets the user kill+restart the serve target quickly
     # without hitting "Address already in use" while the kernel holds
