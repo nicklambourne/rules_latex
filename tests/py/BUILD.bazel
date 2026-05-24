@@ -116,9 +116,47 @@ sh_test(
     data = _TEST_DATA + ["test_ws_server.py"],
 )
 
+# The four BuildState / live-preview server tests share the
+# `_template_loader.py` helper that substitutes serve_web.py.tpl
+# placeholders and importlib-loads the result. Each test needs
+# that helper as a runtime data dep alongside its own source.
+_BUILD_STATE_TEST_DATA = _TEST_DATA + ["_template_loader.py"]
+
+sh_test(
+    name = "test_combine_output",
+    srcs = ["run_pytest.sh"],
+    args = ["tests/py/test_combine_output.py"],
+    data = _BUILD_STATE_TEST_DATA + ["test_combine_output.py"],
+)
+
+sh_test(
+    name = "test_build_state_log",
+    srcs = ["run_pytest.sh"],
+    args = ["tests/py/test_build_state_log.py"],
+    data = _BUILD_STATE_TEST_DATA + ["test_build_state_log.py"],
+)
+
+sh_test(
+    name = "test_build_state_git",
+    srcs = ["run_pytest.sh"],
+    args = ["tests/py/test_build_state_git.py"],
+    data = _BUILD_STATE_TEST_DATA + ["test_build_state_git.py"],
+)
+
+sh_test(
+    name = "test_build_state_ws",
+    srcs = ["run_pytest.sh"],
+    args = ["tests/py/test_build_state_ws.py"],
+    data = _BUILD_STATE_TEST_DATA + ["test_build_state_ws.py"],
+)
+
 test_suite(
     name = "py_tests",
     tests = [
+        ":test_build_state_git",
+        ":test_build_state_log",
+        ":test_build_state_ws",
+        ":test_combine_output",
         ":test_editor_detection",
         ":test_http_head",
         ":test_pdf_chunks",
