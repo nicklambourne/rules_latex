@@ -1202,6 +1202,14 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <title>{document_name} – live preview</title>
+<!-- Favicon: a teal document glyph inlined as a data-URI SVG. We
+     don't serve the full project logo because (a) we'd need to
+     plumb it through the runfiles for a 16-pixel slot it'd be
+     unrecognizable in anyway, and (b) a stripped-down glyph reads
+     better at favicon size. The accent #2c8d85 matches the light-
+     theme --accent token so the browser tab feels part of the
+     UI even before page paint. -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='6' y='3' width='20' height='26' rx='2.5' fill='%232c8d85'/><rect x='6' y='3' width='20' height='5' rx='2.5' fill='%23236f64'/><path d='M11 13h10v1.5H11zM11 17h10v1.5H11zM11 21h7v1.5h-7z' fill='%23fff'/></svg>">
 <style>
   /* ---------- Theme tokens ----------
      Dark is the default. The light overrides are applied via
@@ -1388,6 +1396,12 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
     display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
     padding: 8px 12px; background: var(--bg-elevated);
     border-bottom: 1px solid var(--border);
+    /* Hair-line accent stripe along the bottom of the header.
+       Subtle brand-presence — tints the "edge of chrome" with
+       the same teal as focus outlines and the TOC current-section
+       marker, so the accent reads as a consistent visual token
+       rather than a one-off detail in three unrelated places. */
+    box-shadow: inset 0 -2px 0 0 var(--accent);
   }}
   header h1 {{
     margin: 0; font-size: 13px; font-weight: 600;
@@ -1540,7 +1554,46 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
     15%  {{ opacity: 1.0; }}
     100% {{ opacity: 0.0; }}
   }}
-  #empty {{ color: var(--text-faded); padding: 32px; }}
+  /* Empty state shown before the first successful build lands.
+     Centred vertically in the viewer, with a soft document
+     glyph and a two-line message. The glyph uses --accent
+     muted via opacity so it reads as ambient context, not a
+     loud indicator. */
+  #empty {{
+    color: var(--text-faded);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 12px;
+    min-height: 60vh;
+    padding: 32px;
+    text-align: center;
+  }}
+  #empty svg {{
+    width: 56px; height: 56px;
+    color: var(--accent);
+    opacity: 0.55;
+  }}
+  #empty .empty-title {{
+    font-size: 14px; font-weight: 600;
+    color: var(--text-muted);
+  }}
+  #empty .empty-hint {{
+    font-size: 12px;
+    color: var(--text-faded);
+    max-width: 380px;
+  }}
+  /* Subtle pulse on the glyph while we wait, so the page
+     doesn't look stuck. Disabled under reduced-motion. */
+  @keyframes empty-pulse {{
+    0%, 100% {{ opacity: 0.45; }}
+    50%      {{ opacity: 0.75; }}
+  }}
+  #empty svg {{
+    animation: empty-pulse 2.2s ease-in-out infinite;
+  }}
+  @media (prefers-reduced-motion: reduce) {{
+    #empty svg {{ animation: none; }}
+  }}
   footer {{
     padding: 6px 12px; background: var(--bg-elevated);
     border-top: 1px solid var(--border);
@@ -1698,7 +1751,24 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
     <div id="sidebar-header">Outline</div>
     <ol id="toc"></ol>
   </aside>
-  <div id="viewer"><div id="empty">waiting for first build…</div></div>
+  <div id="viewer">
+    <div id="empty" role="status">
+      <!-- Inline document SVG so we don't need a static asset
+           endpoint or extra runfile for a one-time empty-state
+           illustration. Matches the favicon glyph but at 56 px
+           for a softer presence in the centre of the viewer. -->
+      <svg viewBox="0 0 32 32" fill="currentColor" aria-hidden="true">
+        <rect x="6" y="3" width="20" height="26" rx="2.5"/>
+        <path d="M11 13h10v1.5H11zM11 17h10v1.5H11zM11 21h7v1.5h-7z"
+              fill="var(--bg-elevated)" opacity="0.95"/>
+      </svg>
+      <div class="empty-title">waiting for first build…</div>
+      <div class="empty-hint">
+        Edit your sources — the page reloads automatically whenever
+        the document recompiles successfully.
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Build log drawer: collapsed by default, auto-expands on a
