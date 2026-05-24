@@ -5,7 +5,7 @@ See https://github.com/nicklambourne/rules_latex for details.
 
 module(
     name = "rules_latex",
-    version = "0.4.2",
+    version = "0.5.0",
     compatibility_level = 1,
 )
 
