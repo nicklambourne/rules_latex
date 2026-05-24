@@ -180,10 +180,39 @@ Both rules synthesise a small launcher script that:
 1. Polls the watched paths every 250 ms via `os.stat`.
 2. Shells out to `bazel build <document_label>` on change.
 3. `latex_serve` opens the PDF once; `latex_serve_web` keeps a tiny
-   HTTP server alive and pushes SSE events to connected browser tabs.
+   HTTP server alive and pushes updates to connected browser tabs
+   over WebSocket (see below) with an SSE fallback.
 
 Both use the same `bazel build` invocation as a normal build, which
 means **live-mode behaviour is identical to CI** — no "works locally,
 fails in CI" drift. See
 [DESIGN.md §4.7](https://github.com/nicklambourne/rules_latex/blob/master/DESIGN.md#47-live-preview)
 for the rationale.
+
+### WebSocket push transport
+
+`latex_serve_web` exposes `/ws` for live updates. After each
+successful rebuild the server pushes the chunk manifest plus any
+PDF chunks the connected client doesn't already have. The browser
+applies them to its in-memory chunk cache and re-renders.
+
+Wire format:
+
+| Direction | Frame | Payload |
+|---|---|---|
+| server → client | text | `{"type":"manifest","pdfSize":N,"ranges":[{objectId,start,end,hash},...],"skeletonRanges":[[s,e],...]}` |
+| server → client | text | `{"type":"build-failed","message":"…"}` |
+| server → client | text | `{"type":"jump",...}` (forward-sync from `POST /sync/forward`) |
+| server → client | binary | `<32-byte raw SHA-256><chunk bytes>` (one per missing chunk) |
+| client → server | text | `{"type":"hello","have":[<hex sha256>,...]}` (declares cache state on connect) |
+
+Compared to the SSE path (reload event → `/pdf-manifest` fetch →
+`/chunk/<hash>` fetch per missing chunk), the WS push saves the
+two pull round-trips: the manifest arrives as part of the same
+push burst as the chunk bytes.
+
+**Fallback.** If `/ws` can't connect (WS upgrade refused, no
+`ws_server` module on the server side, proxy in the way, etc.)
+the browser falls back transparently to the SSE flow at
+`/events`. The user experience is unchanged; only the
+build-to-render latency differs.

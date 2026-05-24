@@ -19,7 +19,6 @@ This page is a friendlier summary of what's planned.
 |---------|--------|-------|
 | Modern biblatex (3.18+) via own TeX Live bundle | Watching upstream | [#1][issue-1] |
 | Tectonic v2 workspace mode (`Tectonic.toml`) | Considered | — |
-| WebSocket-based live-reload (vs SSE) | Considered | — |
 
 ## Long-term
 

@@ -75,24 +75,42 @@ pinning fragile across upstream bumps).
 The escape hatch (`biber_strategy = "system"`) covers (1) for
 platforms where we can't ship a binary (currently linux/aarch64).
 
-## Why Server-Sent Events, not WebSockets?
+## Why WebSocket *and* Server-Sent Events?
 
-`latex_serve_web`'s "rebuild → reload page" channel is one-way
-(server → browser) and uses
-[Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events).
-SSE is a simpler protocol than WebSocket — it's just a regular HTTP
-response that stays open and streams `data: …\n\n` lines. Python's
-stdlib `http.server` handles it trivially.
+The live-preview server speaks two transports for the "rebuild →
+reload" channel:
 
-WebSockets would let the browser talk back (e.g. "I scrolled, please
-debounce", or "I clicked at coords X,Y, please resolve via
-SyncTeX"). The one duplex feature we wanted (SyncTeX reverse-sync)
-is solvable with a `POST /sync/reverse` endpoint that piggybacks on
-the existing SSE channel. So WebSockets stay on the open-questions
-list, not in v0.2.
+1. **WebSocket (`/ws`, preferred).** Server pushes the chunk
+   manifest plus the chunks the client doesn't already have, in
+   a single duplex burst. Saves the round-trip-per-chunk-fetch
+   the pull-based flow needs. See
+   [Live preview → WebSocket push transport](../getting-started/live-preview.md#websocket-push-transport)
+   for the wire format.
+
+2. **Server-Sent Events (`/events`, fallback).** Server emits
+   `data: reload\n\n` after each successful build; browser
+   fetches `/pdf-manifest` then any missing `/chunk/<hash>` via
+   HTTP. Simpler protocol, works through every HTTP proxy that
+   doesn't speak `Upgrade`, and stays as a transparent fallback
+   if WS can't connect (or if the deployed server doesn't ship
+   the WS module — `/ws` then returns 503).
+
+WS is hand-rolled on top of Python stdlib's `http.server`
+(`tools/ws_server.py`, ~430 LOC including docstrings). We
+specifically don't take a `websockets`-PyPI-package dependency
+because that would force adopting `rules_python` for what's a
+small implementation surface. The hand-roll is the slice of
+RFC 6455 the push transport actually uses: handshake, frame
+parse/write, ping/pong, fragmentation, close. Things like
+`permessage-deflate` and subprotocols are deliberately out of
+scope (the chunks we push are already FlateDecode'd PDF object
+streams; recompressing them would cost CPU for no win).
 
 See [DESIGN.md §5.7](https://github.com/nicklambourne/rules_latex/blob/master/DESIGN.md)
-for the full discussion.
+for the historical context — this section originally argued
+*against* WebSockets, and the threshold for moving was "we'd
+actually save round-trips on the hot path." Server-pushed PDF
+deltas hit that bar.
 
 ## Why self-hosted PDF.js?
 
