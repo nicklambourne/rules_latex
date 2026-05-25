@@ -427,10 +427,28 @@ When `latex_document(synctex = True)` is set, tectonic is invoked with
 additional output. `latex_serve_web` auto-discovers that file via the
 document's `synctex` `OutputGroupInfo` and offers two affordances:
 
-* Browser-side: clicking on the rendered PDF page POSTs the
-  (page, x, y) coordinates (in PDF points) to `/sync/reverse`. The
-  response is rendered in the footer as `file:line`.
-* Server-side: a minimal SyncTeX v1 parser in
+* **Reverse-lookup (PDF → source location).** Clicking on the
+  rendered PDF page POSTs the (page, x, y) coordinates (in PDF
+  points) to `/sync/reverse`. The server returns the resolved
+  `(file, line)`, the browser renders `<file>:<line>` in the
+  footer and copies the same string to the clipboard. The footer
+  text is itself clickable to recopy if the initial write was
+  blocked.
+
+  **Note on framing.** Earlier versions of this section, and the
+  in-app hint, called this "click to jump to source." That was a
+  lie — a web page can't drive your editor (vim, emacs, VS Code,
+  etc.) to a (file, line) location. The two paths that would make
+  the "jump" real (server invokes the editor's CLI; or render the
+  result as a `vscode://file/...:line` URL-scheme link) both fail
+  silently for too many editor + setup combinations to ship as a
+  default. v0.6.1 walked the framing back: reverse-sync is a
+  *source-location lookup*, with clipboard as the handoff, and
+  the user paste it into whatever opens files for them. Forward-
+  sync (below) is the half of SyncTeX where the jump *is* real,
+  because the editor is the one driving it.
+
+* **Server-side parser.** A minimal SyncTeX v1 parser in
   [`serve_web.py.tpl`](./latex/private/serve_web.py.tpl) reads the
   gzipped synctex file, builds an index of (file_id → path) plus a
   flat list of box records, and resolves clicks to the smallest
@@ -440,15 +458,19 @@ document's `synctex` `OutputGroupInfo` and offers two affordances:
   source list, which is sufficient for typical single-package
   documents.
 
+* **Forward-sync (editor → PDF).** Shipped in v0.4. The editor
+  (or any CLI tool) POSTs `{file, line}` to `/sync/forward`;
+  the server resolves it to a (page, x, y) box via the same
+  index, broadcasts a `jump` event to every connected SSE +
+  WebSocket client, and the browser scrolls the page into view
+  with a brief highlight flash. This direction *does* jump
+  because the editor is what drove the navigation in the first
+  place — the browser is the passive receiver.
+
 `reproducible = True` and `synctex = True` are mutually exclusive on
 the same `latex_document` — tectonic's deterministic mode disables
 SyncTeX output because aux files would otherwise embed absolute paths
 that aren't stable across machines.
-
-Forward-sync (editor → PDF) is intentionally not implemented in v0.x;
-the natural surface would be a `POST /sync/forward` endpoint that the
-editor posts to, with the server pushing a `jump-to-page-N-line-Y`
-event over the existing SSE channel. See §5.6 for the discussion.
 
 ### 4.9 Biber
 

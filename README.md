@@ -84,7 +84,7 @@ latex_document(
     # biber = True              # for biblatex documents
     # ctan_packages = ["..."]   # for packages not in the 2022 bundle
     # reproducible = True       # byte-identical PDF across builds
-    # synctex = True            # click PDF → jump to source in serve_web
+    # synctex = True            # PDF clicks copy <file>:<line> to clipboard
 )
 
 # Catch regressions: fails CI if cv.tex stops compiling cleanly.
@@ -160,12 +160,18 @@ bazel run //:cv_serve_web   # http://127.0.0.1:8765/
   marker so you know which state you're previewing.
 - **Light / dark / auto theme** — full palette driven by CSS
   variables; `auto` follows `prefers-color-scheme`. `t` cycles.
-- **Click-to-source via SyncTeX** — when the document declares
-  `synctex = True`, clicking a glyph in the preview jumps your
-  editor to the matching `.tex` line via the generated
-  `.synctex.gz` index. The reverse direction (`POST /sync/forward`)
-  lets editor plugins jump the preview to a source location with a
-  brief highlight flash.
+- **SyncTeX source-location lookup** — when the document declares
+  `synctex = True`, clicking a glyph in the preview resolves the
+  matching `.tex` file + line via the generated `.synctex.gz`
+  index and copies `<file>:<line>` to the clipboard. The browser
+  can't drive your editor, so the click doesn't *jump* — it
+  hands you the location to paste wherever opens files for you
+  (vim's `:e`, the VS Code Quick Open prompt, `code -g`, etc.).
+- **SyncTeX forward-sync (editor → PDF)** — `POST /sync/forward`
+  lets an editor plugin point the preview at a `(file, line)`
+  location; the matching glyph scrolls into view and gets a
+  brief highlight flash. This is the half of SyncTeX where the
+  jump is real, because the editor is the one driving it.
 - **VS Code-family terminal detection** — when invoked from
   VS Code / Cursor / Windsurf / VSCodium, the preview opens in
   the editor's built-in Simple Browser by default instead of a

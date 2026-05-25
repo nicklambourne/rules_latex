@@ -32,7 +32,7 @@ latex_document(
     name = "cv",
     main = "cv.tex",
     srcs = ["cv.tex"],
-    synctex = True,   # enables click-to-source
+    synctex = True,   # PDF clicks copy <file>:<line> to clipboard
 )
 
 latex_serve_web(
@@ -53,11 +53,16 @@ Open the URL in your browser. The page:
 - Listens for "reload" events over Server-Sent Events.
 - Preserves scroll position across reloads.
 - When `synctex = True` is set on the document, clicking anywhere in
-  the rendered PDF resolves to a source `file:line` displayed in the
-  footer bar (**reverse-sync**).
-- Editors can also push the other direction (**forward-sync**) by
+  the rendered PDF resolves to a source `file:line`, displays it in
+  the footer bar, and copies it to the clipboard (**reverse-sync
+  lookup** — the browser can't drive your editor to that location;
+  you paste the location into whatever opens files for you). The
+  footer text is itself clickable to recopy.
+- Editors can push the other direction (**forward-sync**) by
   POSTing to `/sync/forward`; the browser scrolls the page into view
-  and flashes a yellow overlay at the matching PDF location. See
+  and flashes a yellow overlay at the matching PDF location. This
+  direction *does* jump because the editor — not the browser — is
+  the one driving the navigation. See
   [SyncTeX forward-sync](#synctex-forward-sync) below.
 
 ## How fast is the loop?
@@ -88,7 +93,9 @@ When `latex_document(synctex = True)` is set, `latex_serve_web`
 exposes a `POST /sync/forward` endpoint that maps a source
 `(file, line)` tuple to a PDF location and flashes a highlight in
 every open browser tab. The complement to the click-on-PDF
-reverse-sync that the same documents already support.
+reverse-sync *lookup* the same documents already support — except
+this direction *does* jump (the editor, not the browser, drives
+the navigation).
 
 The endpoint is the integration point — your editor (or a small CLI
 shim) is responsible for invoking it. The minimum viable wrapper is
