@@ -1,0 +1,18 @@
+# rules_latex project assets — currently the logo (SVG + PNG)
+# consumed by:
+#   - the README (img tag pointed at the GitHub raw URL)
+#   - the docs site (mkdocs theme logo, mirrored under
+#     docs/site/assets/logo.svg)
+#   - latex_serve_web (favicon + header logo, plumbed via
+#     `_logo` runfile in //latex/private:latex_serve_web.bzl)
+#
+# Public visibility so the rule under //latex/private/ can take it
+# as a label-typed attribute default. exports_files is enough — no
+# rule wraps this; it's pure data.
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "logo.svg",
+    "logo.png",
+])
