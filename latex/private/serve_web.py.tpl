@@ -95,6 +95,14 @@ PDF_CHUNKS_RUNFILE = "{{PDF_CHUNKS_RUNFILE}}"
 # upgrade (CORS proxies, etc).
 WS_SERVER_RUNFILE = "{{WS_SERVER_RUNFILE}}"
 
+# Path (within runfiles) to the project logo SVG. Read once at
+# startup and served from /_assets/logo.svg as both the browser-
+# tab favicon and the in-header brand image. The full logo is
+# ~70 KB — too large for a data-URI favicon (browsers cap URI
+# length around 64 KB) — so we serve it as a real static asset
+# instead.
+LOGO_RUNFILE = "{{LOGO_RUNFILE}}"
+
 # Serve-time cache management. Non-empty only when the document
 # takes the implicit-pipeline path; see latex/private/latex_serve_web.bzl
 # and tools/serve_cache.py for the full design.
@@ -1203,14 +1211,14 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <title>{document_name} – live preview</title>
-<!-- Favicon: a teal document glyph inlined as a data-URI SVG. We
-     don't serve the full project logo because (a) we'd need to
-     plumb it through the runfiles for a 16-pixel slot it'd be
-     unrecognizable in anyway, and (b) a stripped-down glyph reads
-     better at favicon size. The accent #2c8d85 matches the light-
-     theme --accent token so the browser tab feels part of the
-     UI even before page paint. -->
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='6' y='3' width='20' height='26' rx='2.5' fill='%232c8d85'/><rect x='6' y='3' width='20' height='5' rx='2.5' fill='%23236f64'/><path d='M11 13h10v1.5H11zM11 17h10v1.5H11zM11 21h7v1.5h-7z' fill='%23fff'/></svg>">
+<!-- Favicon: the project logo SVG, served from /_assets/logo.svg
+     (plumbed through as a runfile by the latex_serve_web rule).
+     Earlier versions inlined a stripped-down document glyph as a
+     data URI because the full logo is ~70 KB and exceeds the
+     browser data-URI cap; serving it as a real static asset
+     instead means the actual brand artwork shows up in the
+     browser tab + history. -->
+<link rel="icon" type="image/svg+xml" href="/_assets/logo.svg">
 <style>
   /* ---------- Theme tokens ----------
      Dark is the default. The light overrides are applied via
@@ -1403,6 +1411,17 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
        marker, so the accent reads as a consistent visual token
        rather than a one-off detail in three unrelated places. */
     box-shadow: inset 0 -2px 0 0 var(--accent);
+  }}
+  /* Project logo on the far left of the header. Sized to the
+     header height; aspect ratio is preserved by `height: auto`.
+     The img element falls back to alt text if /_assets/logo.svg
+     somehow 404s (e.g. logo runfile didn't make it into a
+     downstream consumer's build); the layout doesn't break. */
+  #header-logo {{
+    height: 22px; width: auto;
+    flex: 0 0 auto;
+    user-select: none;
+    -webkit-user-drag: none;
   }}
   header h1 {{
     margin: 0; font-size: 13px; font-weight: 600;
@@ -1713,6 +1732,8 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
 </head>
 <body class="{synctex_body_class}">
 <header>
+  <img id="header-logo" src="/_assets/logo.svg" alt="rules_latex"
+       title="rules_latex — live preview" />
   <h1>{document_name}</h1>
 
   <div class="control-group" id="page-nav" title="Page navigation">
@@ -3303,6 +3324,12 @@ class Handler(BaseHTTPRequestHandler):
     workspace: Path
     pdfjs_lib_bytes: bytes
     pdfjs_worker_bytes: bytes
+    # Project-logo SVG bytes served from /_assets/logo.svg. Defaults
+    # to an empty bytes value when the rule shipped without a logo
+    # runfile (older consumers reading future-format substitutions);
+    # the endpoint then returns 404 and the favicon link silently
+    # resolves to nothing — layout is unaffected.
+    logo_bytes: bytes = b""
     pdf_chunks_ctx: "PdfChunksContext | None" = None
     # ws_server.py module loaded dynamically from runfiles in main();
     # None if it failed to load, in which case /ws responds 503 and
@@ -3423,6 +3450,27 @@ class Handler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 self.pdfjs_worker_bytes,
                 "text/javascript; charset=utf-8",
+            )
+            return
+        if path == "/_assets/logo.svg":
+            # Browser-tab favicon + in-header brand image. Served as
+            # raw SVG (image/svg+xml) so the browser can scale it
+            # cleanly for both the 16-px tab slot and the ~22-px
+            # header slot. The runfile is loaded once at startup
+            # into Handler.logo_bytes (see main()); an empty value
+            # means the runfile wasn't present and we 404 — the
+            # favicon link + the <img> tag both degrade silently.
+            if not self.logo_bytes:
+                self._send(
+                    HTTPStatus.NOT_FOUND,
+                    b"logo not bundled",
+                    "text/plain; charset=utf-8",
+                )
+                return
+            self._send(
+                HTTPStatus.OK,
+                self.logo_bytes,
+                "image/svg+xml; charset=utf-8",
             )
             return
         if path == "/status":
@@ -4517,11 +4565,22 @@ def main() -> int:
     # pull, same correctness, just one extra round-trip.
     ws_server_mod = _load_ws_server_module(runfiles)
 
+    # Project logo. Best-effort: if the runfile is missing (e.g. an
+    # older consumer that didn't get the substitution), we leave the
+    # bytes empty and the /_assets/logo.svg endpoint serves a 404;
+    # the favicon link silently resolves to nothing, layout is fine.
+    logo_path = runfiles / LOGO_RUNFILE
+    try:
+        logo_bytes = logo_path.read_bytes()
+    except OSError:
+        logo_bytes = b""
+
     state = BuildState()
     Handler.state = state
     Handler.workspace = workspace
     Handler.pdfjs_lib_bytes = pdfjs_lib_path.read_bytes()
     Handler.pdfjs_worker_bytes = pdfjs_worker_path.read_bytes()
+    Handler.logo_bytes = logo_bytes
     Handler.pdf_chunks_ctx = pdf_chunks_ctx
     Handler.ws_server_mod = ws_server_mod
 

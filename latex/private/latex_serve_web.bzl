@@ -95,6 +95,7 @@ def _latex_serve_web_impl(ctx):
     pdfjs_worker = ctx.file._pdfjs_worker
     pdf_chunks_lib = ctx.file._pdf_chunks_lib
     ws_server_lib = ctx.file._ws_server_lib
+    logo = ctx.file._logo
 
     # Decide whether to plumb in the serve-time cache override.
     # Only the implicit-pipeline path needs it; documents with
@@ -204,6 +205,7 @@ def _latex_serve_web_impl(ctx):
             "{{OPEN_ON_START}}": "1" if ctx.attr.open_on_start else "0",
             "{{PDF_CHUNKS_RUNFILE}}": pdf_chunks_lib.short_path,
             "{{WS_SERVER_RUNFILE}}": ws_server_lib.short_path,
+            "{{LOGO_RUNFILE}}": logo.short_path,
             "{{ENABLE_SERVE_CACHE}}": "1" if enable_serve_cache else "",
             "{{SERVE_CACHE_RUNFILE}}": prime_serve_cache_path,
             "{{PRIME_MAIN_RUNFILE}}": prime_main_path,
@@ -235,8 +237,14 @@ exec "$PYTHON" "$RUNFILES/{server}" "$BUILD_WORKSPACE_DIRECTORY" "$RUNFILES" "$@
 
     runfiles = ctx.runfiles(
         files = (
-            [server_script, pdfjs_lib, pdfjs_worker, pdf_chunks_lib, ws_server_lib] +
-            serve_cache_runfiles
+            [
+                server_script,
+                pdfjs_lib,
+                pdfjs_worker,
+                pdf_chunks_lib,
+                ws_server_lib,
+                logo,
+            ] + serve_cache_runfiles
         ),
     )
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
@@ -336,6 +344,14 @@ latex_serve_web = rule(
                   "dynamically from runfiles by the serve script; " +
                   "see tools/ws_server.py.",
             default = "//tools:ws_server.py",
+            allow_single_file = True,
+        ),
+        "_logo": attr.label(
+            doc = "Project logo SVG, served at /_assets/logo.svg by " +
+                  "the live-preview server and used as both the " +
+                  "browser-tab favicon and the in-header brand " +
+                  "image.",
+            default = "//assets:logo.svg",
             allow_single_file = True,
         ),
     },
