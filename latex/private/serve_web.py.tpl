@@ -1575,10 +1575,10 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
     100% {{ opacity: 0.0; }}
   }}
   /* Empty state shown before the first successful build lands.
-     Centred vertically in the viewer, with a soft document
-     glyph and a two-line message. The glyph uses --accent
-     muted via opacity so it reads as ambient context, not a
-     loud indicator. */
+     Centred vertically in the viewer, with the project logo at
+     50% opacity above the title + hint. Steady opacity (no
+     pulse) so the logo's recognisable shape reads as a calm
+     marker, not a flashing alert. */
   #empty {{
     color: var(--text-faded);
     display: flex; flex-direction: column;
@@ -1588,10 +1588,14 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
     padding: 32px;
     text-align: center;
   }}
-  #empty svg {{
-    width: 56px; height: 56px;
-    color: var(--accent);
-    opacity: 0.55;
+  #empty-logo {{
+    /* Logo aspect ratio is ~0.86 (231×267 in the SVG viewBox);
+       `width: 72px` gives ~83 px tall — large enough to be
+       recognisable, small enough to not dominate. */
+    width: 72px; height: auto;
+    opacity: 0.5;
+    user-select: none;
+    -webkit-user-drag: none;
   }}
   #empty .empty-title {{
     font-size: 14px; font-weight: 600;
@@ -1601,18 +1605,6 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
     font-size: 12px;
     color: var(--text-faded);
     max-width: 380px;
-  }}
-  /* Subtle pulse on the glyph while we wait, so the page
-     doesn't look stuck. Disabled under reduced-motion. */
-  @keyframes empty-pulse {{
-    0%, 100% {{ opacity: 0.45; }}
-    50%      {{ opacity: 0.75; }}
-  }}
-  #empty svg {{
-    animation: empty-pulse 2.2s ease-in-out infinite;
-  }}
-  @media (prefers-reduced-motion: reduce) {{
-    #empty svg {{ animation: none; }}
   }}
   footer {{
     padding: 6px 12px; background: var(--bg-elevated);
@@ -1793,15 +1785,14 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
   </aside>
   <div id="viewer">
     <div id="empty" role="status">
-      <!-- Inline document SVG so we don't need a static asset
-           endpoint or extra runfile for a one-time empty-state
-           illustration. Matches the favicon glyph but at 56 px
-           for a softer presence in the centre of the viewer. -->
-      <svg viewBox="0 0 32 32" fill="currentColor" aria-hidden="true">
-        <rect x="6" y="3" width="20" height="26" rx="2.5"/>
-        <path d="M11 13h10v1.5H11zM11 17h10v1.5H11zM11 21h7v1.5h-7z"
-              fill="var(--bg-elevated)" opacity="0.95"/>
-      </svg>
+      <!-- Project logo at 50% opacity. Same /_assets/logo.svg as
+           the favicon and the header brand mark; sized larger
+           here and muted to read as an ambient marker rather
+           than an active control. Earlier versions used a hand-
+           rolled document glyph at this slot — replaced once
+           the real logo became a served runfile. -->
+      <img id="empty-logo" src="/_assets/logo.svg"
+           alt="" aria-hidden="true" draggable="false" />
       <div class="empty-title">waiting for first build…</div>
       <div class="empty-hint">
         Edit your sources — the page reloads automatically whenever
