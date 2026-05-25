@@ -362,7 +362,9 @@ class BuildState:
     Holds three caches that get invalidated on every successful
     build:
 
-    * ``_synctex`` — parsed SyncTeX index for click-to-source.
+    * ``_synctex`` — parsed SyncTeX index for the reverse-sync
+      lookup (PDF click -> source `(file, line)`) and the
+      forward-sync jump (editor `(file, line)` -> PDF box).
     * ``_pdf_manifest`` — content-addressed PDF chunk manifest
       (for incremental PDF transfer; see ``Manifest`` in
       ``tools/pdf_chunks.py``).
@@ -1612,6 +1614,24 @@ INDEX_HTML_TEMPLATE = """<!doctype html>
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
   }}
   #sync-result a {{ color: var(--sync-result); text-decoration: underline; }}
+  /* The lookup result is rendered as <file>:<line> wrapped in a
+     clickable .sync-loc — clicking copies again to clipboard
+     (useful if the auto-copy on PDF-click got blocked, or the
+     user wants to recopy without re-clicking the canvas). The
+     adjacent .sync-copied is a small status badge that says
+     "copied" / "click to copy" depending on outcome. */
+  .sync-loc {{
+    cursor: pointer;
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+  }}
+  .sync-loc:hover {{ text-decoration-style: solid; }}
+  .sync-loc:focus {{ outline: 1px solid var(--accent); outline-offset: 1px; }}
+  .sync-copied {{
+    color: var(--text-faded);
+    font-size: 10px;
+    margin-left: 6px;
+  }}
 
   /* Build-log drawer. Lives between #main and footer in the body's
      flex column. Collapsed state shows just the header; expanded
@@ -2218,15 +2238,78 @@ async function onCanvasClick(event) {{
     }});
     const body = await r.json();
     if (body.ok) {{
+      // Render as <file>:<line>, copy to clipboard immediately
+      // (most users want to paste it into their editor anyway),
+      // and surface a subtle "copied" badge so the user knows
+      // the click had a side effect beyond rendering text. The
+      // browser can't drive the editor; the clipboard handoff is
+      // as close as we get.
+      const locText = `${{body.file}}:${{body.line}}`;
+      const copied = await _copyToClipboard(locText);
+      const status = copied ? "copied" : "click to copy";
       syncResultEl.innerHTML =
-        `→ <strong>${{escapeHtml(body.file)}}</strong>:` +
-        `<strong>${{body.line}}</strong> ` +
-        `(page ${{pageNumber}}, ${{pdfX.toFixed(1)}}, ${{pdfY.toFixed(1)}})`;
+        `→ <span class="sync-loc" tabindex="0" role="button" ` +
+        `title="click to copy ${{escapeHtml(locText)}}">` +
+        `<strong>${{escapeHtml(body.file)}}</strong>:` +
+        `<strong>${{body.line}}</strong></span> ` +
+        `<span class="sync-copied">${{status}}</span>`;
+      // Wire the click-again-to-copy fallback (handles the
+      // clipboard-write-blocked case + any later re-click).
+      const span = syncResultEl.querySelector(".sync-loc");
+      if (span) {{
+        const recopy = async (e) => {{
+          if (e.type === "keydown" && e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          if (await _copyToClipboard(locText)) {{
+            const badge = syncResultEl.querySelector(".sync-copied");
+            if (badge) {{
+              badge.textContent = "copied";
+              setTimeout(() => {{
+                if (badge.textContent === "copied") badge.textContent = "click to copy";
+              }}, 1500);
+            }}
+          }}
+        }};
+        span.addEventListener("click", recopy);
+        span.addEventListener("keydown", recopy);
+      }}
     }} else {{
       syncResultEl.textContent = `synctex: ${{body.error || "no match"}}`;
     }}
   }} catch (err) {{
     syncResultEl.textContent = `synctex request failed: ${{err.message || err}}`;
+  }}
+}}
+
+async function _copyToClipboard(text) {{
+  // navigator.clipboard.writeText is the modern path but requires
+  // a secure context (http://127.0.0.1 counts) AND, on some
+  // browsers, a transient user activation. The PDF-canvas click
+  // satisfies the activation requirement; the secure-context one
+  // we trust the localhost binding. Fall back to a textarea +
+  // execCommand for hostile environments (file:// previews,
+  // ancient browsers). Returns true on success.
+  try {{
+    if (navigator.clipboard && navigator.clipboard.writeText) {{
+      await navigator.clipboard.writeText(text);
+      return true;
+    }}
+  }} catch {{
+    /* fall through */
+  }}
+  try {{
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "absolute";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  }} catch {{
+    return false;
   }}
 }}
 
@@ -3301,7 +3384,14 @@ class Handler(BaseHTTPRequestHandler):
                 synctex_enabled="true" if SYNCTEX_ENABLED else "false",
                 synctex_body_class="synctex" if SYNCTEX_ENABLED else "",
                 synctex_hint=(
-                    "click anywhere in the PDF to jump to source"
+                    # Honest description: a PDF click looks up the
+                    # source line and copies <file>:<line> to the
+                    # clipboard. The browser can't drive your editor
+                    # to that location — you paste the location into
+                    # whatever opens files for you. See DESIGN.md
+                    # §4.8 for why the previous "jump to source"
+                    # framing was retired.
+                    "click in the PDF to copy the source location"
                     if SYNCTEX_ENABLED
                     else (
                         "synctex disabled (build with "

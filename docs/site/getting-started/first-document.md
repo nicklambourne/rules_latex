@@ -83,7 +83,7 @@ latex_document(
     name = "cv",
     main = "cv.tex",
     srcs = ["cv.tex"],
-    synctex = True,    # click PDF -> jump to source
+    synctex = True,    # click PDF -> copy <file>:<line> to clipboard
 )
 
 # `bazel run //:cv_serve` — live preview in the browser

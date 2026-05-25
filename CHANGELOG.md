@@ -6,6 +6,32 @@ that, expect breaking changes in any v0.x release.
 
 ## [Unreleased]
 
+### Changed
+
+- **SyncTeX reverse-sync framing: "click to jump" → "click to copy
+  source location."** The in-app hint, the README, and the docs
+  previously described clicking on a glyph in the preview as
+  *jumping to source*. A web page can't drive your editor (vim,
+  emacs, VS Code, etc.) to a `(file, line)` location — only the
+  user (or a server-invoked CLI for a few editors that happen to
+  have one on `PATH`) can. The two paths that *would* make the
+  jump real both fail silently for too many editor + setup
+  combinations to ship as a default, so v0.6 walks the framing
+  back instead: the click resolves the source location, displays
+  it in the footer, and copies `<file>:<line>` to the clipboard
+  via `navigator.clipboard.writeText` (with a textarea +
+  `execCommand("copy")` fallback for hostile environments). The
+  footer entry is itself clickable to recopy. Users paste the
+  location into whatever opens files for them — vim's `:e`,
+  the VS Code Quick Open prompt, `code -g`, etc.
+
+  Forward-sync (editor → PDF) is unaffected — that direction
+  *does* jump, because the editor is the one driving it.
+
+  No code or attribute changes for end users — `synctex = True`
+  still works the same way; the behaviour and copy text are the
+  only difference. See `DESIGN.md` §4.8 for the full rationale.
+
 ### Removed
 
 - **`latex_serve` rule (system-PDF-viewer live preview).** The

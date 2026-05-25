@@ -600,10 +600,13 @@ latex_document = rule(
             doc = "When True, tectonic is invoked with --synctex and the " +
                   "resulting `<name>.synctex.gz` is exposed as an additional " +
                   "output (also surfaced via the `synctex` OutputGroup). " +
-                  "Consumed by `latex_serve_web` for click-to-source " +
-                  "reverse-sync in the browser. Mutually exclusive with " +
-                  "`reproducible` because tectonic's deterministic mode " +
-                  "disables SyncTeX output.",
+                  "Consumed by `latex_serve_web` for reverse-sync " +
+                  "lookups (PDF click -> copy `<file>:<line>` to the " +
+                  "clipboard; the browser can't drive your editor, so " +
+                  "the click doesn't *jump*) and forward-sync (editor -> " +
+                  "PDF jump, via `POST /sync/forward`). Mutually exclusive " +
+                  "with `reproducible` because tectonic's deterministic " +
+                  "mode disables SyncTeX output.",
             default = False,
         ),
         "cache": attr.label(
