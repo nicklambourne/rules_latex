@@ -51,6 +51,14 @@ that, expect breaking changes in any v0.x release.
   analogue of the repo's system-`python3` test convention. No
   user-facing change to `latex_serve_web`. See `DESIGN.md` §5 #11.
 
+- **Unit-tested the live-preview render path.** The lazy-paint state
+  machine + render-observer decision and the `ChunkedTransport`
+  byte-range planner are factored into pure modules
+  (`serve_web_render.js`, `serve_web_chunks.js`) and unit-tested under
+  `tests/js/` with `node --test`. Behavior-preserving refactor; the
+  `latex_serve_web` rule now globs its client assets via a filegroup so
+  new modules need no rule change.
+
 ### Removed
 
 - **`latex_serve` rule (system-PDF-viewer live preview).** The
