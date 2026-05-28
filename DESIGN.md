@@ -1042,46 +1042,55 @@ These are deliberately out of scope for v0.1 but worth flagging.
     caveat — the biblatex 3.21 / biber 2.21 overlay reaches
     tectonic via `-Z search-path` as designed.
 
-13. **Live-preview page rendering performance.** `latex_serve_web`'s
-    `renderAllPages()` synchronously renders *every* PDF page into
-    its own canvas on each reload, regardless of whether the page
-    is in the viewport. On a short doc (CV, hello example) this is
-    invisible. On a 50-page thesis the user perceives a blank
-    moment + a perceptible per-page render cost on every save.
+13. **Live-preview page rendering performance.** **Partially
+    resolved.** `renderAllPages()` historically rendered *every*
+    PDF page into its own canvas on each reload, regardless of
+    whether the page was in the viewport. On a short doc (CV, hello
+    example) that was invisible; on a 50-page thesis the user
+    perceived a per-page render cost on every save.
 
-    **Why it's bearable today:** the WS chunk-push transport (item
+    **Why it was bearable:** the WS chunk-push transport (item
     #7 above) keeps the bytes-on-the-wire cost minimal — only
     changed PDF chunks transit — so the bottleneck is canvas
     paint, not network. And the page-wraps are dimensioned from
-    the viewport before paint, so scroll-position survives the
-    rebuild even with the blank moment in between.
+    the viewport before paint, so scroll-position survives a
+    rebuild.
 
-    **What would help, in rough order of value vs. cost:**
+    **Shipped:**
 
-    - **IntersectionObserver-gated canvas paint.** Render only
-      the page-wraps currently in (or near) the viewport.
-      Off-screen wraps get the dimensioned placeholder + a render
-      callback that fires when they scroll in. Same approach
-      mainstream PDF viewers use. Probably 80% of the win.
+    - **IntersectionObserver-gated canvas paint.** Each page now
+      gets a dimensioned placeholder up front; an
+      `IntersectionObserver` (`_attachRenderObserver`) rasterizes a
+      page's canvas (`paintPage`) only as it nears the viewport,
+      and cancels the in-flight `RenderTask` if it scrolls away
+      before the raster starts. The visible page is painted
+      eagerly so the update lands immediately. Text layers stay
+      eager because Ctrl+F search (`_runSearch`) walks every page's
+      text layer. The bulk of the win for long docs.
 
-    - **Off-screen swap.** Build the new canvases into a detached
-      DocumentFragment, then swap them in atomically once they're
-      all ready, so the user never sees the blank intermediate
-      state. Cheap, mostly cosmetic.
+    - **Off-screen swap.** Already in place: `renderAllPages`
+      builds the new wraps into a detached node and
+      `replaceChildren`s atomically, so the old render stays up
+      until the new layout is ready — no blank intermediate.
 
-    - **Reuse canvases when only chunks changed.** If the new
-      manifest's `pdfSize` and per-page geometry match the old,
-      re-paint into existing canvases rather than tearing them
-      down and rebuilding the DOM. Subtler — needs PDF.js to
-      cancel the previous page render before issuing the new one.
+    **Still open, in rough order of value vs. cost:**
+
+    - **Reuse canvases when only chunks changed (option B).** Skip
+      re-rendering pages whose content is unchanged on reload.
+      Needs a reliable per-page change signal — the manifest is
+      object-level, not page-level (`pdf_chunks.py` deliberately
+      doesn't decode the page tree), so this most likely means
+      emitting a per-page content hash server-side. Subtler; only
+      pays off on top of the lazy paint above.
 
     - **Web worker rendering.** PDF.js v5 supports OffscreenCanvas
       rendering off the main thread. Mostly avoids main-thread
-      jank during the paint storm, doesn't reduce total work.
+      jank during the paint storm, doesn't reduce total work; the
+      piece most in need of the browser-test harness (§5 #11).
 
-    None of these change the network or correctness story. They're
-    pure latency/jank improvements that get more valuable as
-    documents get longer. Tracked in
+    Neither changes the network or correctness story. They're pure
+    latency/jank improvements that get more valuable as documents
+    get longer. Tracked in
     [GitHub issue #50](https://github.com/nicklambourne/rules_latex/issues/50).
 
 ## 6. Versioning

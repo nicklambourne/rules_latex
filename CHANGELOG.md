@@ -32,6 +32,16 @@ that, expect breaking changes in any v0.x release.
   still works the same way; the behaviour and copy text are the
   only difference. See `DESIGN.md` §4.8 for the full rationale.
 
+- **Live-preview renders pages lazily.** `latex_serve_web`
+  previously re-rendered *every* PDF page into its own canvas on
+  each reload — invisible on a CV, a perceptible per-page stall on
+  a long thesis. Pages now get a dimensioned placeholder up front
+  and an `IntersectionObserver` rasterizes each canvas only as it
+  nears the viewport (cancelling the raster if it scrolls away
+  first); the visible page is painted immediately. Text layers
+  stay eager so Ctrl+F search is unaffected. No user-facing API
+  change. See `DESIGN.md` §5 #13.
+
 ### Removed
 
 - **`latex_serve` rule (system-PDF-viewer live preview).** The
