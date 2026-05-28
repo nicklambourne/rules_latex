@@ -1,0 +1,500 @@
+  /* ---------- Theme tokens ----------
+     Dark is the default. The light overrides are applied via
+     `prefers-color-scheme` when the user hasn't explicitly
+     picked a theme (data-theme attribute not "dark"), and
+     unconditionally when data-theme="light".
+
+     We deliberately keep the .page-wrap PDF surface white in
+     both themes — flipping it would invert the document
+     content, which users don't want from a preview app. */
+  :root {
+    --bg:               #2b2b2b;
+    --bg-elevated:      #1d1d1d;
+    --bg-overlay:       #1a1a1a;
+    --surface:          #262626;
+    --surface-hover:    #3a3a3a;
+    --surface-active:   #444;
+    --border:           #000;
+    --surface-border:   #3a3a3a;
+    --text:             #e8e8e8;
+    --text-muted:       #cfcfcf;
+    --text-faded:       #888;
+    --text-disabled:    #666;
+    --accent:           #4a8a78;
+    --status-ok-bg:     #1e3a1e;
+    --status-ok-text:   #b4f0b4;
+    --status-fail-bg:   #4a1818;
+    --status-fail-text: #ffb4b4;
+    --status-bld-bg:    #3a3a1e;
+    --status-bld-text:  #f0f0b4;
+    --status-idle-bg:   #333;
+    --status-idle-text: #aaa;
+    --fit-active-bg:    #2c4a40;
+    --fit-active-text:  #b4f0d0;
+    --search-noresults: #3a1a1a;
+    --selection-bg:     rgba(64, 160, 220, 0.35);
+    --find-bg:          rgba(255, 230, 100, 0.45);
+    --find-cur-bg:      rgba(255, 165, 60, 0.7);
+    --find-cur-border:  rgba(255, 200, 100, 0.95);
+    --sync-result:      #b4d8f0;
+    --page-shadow:      0 2px 8px rgba(0,0,0,0.4);
+    --dirty-marker:     #f0b840;
+  }
+  /* Light palette — applied either when the user has chosen
+     "light" explicitly OR when "auto" + system prefers light. */
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg:               #f4f4f4;
+      --bg-elevated:      #ffffff;
+      --bg-overlay:       #ededed;
+      --surface:          #ffffff;
+      --surface-hover:    #e6e6e6;
+      --surface-active:   #d8d8d8;
+      --border:           #d0d0d0;
+      --surface-border:   #d0d0d0;
+      --text:             #1d1d1d;
+      --text-muted:       #444;
+      --text-faded:       #777;
+      --text-disabled:    #b0b0b0;
+      --accent:           #2c8d85;
+      --status-ok-bg:     #d4edd4;
+      --status-ok-text:   #1d5a1d;
+      --status-fail-bg:   #f4cccc;
+      --status-fail-text: #6a1818;
+      --status-bld-bg:    #f4e8b0;
+      --status-bld-text:  #6a5a18;
+      --status-idle-bg:   #e0e0e0;
+      --status-idle-text: #555;
+      --fit-active-bg:    #d0ede2;
+      --fit-active-text:  #1a5547;
+      --search-noresults: #f4d0d0;
+      --selection-bg:     rgba(44, 141, 133, 0.25);
+      --find-bg:          rgba(255, 210, 60, 0.55);
+      --find-cur-bg:      rgba(255, 145, 30, 0.75);
+      --find-cur-border:  rgba(200, 110, 30, 0.95);
+      --sync-result:      #1d6088;
+      --page-shadow:      0 2px 8px rgba(0,0,0,0.15);
+      --dirty-marker:     #c07a18;
+    }
+  }
+  /* Explicit overrides win over both default + media query. */
+  :root[data-theme="light"] {
+    --bg:               #f4f4f4;
+    --bg-elevated:      #ffffff;
+    --bg-overlay:       #ededed;
+    --surface:          #ffffff;
+    --surface-hover:    #e6e6e6;
+    --surface-active:   #d8d8d8;
+    --border:           #d0d0d0;
+    --surface-border:   #d0d0d0;
+    --text:             #1d1d1d;
+    --text-muted:       #444;
+    --text-faded:       #777;
+    --text-disabled:    #b0b0b0;
+    --accent:           #2c8d85;
+    --status-ok-bg:     #d4edd4;
+    --status-ok-text:   #1d5a1d;
+    --status-fail-bg:   #f4cccc;
+    --status-fail-text: #6a1818;
+    --status-bld-bg:    #f4e8b0;
+    --status-bld-text:  #6a5a18;
+    --status-idle-bg:   #e0e0e0;
+    --status-idle-text: #555;
+    --fit-active-bg:    #d0ede2;
+    --fit-active-text:  #1a5547;
+    --search-noresults: #f4d0d0;
+    --selection-bg:     rgba(44, 141, 133, 0.25);
+    --find-bg:          rgba(255, 210, 60, 0.55);
+    --find-cur-bg:      rgba(255, 145, 30, 0.75);
+    --find-cur-border:  rgba(200, 110, 30, 0.95);
+    --sync-result:      #1d6088;
+    --page-shadow:      0 2px 8px rgba(0,0,0,0.15);
+    --dirty-marker:     #c07a18;
+  }
+
+  * { box-sizing: border-box; }
+  /* Explicit display values on .control-group buttons and
+     #search-bar (inline-flex / flex / etc.) outrank the
+     browser's UA hidden-attribute rule by specificity, so an
+     element with the [hidden] attribute would still render.
+     Restore that semantic globally with !important. */
+  [hidden] { display: none !important; }
+  body {
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin: 0; background: var(--bg); color: var(--text);
+    /* Flex column: header / [search-bar if open] / viewer / footer.
+       #viewer claims the remaining vertical space via flex: 1.
+       Using flex (not grid) so the search bar's `[hidden]` /
+       `display: none` collapses cleanly without leaving a dead
+       row in the layout. */
+    display: flex; flex-direction: column;
+    height: 100vh;
+  }
+  /* The middle row holds the optional TOC sidebar + the viewer.
+     #main takes the remaining vertical space from body; sidebar
+     + viewer split it horizontally. */
+  #main {
+    flex: 1 1 0; min-height: 0;
+    display: flex; flex-direction: row;
+  }
+  #sidebar {
+    width: 240px; flex: 0 0 auto;
+    overflow-y: auto;
+    background: var(--bg-elevated);
+    border-right: 1px solid var(--border);
+    padding: 8px 0;
+    font-size: 12px;
+  }
+  #sidebar[hidden] { display: none; }
+  #sidebar-header {
+    padding: 4px 14px 8px;
+    color: var(--text-faded);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 10px;
+  }
+  #toc {
+    list-style: none; margin: 0; padding: 0;
+  }
+  #toc ol {
+    list-style: none; margin: 0; padding-left: 14px;
+  }
+  #toc li { margin: 0; }
+  #toc a {
+    display: block;
+    padding: 3px 14px;
+    color: var(--text-muted);
+    text-decoration: none;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    border-left: 2px solid transparent;
+  }
+  #toc a:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+  #toc a.current {
+    background: var(--surface);
+    color: var(--text);
+    border-left-color: var(--accent);
+  }
+  #viewer { flex: 1 1 0; min-width: 0; }
+  header {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    padding: 8px 12px; background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border);
+    /* Hair-line accent stripe along the bottom of the header.
+       Subtle brand-presence — tints the "edge of chrome" with
+       the same teal as focus outlines and the TOC current-section
+       marker, so the accent reads as a consistent visual token
+       rather than a one-off detail in three unrelated places. */
+    box-shadow: inset 0 -2px 0 0 var(--accent);
+  }
+  /* Project logo on the far left of the header. Sized to the
+     header height; aspect ratio is preserved by `height: auto`.
+     The img element falls back to alt text if /_assets/logo.svg
+     somehow 404s (e.g. logo runfile didn't make it into a
+     downstream consumer's build); the layout doesn't break. */
+  #header-logo {
+    height: 22px; width: auto;
+    flex: 0 0 auto;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+  header h1 {
+    margin: 0; font-size: 13px; font-weight: 600;
+    letter-spacing: 0.02em;
+    max-width: 30vw;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #status {
+    margin-left: auto; padding: 3px 9px; border-radius: 4px;
+    font-variant-numeric: tabular-nums;
+    transition: background 0.2s;
+  }
+  #status.ok       { background: var(--status-ok-bg);   color: var(--status-ok-text); }
+  #status.fail     { background: var(--status-fail-bg); color: var(--status-fail-text); }
+  #status.building { background: var(--status-bld-bg);  color: var(--status-bld-text); }
+  #status.idle     { background: var(--status-idle-bg); color: var(--status-idle-text); }
+
+  .control-group {
+    display: flex; gap: 2px; align-items: center;
+    background: var(--surface); border: 1px solid var(--surface-border);
+    border-radius: 5px; padding: 2px;
+  }
+  .control-group > button,
+  .control-group > a {
+    background: transparent; color: var(--text); border: none;
+    padding: 3px 9px; border-radius: 3px;
+    font: inherit; cursor: pointer; line-height: 1;
+    min-width: 24px; text-align: center; text-decoration: none;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-variant-numeric: tabular-nums;
+  }
+  .control-group > button:hover,
+  .control-group > a:hover { background: var(--surface-hover); }
+  .control-group > button:active,
+  .control-group > a:active { background: var(--surface-active); }
+  .control-group > button:disabled {
+    color: var(--text-disabled); cursor: default; background: transparent;
+  }
+  .control-group > button.active {
+    background: var(--fit-active-bg); color: var(--fit-active-text);
+  }
+
+  #page-counter {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 6px; color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  #page-input {
+    background: transparent; color: inherit; border: none;
+    width: 3ch; text-align: right; padding: 0;
+    font: inherit; font-variant-numeric: tabular-nums;
+    -moz-appearance: textfield;
+  }
+  #page-input::-webkit-outer-spin-button,
+  #page-input::-webkit-inner-spin-button {
+    -webkit-appearance: none; margin: 0;
+  }
+  #page-input:focus {
+    outline: 1px solid var(--accent); outline-offset: 1px;
+    background: var(--bg-overlay);
+  }
+  #page-counter .page-sep { color: var(--text-faded); }
+  #page-total { color: var(--text-muted); min-width: 1ch; }
+
+  #viewer {
+    overflow: auto; padding: 16px; background: var(--bg);
+    text-align: center;
+    position: relative;
+  }
+  .page-wrap {
+    position: relative;
+    display: block;
+    margin: 0 auto 12px;
+    background: white;
+    box-shadow: var(--page-shadow);
+  }
+  .page-wrap canvas {
+    display: block;
+    cursor: var(--canvas-cursor, default);
+  }
+  body.synctex .page-wrap canvas { --canvas-cursor: crosshair; }
+
+  .text-layer {
+    position: absolute; inset: 0;
+    overflow: hidden;
+    opacity: 1;
+    line-height: 1.0;
+    text-align: left;
+    user-select: text;
+    --scale-factor: 1;
+  }
+  .text-layer > span,
+  .text-layer > br {
+    color: transparent;
+    position: absolute;
+    white-space: pre;
+    cursor: text;
+    transform-origin: 0% 0%;
+  }
+  .text-layer ::selection { background: var(--selection-bg); }
+  .text-layer .find-match {
+    background: var(--find-bg); border-radius: 1px;
+  }
+  .text-layer .find-match.find-match-current {
+    background: var(--find-cur-bg);
+    outline: 1px solid var(--find-cur-border);
+  }
+
+  #search-bar {
+    display: flex; gap: 6px; align-items: center;
+    padding: 6px 10px; background: var(--bg-overlay);
+    border-bottom: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+  }
+  #search-bar[hidden] { display: none; }
+  #search-input {
+    flex: 0 1 280px;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--surface-border); border-radius: 4px;
+    padding: 4px 8px; font: inherit;
+  }
+  #search-input:focus {
+    outline: 1px solid var(--accent); outline-offset: 0;
+  }
+  #search-input.no-results { background: var(--search-noresults); }
+  #search-count { color: var(--text-faded); min-width: 5ch; }
+  #search-bar button {
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--surface-border); border-radius: 4px;
+    padding: 3px 9px; font: inherit; cursor: pointer;
+    min-width: 28px;
+  }
+  #search-bar button:hover { background: var(--surface-hover); }
+  #search-bar button:disabled { color: var(--text-disabled); cursor: default; }
+
+  /* Forward-sync flash overlay: a transient highlight at the
+     synctex location, fades out over ~1.5s. Position is set in
+     JS based on the PDF.js viewport math. Colours are
+     theme-independent (sits on top of the white PDF surface). */
+  .synctex-flash {
+    position: absolute;
+    background: rgba(255, 230, 80, 0.45);
+    border: 1px solid rgba(255, 215, 0, 0.9);
+    border-radius: 2px;
+    pointer-events: none;
+    animation: synctex-flash-fade 1.5s ease-out forwards;
+  }
+  @keyframes synctex-flash-fade {
+    0%   { opacity: 0.0; }
+    15%  { opacity: 1.0; }
+    100% { opacity: 0.0; }
+  }
+  /* Empty state shown before the first successful build lands.
+     Centred vertically in the viewer, with the project logo at
+     50% opacity above the title + hint. Steady opacity (no
+     pulse) so the logo's recognisable shape reads as a calm
+     marker, not a flashing alert. */
+  #empty {
+    color: var(--text-faded);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 12px;
+    min-height: 60vh;
+    padding: 32px;
+    text-align: center;
+  }
+  #empty-logo {
+    /* Logo aspect ratio is ~0.86 (231×267 in the SVG viewBox);
+       `width: 72px` gives ~83 px tall — large enough to be
+       recognisable, small enough to not dominate. */
+    width: 72px; height: auto;
+    opacity: 0.5;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+  #empty .empty-title {
+    font-size: 14px; font-weight: 600;
+    color: var(--text-muted);
+  }
+  #empty .empty-hint {
+    font-size: 12px;
+    color: var(--text-faded);
+    max-width: 380px;
+  }
+  footer {
+    padding: 6px 12px; background: var(--bg-elevated);
+    border-top: 1px solid var(--border);
+    font-size: 12px; color: var(--text-faded);
+    min-height: 28px;
+    display: flex; gap: 12px; align-items: center;
+  }
+  #git-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+  }
+  #git-branch { color: var(--text-muted); }
+  #git-dirty { color: var(--dirty-marker); font-size: 9px; }
+  #sync-result {
+    color: var(--sync-result);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  #sync-result a { color: var(--sync-result); text-decoration: underline; }
+  /* The lookup result is rendered as <file>:<line> wrapped in a
+     clickable .sync-loc — clicking copies again to clipboard
+     (useful if the auto-copy on PDF-click got blocked, or the
+     user wants to recopy without re-clicking the canvas). The
+     adjacent .sync-copied is a small status badge that says
+     "copied" / "click to copy" depending on outcome. */
+  .sync-loc {
+    cursor: pointer;
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+  }
+  .sync-loc:hover { text-decoration-style: solid; }
+  .sync-loc:focus { outline: 1px solid var(--accent); outline-offset: 1px; }
+  .sync-copied {
+    color: var(--text-faded);
+    font-size: 10px;
+    margin-left: 6px;
+  }
+
+  /* Build-log drawer. Lives between #main and footer in the body's
+     flex column. Collapsed state shows just the header; expanded
+     reveals a fixed-height pre region underneath. Header is
+     keyboard-focusable for accessibility. */
+  #log-drawer {
+    background: var(--bg-elevated);
+    border-top: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    flex: 0 0 auto;
+    overflow: hidden;
+  }
+  #log-drawer.collapsed #log-body { display: none; }
+  #log-drawer:not(.collapsed) #log-body { display: block; }
+  #log-drawer[data-build-success="false"] #log-header {
+    color: var(--status-fail-text);
+  }
+  #log-drawer[data-build-success="false"] #log-summary::before {
+    content: "✗ ";
+    color: var(--status-fail-text);
+  }
+  #log-drawer[data-build-success="true"] #log-summary::before {
+    content: "";
+  }
+  #log-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 12px;
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+    font-size: 11px;
+    border-bottom: 1px solid transparent;
+  }
+  #log-drawer:not(.collapsed) #log-header {
+    border-bottom: 1px solid var(--border);
+  }
+  #log-header:hover { background: var(--surface-hover); }
+  #log-header:focus {
+    outline: 1px solid var(--accent); outline-offset: -1px;
+  }
+  #log-caret {
+    font-size: 9px;
+    transition: transform 0.15s ease;
+    color: var(--text-faded);
+  }
+  #log-drawer:not(.collapsed) #log-caret {
+    transform: rotate(90deg);
+  }
+  #log-title { font-weight: 600; }
+  #log-summary {
+    color: var(--text-faded);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 10px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 50vw;
+  }
+  #log-copy {
+    background: transparent; color: var(--text-faded); border: none;
+    padding: 0 6px; border-radius: 3px;
+    font: inherit; cursor: pointer;
+  }
+  #log-copy:hover { background: var(--surface-hover); color: var(--text); }
+  #log-body {
+    margin: 0; padding: 8px 12px;
+    background: var(--bg-overlay);
+    color: var(--text);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    max-height: 240px;
+    overflow: auto;
+    white-space: pre-wrap;
+    /* Slight word-break so very long unsplittable runs (paths
+       in bazel output, hash digests) don't force a horizontal
+       scrollbar across the whole drawer. */
+    overflow-wrap: anywhere;
+  }

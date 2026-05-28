@@ -97,6 +97,21 @@ def _latex_serve_web_impl(ctx):
     ws_server_lib = ctx.file._ws_server_lib
     logo = ctx.file._logo
 
+    # Live-preview client assets (serve_web.js / serve_web.css and the
+    # pure-logic modules they import). Extracted from serve_web.py.tpl so
+    # they can be unit-tested under //tests/js; the server serves each at
+    # /_assets/<basename>. Passed as a newline-separated
+    # "<basename>=<runfile_path>" manifest.
+    serve_web_assets = [
+        ctx.file._serve_web_js,
+        ctx.file._serve_web_css,
+        ctx.file._serve_web_synctex,
+    ]
+    serve_web_assets_manifest = "\n".join([
+        "{}={}".format(f.basename, f.short_path)
+        for f in serve_web_assets
+    ])
+
     # Decide whether to plumb in the serve-time cache override.
     # Only the implicit-pipeline path needs it; documents with
     # `cache=` or a toolchain bundle already have hermetic, fast
@@ -216,6 +231,7 @@ def _latex_serve_web_impl(ctx):
             "{{PRIME_USE_SYSTEM_BIBER}}": prime_use_system_biber,
             "{{PRIME_SRCS}}": "\n".join(prime_srcs_lines),
             "{{PRIME_PKG_FILES}}": "\n".join(prime_pkg_files_lines),
+            "{{SERVE_WEB_ASSETS}}": serve_web_assets_manifest,
         },
     )
 
@@ -244,7 +260,7 @@ exec "$PYTHON" "$RUNFILES/{server}" "$BUILD_WORKSPACE_DIRECTORY" "$RUNFILES" "$@
                 pdf_chunks_lib,
                 ws_server_lib,
                 logo,
-            ] + serve_cache_runfiles
+            ] + serve_web_assets + serve_cache_runfiles
         ),
     )
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
@@ -327,6 +343,23 @@ latex_serve_web = rule(
         ),
         "_serve_cache_lib": attr.label(
             default = "//tools:serve_cache.py",
+            allow_single_file = True,
+        ),
+        "_serve_web_js": attr.label(
+            doc = "Browser-side live-preview client (extracted from " +
+                  "serve_web.py.tpl). Served at /_assets/serve_web.js.",
+            default = "//latex/private:serve_web.js",
+            allow_single_file = True,
+        ),
+        "_serve_web_css": attr.label(
+            doc = "Live-preview stylesheet. Served at /_assets/serve_web.css.",
+            default = "//latex/private:serve_web.css",
+            allow_single_file = True,
+        ),
+        "_serve_web_synctex": attr.label(
+            doc = "Pure SyncTeX coordinate math imported by serve_web.js; " +
+                  "unit-tested under //tests/js.",
+            default = "//latex/private:serve_web_synctex.js",
             allow_single_file = True,
         ),
         "_pdf_chunks_lib": attr.label(

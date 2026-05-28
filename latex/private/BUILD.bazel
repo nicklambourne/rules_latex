@@ -6,5 +6,9 @@ exports_files(
     glob([
         "*.bzl",
         "*.py.tpl",
+        # serve_web client assets: extracted from serve_web.py.tpl so
+        # they can be unit-tested under //tests/js with `node --test`.
+        "*.js",
+        "*.css",
     ]),
 )

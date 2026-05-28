@@ -66,6 +66,7 @@ _PLACEHOLDERS = {
     "{{PRIME_TECTONIC_RUNFILE}}": "",
     "{{PRIME_USE_SYSTEM_BIBER}}": "",
     "{{SERVE_CACHE_RUNFILE}}": "",
+    "{{SERVE_WEB_ASSETS}}": "",
     "{{SYNCTEX_RELPATH}}": "test/doc.synctex.gz",
     "{{WATCHED_PATHS}}": "test/doc.tex",
     "{{WS_SERVER_RUNFILE}}": "_tools/ws_server.py",
