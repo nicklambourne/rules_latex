@@ -869,21 +869,26 @@ These are deliberately out of scope for v0.1 but worth flagging.
 
     **Triggers accumulating in favour of revisiting:**
 
-    - *Frontend (JS / CSS) coverage gap.* The UI overhaul series
-      (UI PRs 1–7) shipped ~1500 lines of browser-side code —
-      page navigation, in-document search, text-layer selection,
-      outline sidebar, build-log drawer, theme toggle, keyboard
-      shortcuts. None of it has automated tests because the repo
-      has no JS test harness, and adding one means either taking
-      a Bazel-managed Node toolchain (`rules_nodejs`) or driving
-      a headless browser test (Playwright via Python — which
-      means `rules_python` anyway). The Python-side `BuildState`
-      tests under `tests/py/test_build_state_*.py` exercise the
-      server contract (push transport, log retention, git info
-      caching) but stop at the JS boundary. Each new piece
-      of UI behaviour that ships without a regression test
-      widens the surface area where a future change can break
-      something silently.
+    - *Frontend (JS / CSS) coverage gap.* **Being addressed.** The
+      UI overhaul series (UI PRs 1–7) shipped ~1500 lines of
+      browser-side code with no automated tests, because the JS
+      lived inline in `serve_web.py.tpl` (nothing importable) and a
+      harness seemed to require either a Bazel-managed Node toolchain
+      (`rules_nodejs`) or Playwright-via-Python (`rules_python`).
+      Resolved without either: the client JS/CSS is now extracted
+      into ES modules under `latex/private/` (`serve_web.js`,
+      `serve_web_synctex.js`, `serve_web.css`), served at `/_assets/`
+      and inlined nowhere, and pure-logic modules are unit-tested
+      under `tests/js/` with node's built-in runner (`node --test`)
+      wrapped in an `sh_test` — exactly mirroring how the Python
+      tests run on the system `python3`, with no npm deps, no
+      `node_modules`, and no Bazel JS ruleset. Coverage is being
+      filled in incrementally (SyncTeX coordinate math first; the
+      lazy-paint render path and chunk-transport logic next). The
+      Python-side `BuildState` tests under
+      `tests/py/test_build_state_*.py` still cover the server
+      contract; DOM/PDF.js-coupled client code is exercised by the
+      live-preview smoke test in CI.
 
     - *`OffscreenCanvas` rendering* (issue #50) would push the
       JS surface area further — render workers, message-passing

@@ -42,6 +42,15 @@ that, expect breaking changes in any v0.x release.
   stay eager so Ctrl+F search is unaffected. No user-facing API
   change. See `DESIGN.md` §5 #13.
 
+- **Live-preview client JS/CSS extracted into testable modules.** The
+  ~1500-line browser client that lived inline in `serve_web.py.tpl`
+  is now real ES modules under `latex/private/` (`serve_web.js`,
+  `serve_web_synctex.js`, `serve_web.css`), served at `/_assets/`
+  instead of inlined. This adds a JS unit-test harness under
+  `tests/js/` (`node --test` via `sh_test`, no npm deps) — the JS
+  analogue of the repo's system-`python3` test convention. No
+  user-facing change to `latex_serve_web`. See `DESIGN.md` §5 #11.
+
 ### Removed
 
 - **`latex_serve` rule (system-PDF-viewer live preview).** The

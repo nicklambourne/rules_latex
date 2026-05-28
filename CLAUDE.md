@@ -71,6 +71,15 @@ buildifier --mode=fix tests/ctan/BUILD.bazel   # auto-fix one file
   the trade-off and the triggers that would justify revisiting
   (the JS test-harness gap left by the UI overhaul is recorded
   there as one such trigger).
+- **System `node`, no Bazel JS ruleset.** The `latex_serve_web`
+  browser client lives in extracted ES modules
+  (`latex/private/serve_web.js` + `serve_web_synctex.js` +
+  `serve_web.css`), served at `/_assets/` rather than inlined.
+  Pure-logic modules are unit-tested under `tests/js/` via node's
+  built-in runner (`node --test`) wrapped in an `sh_test` — the JS
+  analogue of the Python `python3 -m unittest` convention: no npm, no
+  `node_modules`, no `rules_nodejs`. DOM/PDF.js-coupled code is
+  covered by the live-preview smoke test in CI.
 - **Each `examples/<name>` is its own Bazel workspace** with its own
   `MODULE.bazel` (via `examples/MODULE.bazel`). Running `bazel build
   //examples/cv:cv` from the repo root fails with "package is

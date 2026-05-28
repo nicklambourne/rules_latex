@@ -1,0 +1,23 @@
+"""JavaScript unit tests for the live-preview client.
+
+Mirrors tests/py: an sh_test wraps node's built-in test runner
+(`node --test`) so we depend only on system node — no npm, no
+node_modules, no Bazel JS ruleset. Same stdlib-only philosophy as the
+Python tests run on the system python3. See DESIGN.md §5 #11.
+
+The pure-logic modules under //latex/private (extracted from
+serve_web.py.tpl) are the unit-test surface; DOM/PDF.js-coupled code in
+serve_web.js is exercised by the live-preview smoke test in CI.
+"""
+
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+sh_test(
+    name = "test_synctex_math",
+    srcs = ["run_node_test.sh"],
+    args = ["tests/js/serve_web_synctex.test.mjs"],
+    data = [
+        "serve_web_synctex.test.mjs",
+        "//latex/private:serve_web_synctex.js",
+    ],
+)

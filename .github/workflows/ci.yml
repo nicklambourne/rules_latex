@@ -136,10 +136,24 @@ jobs:
           curl -sf http://127.0.0.1:8765/status | python3 -c \
             'import sys, json; s=json.load(sys.stdin); assert s["last_success"] is True, s; assert s["synctex_enabled"] is False, s; print("status OK:", s)'
 
-          # Index page should import PDF.js from the locally-served
-          # path, not a CDN — that's the whole point of vendoring.
-          curl -sf http://127.0.0.1:8765/ | grep -q 'from "/_pdfjs/pdf.mjs"'
-          ! curl -sf http://127.0.0.1:8765/ | grep -q 'cdn.jsdelivr.net'
+          # Index page loads the live-preview client as an external
+          # module + stylesheet (extracted from the template so they can
+          # be unit-tested; see tests/js/). The client imports PDF.js from
+          # the locally-served path, not a CDN — the point of vendoring.
+          curl -sf http://127.0.0.1:8765/ | grep -q 'src="/_assets/serve_web.js"'
+          curl -sf http://127.0.0.1:8765/ | grep -q 'href="/_assets/serve_web.css"'
+          curl -sf http://127.0.0.1:8765/_assets/serve_web.js | grep -q 'from "/_pdfjs/pdf.mjs"'
+          ! curl -sf http://127.0.0.1:8765/_assets/serve_web.js | grep -q 'cdn.jsdelivr.net'
+
+          # The extracted live-preview client assets serve real content.
+          for asset in serve_web.js serve_web.css serve_web_synctex.js; do
+            sz="$(curl -sf -o /dev/null -w "%{size_download}" "http://127.0.0.1:8765/_assets/${asset}")"
+            if (( sz < 200 )); then
+              echo "FAIL: /_assets/${asset} too small (${sz} bytes)" >&2
+              exit 1
+            fi
+            echo "asset OK: ${asset} (${sz}B)"
+          done
 
           # The self-hosted PDF.js endpoints serve real JS.
           lib_size="$(curl -sf -o /dev/null -w "%{size_download}" http://127.0.0.1:8765/_pdfjs/pdf.mjs)"
@@ -308,14 +322,21 @@ jobs:
             sleep 1
           done
 
-      - name: Run //tests/... (Python + Starlark analysistests)
+      - name: Run //tests/... (Python + JS + Starlark tests)
         run: |
           # //tests/... covers the Python tests for the snapshot tool
-          # and the SyncTeX parser, plus the analysistests for
-          # latex_document. The //tests/ctan:* integration tests use
-          # RULES_LATEX_CTAN_MIRROR to hit the local fixture server,
-          # not real CTAN, to keep CI hermetic and flake-free.
+          # and the SyncTeX parser, the JS unit tests under //tests/js
+          # (node --test), plus the analysistests for latex_document.
+          # The //tests/ctan:* integration tests use
+          # RULES_LATEX_CTAN_MIRROR to hit the local fixture server, not
+          # real CTAN, to keep CI hermetic and flake-free.
+          #
+          # --test_env=PATH forwards the runner's PATH into test actions
+          # so the JS sh_test can find node. Bazel 9 strips PATH from the
+          # sandbox more aggressively than 8.x, and node (unlike
+          # /usr/bin/python3) isn't on the default sandbox PATH.
           bazel test //tests/... --config=ci \
+            --test_env=PATH \
             --test_env=RULES_LATEX_CTAN_MIRROR=http://127.0.0.1:8765
 
       - name: Stop CTAN fixture mirror
