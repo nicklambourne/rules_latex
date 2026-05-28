@@ -102,11 +102,7 @@ def _latex_serve_web_impl(ctx):
     # they can be unit-tested under //tests/js; the server serves each at
     # /_assets/<basename>. Passed as a newline-separated
     # "<basename>=<runfile_path>" manifest.
-    serve_web_assets = [
-        ctx.file._serve_web_js,
-        ctx.file._serve_web_css,
-        ctx.file._serve_web_synctex,
-    ]
+    serve_web_assets = ctx.files._serve_web_assets
     serve_web_assets_manifest = "\n".join([
         "{}={}".format(f.basename, f.short_path)
         for f in serve_web_assets
@@ -345,22 +341,12 @@ latex_serve_web = rule(
             default = "//tools:serve_cache.py",
             allow_single_file = True,
         ),
-        "_serve_web_js": attr.label(
-            doc = "Browser-side live-preview client (extracted from " +
-                  "serve_web.py.tpl). Served at /_assets/serve_web.js.",
-            default = "//latex/private:serve_web.js",
-            allow_single_file = True,
-        ),
-        "_serve_web_css": attr.label(
-            doc = "Live-preview stylesheet. Served at /_assets/serve_web.css.",
-            default = "//latex/private:serve_web.css",
-            allow_single_file = True,
-        ),
-        "_serve_web_synctex": attr.label(
-            doc = "Pure SyncTeX coordinate math imported by serve_web.js; " +
+        "_serve_web_assets": attr.label(
+            doc = "Live-preview client assets (serve_web*.js + " +
+                  "serve_web.css), extracted from serve_web.py.tpl and " +
+                  "served at /_assets/. Pure-logic modules are " +
                   "unit-tested under //tests/js.",
-            default = "//latex/private:serve_web_synctex.js",
-            allow_single_file = True,
+            default = "//latex/private:serve_web_client_assets",
         ),
         "_pdf_chunks_lib": attr.label(
             doc = "Pure-Python PDF chunker used to compute the " +

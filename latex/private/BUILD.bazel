@@ -12,3 +12,11 @@ exports_files(
         "*.css",
     ]),
 )
+
+# Live-preview client assets, served at /_assets/ by latex_serve_web.
+# Globbed so new pure-logic modules are picked up without touching the
+# rule. Pure modules are unit-tested under //tests/js.
+filegroup(
+    name = "serve_web_client_assets",
+    srcs = glob(["serve_web*.js"]) + ["serve_web.css"],
+)

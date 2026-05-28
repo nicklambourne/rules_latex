@@ -8,6 +8,11 @@
 
 import * as pdfjsLib from "/_pdfjs/pdf.mjs";
 import { pdfBoxToViewportRect } from "./serve_web_synctex.js";
+import {
+  paintPage as paintPageImpl,
+  renderObserverAction,
+} from "./serve_web_render.js";
+import { planRangeSegments } from "./serve_web_chunks.js";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/_pdfjs/pdf.worker.mjs";
 
 const SYNCTEX_ENABLED = window.__SERVE_CONFIG__.synctexEnabled;
@@ -134,40 +139,16 @@ class ChunkedTransport extends pdfjsLib.PDFDataRangeTransport {
   }
 
   async _assemble(begin, end) {
-    // Walk [begin, end), serving each sub-range from either the
-    // covering chunk or a /pdf Range fetch. Concatenate into one
-    // buffer for delivery.
+    // Plan the segment layout (pure; see serve_web_chunks.js), then fetch
+    // each: chunk slices from the content-addressed cache, skeleton gaps
+    // (header/xref/trailer) from /pdf via HTTP Range. Concatenate.
     const segments = [];
-    let cursor = begin;
-    // Find the first chunk whose end > begin (binary search would
-    // be overkill: 20-100 chunks per CV-sized PDF).
-    let i = 0;
-    while (i < this.sortedRanges.length && this.sortedRanges[i].end <= begin) {
-      i++;
-    }
-    while (cursor < end) {
-      if (i < this.sortedRanges.length && this.sortedRanges[i].start < end) {
-        const r = this.sortedRanges[i];
-        if (cursor < r.start) {
-          // Skeleton gap before this chunk.
-          const gapEnd = Math.min(r.start, end);
-          segments.push(await fetchPdfRange(cursor, gapEnd));
-          cursor = gapEnd;
-        } else {
-          // Inside / overlapping the chunk. Fetch the whole
-          // chunk (it's content-addressed; we'll cache it) and
-          // slice out the requested sub-range.
-          const chunkBytes = await fetchChunk(r.hash);
-          const sliceStart = cursor - r.start;
-          const sliceEnd = Math.min(end, r.end) - r.start;
-          segments.push(chunkBytes.subarray(sliceStart, sliceEnd));
-          cursor = r.start + sliceEnd;
-          if (cursor >= r.end) i++;
-        }
+    for (const seg of planRangeSegments(this.sortedRanges, begin, end)) {
+      if (seg.kind === "chunk") {
+        const chunkBytes = await fetchChunk(seg.hash);
+        segments.push(chunkBytes.subarray(seg.sliceStart, seg.sliceEnd));
       } else {
-        // Past the last chunk's end — pure skeleton.
-        segments.push(await fetchPdfRange(cursor, end));
-        cursor = end;
+        segments.push(await fetchPdfRange(seg.begin, seg.end));
       }
     }
     if (segments.length === 1) return segments[0];
@@ -358,32 +339,20 @@ async function renderAllPages(pdf) {
 // paint and the observer can't double-render. The RenderTask is stashed
 // on the wrap so _renderObserver can cancel it if the page scrolls out
 // before its raster starts.
-async function paintPage(pdf, wrap) {
-  if (wrap.dataset.rendered === "1" || wrap.dataset.rendering === "1") return;
-  wrap.dataset.rendering = "1";
-  const i = parseInt(wrap.dataset.pageNumber, 10);
-  const canvas = wrap.querySelector("canvas");
-  try {
+function paintPage(pdf, wrap) {
+  // Delegate the idempotent state machine to serve_web_render.js; supply
+  // the PDF.js-specific raster as an injected, async renderPage closure
+  // (getPage is async, so the RenderTask isn't available synchronously).
+  return paintPageImpl(wrap, async (w) => {
+    const i = parseInt(w.dataset.pageNumber, 10);
+    const canvas = w.querySelector("canvas");
     const page = await pdf.getPage(i);
     const viewport = page.getViewport({ scale });
     const dpr = window.devicePixelRatio || 1;
     const ctx = canvas.getContext("2d");
     const transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
-    const task = page.render({ canvasContext: ctx, viewport, transform });
-    wrap._renderTask = task;
-    await task.promise;
-    wrap.dataset.rendered = "1";
-  } catch (err) {
-    // RenderingCancelledException is the expected outcome when a page
-    // scrolls out before its paint starts; anything else is a real
-    // failure worth surfacing.
-    if (!(err && err.name === "RenderingCancelledException")) {
-      console.warn(`page ${i} render failed:`, err);
-    }
-  } finally {
-    wrap.dataset.rendering = "";
-    wrap._renderTask = null;
-  }
+    return page.render({ canvasContext: ctx, viewport, transform });
+  });
 }
 
 let _renderObserver = null;
@@ -397,11 +366,11 @@ function _attachRenderObserver(pdf) {
   if (_renderObserver) _renderObserver.disconnect();
   _renderObserver = new IntersectionObserver((entries) => {
     for (const entry of entries) {
-      const wrap = entry.target;
-      if (entry.isIntersecting) {
-        paintPage(pdf, wrap);
-      } else if (wrap.dataset.rendered !== "1" && wrap._renderTask) {
-        try { wrap._renderTask.cancel(); } catch (e) { /* ignore */ }
+      const action = renderObserverAction(entry);
+      if (action === "paint") {
+        paintPage(pdf, entry.target);
+      } else if (action === "cancel") {
+        try { entry.target._renderTask.cancel(); } catch (e) { /* ignore */ }
       }
     }
   }, { root: viewer, rootMargin: "100% 0px" });

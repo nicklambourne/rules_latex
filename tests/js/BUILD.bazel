@@ -21,3 +21,23 @@ sh_test(
         "//latex/private:serve_web_synctex.js",
     ],
 )
+
+sh_test(
+    name = "test_render",
+    srcs = ["run_node_test.sh"],
+    args = ["tests/js/serve_web_render.test.mjs"],
+    data = [
+        "serve_web_render.test.mjs",
+        "//latex/private:serve_web_render.js",
+    ],
+)
+
+sh_test(
+    name = "test_chunks",
+    srcs = ["run_node_test.sh"],
+    args = ["tests/js/serve_web_chunks.test.mjs"],
+    data = [
+        "serve_web_chunks.test.mjs",
+        "//latex/private:serve_web_chunks.js",
+    ],
+)

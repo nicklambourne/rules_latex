@@ -882,9 +882,10 @@ These are deliberately out of scope for v0.1 but worth flagging.
       under `tests/js/` with node's built-in runner (`node --test`)
       wrapped in an `sh_test` — exactly mirroring how the Python
       tests run on the system `python3`, with no npm deps, no
-      `node_modules`, and no Bazel JS ruleset. Coverage is being
-      filled in incrementally (SyncTeX coordinate math first; the
-      lazy-paint render path and chunk-transport logic next). The
+      `node_modules`, and no Bazel JS ruleset. Coverage so far: the
+      SyncTeX coordinate math, the lazy-paint render state machine +
+      observer decision (`serve_web_render.js`), and the
+      ChunkedTransport byte-range planner (`serve_web_chunks.js`). The
       Python-side `BuildState` tests under
       `tests/py/test_build_state_*.py` still cover the server
       contract; DOM/PDF.js-coupled client code is exercised by the
