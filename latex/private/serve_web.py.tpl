@@ -2091,6 +2091,12 @@ async function renderDocument() {{
 }}
 
 async function renderAllPages(pdf) {{
+  // Lazy paint: every page gets a dimensioned placeholder (a sized
+  // canvas + an eagerly-rendered text layer) up front, but the canvas
+  // pixels are rasterized on demand by _renderObserver as pages near
+  // the viewport — so a reload repaints only what's visible instead of
+  // every page. Text layers stay eager because Ctrl+F search
+  // (_runSearch) walks every page's text layer. See DESIGN.md §5 #13.
   const prevScroll = {{ top: viewer.scrollTop, left: viewer.scrollLeft }};
   const fresh = document.createElement("div");
   const dpr = window.devicePixelRatio || 1;
@@ -2116,9 +2122,9 @@ async function renderAllPages(pdf) {{
     canvas.style.width = `${{viewport.width}}px`;
     canvas.style.height = `${{viewport.height}}px`;
     canvas.dataset.pageNumber = String(i);
-    const ctx = canvas.getContext("2d");
-    const transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
-    await page.render({{ canvasContext: ctx, viewport, transform }}).promise;
+    // Record the viewport at layout time (not paint time) so synctex
+    // reverse-click and forward-sync resolve coordinates even before
+    // the page's canvas has been rasterized.
     canvasViewports.set(canvas, viewport);
     if (SYNCTEX_ENABLED) {{
       canvas.addEventListener("click", onCanvasClick);
@@ -2150,10 +2156,75 @@ async function renderAllPages(pdf) {{
   // Re-attach IntersectionObserver to the new page wraps so the
   // page counter tracks scroll position.
   _attachPageObserver();
+  // Attach the render observer, then paint the current page eagerly so
+  // the visible update lands immediately; the observer fills in the
+  // rest as they scroll into view.
+  _attachRenderObserver(pdf);
+  const currentWrap = viewer.querySelector(
+    `.page-wrap[data-page-number="${{currentPageNum}}"]`,
+  );
+  if (currentWrap) paintPage(pdf, currentWrap);
   // Re-run any active search against the freshly-rendered text
   // layers. If no search is active this is a no-op.
   if (_searchQuery) _runSearch();
   await refreshStatus();
+}}
+
+// Rasterize one page's canvas into its placeholder. Idempotent: a page
+// already painted (or mid-paint) is skipped, so the eager current-page
+// paint and the observer can't double-render. The RenderTask is stashed
+// on the wrap so _renderObserver can cancel it if the page scrolls out
+// before its raster starts.
+async function paintPage(pdf, wrap) {{
+  if (wrap.dataset.rendered === "1" || wrap.dataset.rendering === "1") return;
+  wrap.dataset.rendering = "1";
+  const i = parseInt(wrap.dataset.pageNumber, 10);
+  const canvas = wrap.querySelector("canvas");
+  try {{
+    const page = await pdf.getPage(i);
+    const viewport = page.getViewport({{ scale }});
+    const dpr = window.devicePixelRatio || 1;
+    const ctx = canvas.getContext("2d");
+    const transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
+    const task = page.render({{ canvasContext: ctx, viewport, transform }});
+    wrap._renderTask = task;
+    await task.promise;
+    wrap.dataset.rendered = "1";
+  }} catch (err) {{
+    // RenderingCancelledException is the expected outcome when a page
+    // scrolls out before its paint starts; anything else is a real
+    // failure worth surfacing.
+    if (!(err && err.name === "RenderingCancelledException")) {{
+      console.warn(`page ${{i}} render failed:`, err);
+    }}
+  }} finally {{
+    wrap.dataset.rendering = "";
+    wrap._renderTask = null;
+  }}
+}}
+
+let _renderObserver = null;
+
+// Observe page-wraps and paint each as it nears the viewport. The
+// rootMargin pre-paints roughly one screenful ahead so scrolling
+// rarely catches a blank page. A page that scrolls back out before its
+// raster starts has its in-flight RenderTask cancelled to avoid burning
+// work off-screen; it repaints if scrolled to again.
+function _attachRenderObserver(pdf) {{
+  if (_renderObserver) _renderObserver.disconnect();
+  _renderObserver = new IntersectionObserver((entries) => {{
+    for (const entry of entries) {{
+      const wrap = entry.target;
+      if (entry.isIntersecting) {{
+        paintPage(pdf, wrap);
+      }} else if (wrap.dataset.rendered !== "1" && wrap._renderTask) {{
+        try {{ wrap._renderTask.cancel(); }} catch (e) {{ /* ignore */ }}
+      }}
+    }}
+  }}, {{ root: viewer, rootMargin: "100% 0px" }});
+  for (const wrap of viewer.querySelectorAll(".page-wrap")) {{
+    _renderObserver.observe(wrap);
+  }}
 }}
 
 // Cached latest /status response. The status pill ticks every
