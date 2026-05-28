@@ -322,14 +322,21 @@ jobs:
             sleep 1
           done
 
-      - name: Run //tests/... (Python + Starlark analysistests)
+      - name: Run //tests/... (Python + JS + Starlark tests)
         run: |
           # //tests/... covers the Python tests for the snapshot tool
-          # and the SyncTeX parser, plus the analysistests for
-          # latex_document. The //tests/ctan:* integration tests use
-          # RULES_LATEX_CTAN_MIRROR to hit the local fixture server,
-          # not real CTAN, to keep CI hermetic and flake-free.
+          # and the SyncTeX parser, the JS unit tests under //tests/js
+          # (node --test), plus the analysistests for latex_document.
+          # The //tests/ctan:* integration tests use
+          # RULES_LATEX_CTAN_MIRROR to hit the local fixture server, not
+          # real CTAN, to keep CI hermetic and flake-free.
+          #
+          # --test_env=PATH forwards the runner's PATH into test actions
+          # so the JS sh_test can find node. Bazel 9 strips PATH from the
+          # sandbox more aggressively than 8.x, and node (unlike
+          # /usr/bin/python3) isn't on the default sandbox PATH.
           bazel test //tests/... --config=ci \
+            --test_env=PATH \
             --test_env=RULES_LATEX_CTAN_MIRROR=http://127.0.0.1:8765
 
       - name: Stop CTAN fixture mirror
