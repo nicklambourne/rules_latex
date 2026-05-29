@@ -49,7 +49,7 @@ LaTeX install. `bazel build //:cv` works on a fresh machine.
 
     ---
 
-    `bazel run //:cv_web` stands up a localhost HTTP server with
+    `bazel run //:cv_live` stands up a localhost HTTP server with
     PDF.js rendering. Edit `cv.tex`, see the PDF update within a
     second. Click anywhere in the PDF to jump to the corresponding
     source line via SyncTeX.

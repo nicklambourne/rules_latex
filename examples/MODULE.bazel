@@ -35,6 +35,6 @@ register_toolchains("@rules_latex_tectonic_toolchains//:all")
 
 # Vendored PDF.js used by latex_live. The download is lazy: it
 # only happens when a target that actually needs it (e.g.
-# //:hello_serve_web) is built.
+# //:hello_live) is built.
 pdfjs = use_extension("@rules_latex//latex/web:extensions.bzl", "pdfjs")
 use_repo(pdfjs, "rules_latex_pdfjs")

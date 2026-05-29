@@ -112,16 +112,16 @@ jobs:
       - name: Build latex_live launcher and smoke-test endpoints
         working-directory: examples
         run: |
-          bazel build //hello:hello_serve_web //hello:hello_synctex_serve --config=ci
-          test -x bazel-bin/hello/hello_serve_web.sh
-          test -f bazel-bin/hello/hello_serve_web.py
-          grep -q '^DOCUMENT_LABEL = "@@//hello:hello_offline"' bazel-bin/hello/hello_serve_web.py
+          bazel build //hello:hello_live //hello:hello_synctex_live --config=ci
+          test -x bazel-bin/hello/hello_live.sh
+          test -f bazel-bin/hello/hello_live.py
+          grep -q '^DOCUMENT_LABEL = "@@//hello:hello_offline"' bazel-bin/hello/hello_live.py
 
           # Boot the server in the background, hit each endpoint, kill
           # it. Proves the http.server wiring works end-to-end against
           # the checked-in cache snapshot, and that the self-hosted
           # PDF.js endpoints are wired up correctly.
-          bazel run //hello:hello_serve_web > /tmp/web.log 2>&1 &
+          bazel run //hello:hello_live > /tmp/web.log 2>&1 &
           PID=$!
           # Give it a beat for the initial build to finish, then probe.
           for i in 1 2 3 4 5 6 7 8 9 10; do
@@ -200,10 +200,10 @@ jobs:
             --config=ci \
             --output_groups=+synctex
 
-          # //hello:hello_synctex_serve serves a document built with
+          # //hello:hello_synctex_live serves a document built with
           # synctex = True, on port 8766. Boot it, POST a click, expect
           # to get back (hello.tex, line) for any in-document click.
-          bazel run //hello:hello_synctex_serve > /tmp/synctex_serve.log 2>&1 &
+          bazel run //hello:hello_synctex_live > /tmp/synctex_serve.log 2>&1 &
           PID=$!
           # Wait for the server to accept connections AND for the
           # initial build to finish (last_success must be true).

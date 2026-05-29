@@ -34,10 +34,10 @@ latex_document(
     visibility = ["//visibility:public"],
 )
 
-# `bazel run //cv:cv_serve` -> in-browser live preview with SyncTeX
+# `bazel run //cv:cv_live` -> in-browser live preview with SyncTeX
 # click-to-source.
 latex_live(
-    name = "cv_serve",
+    name = "cv_live",
     document = ":cv",
     port = 8767,
 )

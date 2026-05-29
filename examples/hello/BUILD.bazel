@@ -72,7 +72,7 @@ latex_cache_snapshot(
 # in-doc search, outline sidebar, build-log drawer, and a
 # light/dark theme toggle.
 latex_live(
-    name = "hello_serve_web",
+    name = "hello_live",
     document = ":hello_offline",
 )
 
@@ -89,7 +89,7 @@ latex_document(
 )
 
 latex_live(
-    name = "hello_synctex_serve",
+    name = "hello_synctex_live",
     document = ":hello_synctex",
     port = 8766,
 )

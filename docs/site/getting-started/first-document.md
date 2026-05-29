@@ -86,9 +86,9 @@ latex_document(
     synctex = True,    # click PDF -> copy <file>:<line> to clipboard
 )
 
-# `bazel run //:cv_serve` — live preview in the browser
+# `bazel run //:cv_live` — live preview in the browser
 latex_live(
-    name = "cv_serve",
+    name = "cv_live",
     document = ":cv",
 )
 
@@ -114,7 +114,7 @@ builds are <5 seconds. The PDF lives at `bazel-bin/cv.pdf`.
 In one terminal:
 
 ```bash
-bazel run //:cv_serve
+bazel run //:cv_live
 # serving live preview at http://127.0.0.1:8765/
 ```
 

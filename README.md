@@ -128,7 +128,7 @@ document on every save and pushes the result to a localhost HTTP
 page rendered with PDF.js.
 
 ```bash
-bazel run //:cv_serve_web   # http://127.0.0.1:8765/
+bazel run //:cv_live   # http://127.0.0.1:8765/
 ```
 
 - **PDF.js, vendored** — no CDN, works on disconnected networks,
