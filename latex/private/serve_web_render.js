@@ -44,3 +44,27 @@ export function renderObserverAction(entry) {
   if (wrap.dataset.rendered !== "1" && wrap._renderTask) return "cancel";
   return "skip";
 }
+
+// Decide, per page, whether a reload can reuse the previous render's
+// `.page-wrap` (and its painted canvas) instead of rebuilding it
+// (option B, DESIGN.md §5 #13). Index-based: a page is reused only when
+// the same index exists in the previous manifest with an identical
+// content hash and geometry. Page insertions/removals shift indices, so
+// affected pages re-render — correct, just not optimal. Returns an array
+// the length of `newPages` of "reuse" | "render". Pure; the caller
+// applies the DOM moves and gates on zoom (scale) separately.
+export function planPageReconciliation(oldPages, newPages) {
+  if (!Array.isArray(newPages)) return [];
+  if (!Array.isArray(oldPages)) return newPages.map(() => "render");
+  return newPages.map((np, i) => {
+    const op = oldPages[i];
+    return (
+      op &&
+      op.contentHash === np.contentHash &&
+      op.width === np.width &&
+      op.height === np.height
+    )
+      ? "reuse"
+      : "render";
+  });
+}

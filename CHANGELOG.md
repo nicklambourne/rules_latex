@@ -71,6 +71,14 @@ that, expect breaking changes in any v0.x release.
   client doesn't consume it until the reuse logic lands. See
   `DESIGN.md` §5 #13.
 
+- **Live preview reuses unchanged pages across reloads (option B
+  complete).** On a rebuild, the client diffs the manifest's per-page
+  content hashes against the previous render and moves the unchanged
+  `.page-wrap`s over — keeping their already-painted canvases — instead
+  of rebuilding and re-rasterizing them; only the edited page(s)
+  re-render. A zoom or an unresolvable page tree falls back to a full
+  re-render. Completes the §5 #13 work atop the lazy-paint change above.
+
 ### Removed
 
 - **`latex_serve` rule (system-PDF-viewer live preview).** The
