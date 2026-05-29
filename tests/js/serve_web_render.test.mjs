@@ -8,6 +8,8 @@ import {
   paintPage,
   renderObserverAction,
   planPageReconciliation,
+  newRenderStats,
+  recordRenderTiming,
 } from "../../latex/private/serve_web_render.js";
 
 const PG = (hash, width = 612, height = 792) => ({ contentHash: hash, width, height });
@@ -128,4 +130,28 @@ test("planPageReconciliation: no previous render -> everything renders", () => {
 
 test("planPageReconciliation: no new page index -> empty plan (no reuse)", () => {
   assert.deepEqual(planPageReconciliation([PG("a")], null), []);
+});
+
+test("newRenderStats starts empty", () => {
+  assert.deepEqual(newRenderStats(), {
+    count: 0,
+    totalMs: 0,
+    avgMs: 0,
+    maxMs: 0,
+    slowestPage: null,
+    slowCount: 0,
+  });
+});
+
+test("recordRenderTiming aggregates count/avg/max and flags slow pages", () => {
+  const s = newRenderStats();
+  recordRenderTiming(s, 1, 10, 50);
+  recordRenderTiming(s, 2, 30, 50);
+  recordRenderTiming(s, 3, 80, 50); // over the 50ms threshold
+  assert.equal(s.count, 3);
+  assert.equal(s.totalMs, 120);
+  assert.equal(s.avgMs, 40);
+  assert.equal(s.maxMs, 80);
+  assert.equal(s.slowestPage, 3);
+  assert.equal(s.slowCount, 1);
 });

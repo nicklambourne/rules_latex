@@ -79,6 +79,15 @@ that, expect breaking changes in any v0.x release.
   re-render. A zoom or an unresolvable page tree falls back to a full
   re-render. Completes the §5 #13 work atop the lazy-paint change above.
 
+- **Live-preview jank mitigations + render-cost measurement.**
+  `content-visibility: auto` lets the browser skip paint/compositing of
+  off-screen pages; the render observer now defers a page's raster until
+  scrolling settles, so a fast fling-scroll no longer starts (then
+  cancels) a render for every page flown past; and per-page raster timing
+  is recorded on `window.__serveWebRenderStats` (avg / max / slow-count)
+  to inform whether off-main-thread rendering is worth its cost. See
+  `DESIGN.md` §5 #13.
+
 ### Removed
 
 - **`latex_serve` rule (system-PDF-viewer live preview).** The

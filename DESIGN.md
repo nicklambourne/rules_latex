@@ -1093,12 +1093,31 @@ These are deliberately out of scope for v0.1 but worth flagging.
       Index-based, so page insertions/removals re-render the shifted
       tail.
 
+    - **Cheap jank mitigations + measurement.** `content-visibility:
+      auto` on `.page-wrap` lets the browser skip paint/compositing of
+      off-screen pages; the render observer defers a page's raster
+      until scrolling settles (`RENDER_SETTLE_MS`) so a fast fling
+      doesn't start-then-cancel a render for every page flung past.
+      And `recordRenderTiming` keeps a rolling per-page raster-cost
+      aggregate on `window.__serveWebRenderStats` — the data needed to
+      decide whether off-main-thread rendering is worth its cost, now
+      that lazy paint + page reuse already minimise how much
+      rasterises.
+
     **Still open:**
 
-    - **Web worker rendering.** PDF.js v5 supports OffscreenCanvas
-      rendering off the main thread. Mostly avoids main-thread
-      jank during the paint storm, doesn't reduce total work; the
-      piece most in need of the browser-test harness (§5 #11).
+    - **Web worker rendering (gated on measurement).** Move the
+      canvas rasterisation off the main thread — a dedicated worker
+      running PDF.js against `OffscreenCanvas`es transferred from the
+      main thread. Avoids main-thread jank during a heavy paint but
+      doesn't reduce total work, and carries real cost: a second
+      PDF.js instance, a message protocol, per-page canvas transfer,
+      and fallback paths for browsers without OffscreenCanvas
+      transfer. It's also the piece most in need of a browser-test
+      harness (§5 #11) — invisible to `node --test`. With lazy paint +
+      page reuse + the mitigations above already shipped, pursue this
+      only if `__serveWebRenderStats` shows real single-page jank on
+      representative documents.
 
     Neither changes the network or correctness story. They're pure
     latency/jank improvements that get more valuable as documents

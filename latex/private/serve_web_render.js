@@ -68,3 +68,35 @@ export function planPageReconciliation(oldPages, newPages) {
       : "render";
   });
 }
+
+// --- render timing (option 0: measure before going off-thread) ---
+
+// A fresh render-timing aggregate. serve_web.js exposes it on
+// window.__serveWebRenderStats so the maintainer can inspect real-document
+// raster cost (avg / max / slow-count) and decide whether off-main-thread
+// rendering (option 2, DESIGN.md §5 #13) is worth its complexity.
+export function newRenderStats() {
+  return {
+    count: 0,
+    totalMs: 0,
+    avgMs: 0,
+    maxMs: 0,
+    slowestPage: null,
+    slowCount: 0,
+  };
+}
+
+// Fold one page's raster duration into the aggregate. Pure (mutates and
+// returns `stats`); `slowMs` is the per-frame jank threshold above which a
+// render is counted as "slow".
+export function recordRenderTiming(stats, pageNum, ms, slowMs = 50) {
+  stats.count += 1;
+  stats.totalMs += ms;
+  stats.avgMs = stats.totalMs / stats.count;
+  if (ms > stats.maxMs) {
+    stats.maxMs = ms;
+    stats.slowestPage = pageNum;
+  }
+  if (ms > slowMs) stats.slowCount += 1;
+  return stats;
+}
