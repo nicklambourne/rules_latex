@@ -275,6 +275,11 @@
     margin: 0 auto 12px;
     background: white;
     box-shadow: var(--page-shadow);
+    /* Skip rendering (paint + compositing) of off-screen pages. The wrap
+       carries an explicit inline width/height, so layout and scroll
+       height stay stable while the content is skipped. Cheap win on long
+       documents; complements the IntersectionObserver-gated canvas paint. */
+    content-visibility: auto;
   }
   .page-wrap canvas {
     display: block;

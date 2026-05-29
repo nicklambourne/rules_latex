@@ -12,11 +12,18 @@ import {
   paintPage as paintPageImpl,
   renderObserverAction,
   planPageReconciliation,
+  newRenderStats,
+  recordRenderTiming,
 } from "./serve_web_render.js";
 import { planRangeSegments } from "./serve_web_chunks.js";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/_pdfjs/pdf.worker.mjs";
 
 const SYNCTEX_ENABLED = window.__SERVE_CONFIG__.synctexEnabled;
+// Render-timing aggregate (option 0 — measure before committing to
+// off-main-thread rendering). Inspect in the console via
+// `__serveWebRenderStats`; set `__SERVE_DEBUG__ = true` for per-page logs.
+const _renderStats = newRenderStats();
+window.__serveWebRenderStats = _renderStats;
 const viewer = document.getElementById("viewer");
 const statusEl = document.getElementById("status");
 const syncResultEl = document.getElementById("sync-result");
@@ -386,26 +393,59 @@ function paintPage(pdf, wrap) {
     const dpr = window.devicePixelRatio || 1;
     const ctx = canvas.getContext("2d");
     const transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
-    return page.render({ canvasContext: ctx, viewport, transform });
+    const t0 = performance.now();
+    const task = page.render({ canvasContext: ctx, viewport, transform });
+    // Record raster duration on success (ignore cancels/failures) so the
+    // maintainer can measure real jank before weighing option 2.
+    task.promise.then(
+      () => {
+        const ms = performance.now() - t0;
+        recordRenderTiming(_renderStats, i, ms);
+        if (window.__SERVE_DEBUG__) {
+          console.debug(`page ${i} rasterized in ${ms.toFixed(1)}ms`);
+        }
+      },
+      () => {},
+    );
+    return task;
   });
 }
 
 let _renderObserver = null;
 
-// Observe page-wraps and paint each as it nears the viewport. The
-// rootMargin pre-paints roughly one screenful ahead so scrolling
-// rarely catches a blank page. A page that scrolls back out before its
-// raster starts has its in-flight RenderTask cancelled to avoid burning
-// work off-screen; it repaints if scrolled to again.
+// How long a page must stay in (or near) the viewport before we start its
+// raster. A fast fling-scroll moves pages through the observer's margin
+// quickly; deferring the paint until scrolling settles avoids starting
+// (then immediately cancelling) a render for every page flung past. The
+// eager current-page paint in renderAllPages bypasses this for instant
+// reload feedback.
+const RENDER_SETTLE_MS = 80;
+
+// Observe page-wraps and paint each as it nears the viewport, after a
+// short settle. A page that scrolls out before its paint timer fires has
+// the timer cleared; one that scrolls out mid-raster has its in-flight
+// RenderTask cancelled. Either way it repaints if scrolled to again.
 function _attachRenderObserver(pdf) {
   if (_renderObserver) _renderObserver.disconnect();
   _renderObserver = new IntersectionObserver((entries) => {
     for (const entry of entries) {
+      const wrap = entry.target;
       const action = renderObserverAction(entry);
       if (action === "paint") {
-        paintPage(pdf, entry.target);
-      } else if (action === "cancel") {
-        try { entry.target._renderTask.cancel(); } catch (e) { /* ignore */ }
+        if (wrap.dataset.rendered !== "1" && !wrap._paintTimer) {
+          wrap._paintTimer = setTimeout(() => {
+            wrap._paintTimer = null;
+            paintPage(pdf, wrap);
+          }, RENDER_SETTLE_MS);
+        }
+      } else {
+        if (wrap._paintTimer) {
+          clearTimeout(wrap._paintTimer);
+          wrap._paintTimer = null;
+        }
+        if (action === "cancel") {
+          try { wrap._renderTask.cancel(); } catch (e) { /* ignore */ }
+        }
       }
     }
   }, { root: viewer, rootMargin: "100% 0px" });
