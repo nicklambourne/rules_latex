@@ -13,7 +13,7 @@ exports_files(
     ]),
 )
 
-# Live-preview client assets, served at /_assets/ by latex_serve_web.
+# Live-preview client assets, served at /_assets/ by latex_live.
 # Globbed so new pure-logic modules are picked up without touching the
 # rule. Pure modules are unit-tested under //tests/js.
 filegroup(

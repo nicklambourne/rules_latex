@@ -12,7 +12,7 @@ package(default_visibility = ["//visibility:public"])
 #     and the worker behind `latex_cache_snapshot`.
 #   - tectonic_compile.py: TectonicCompile action wrapper.
 #   - serve_cache.py: serve-time persistent cache manager imported
-#     by the generated `latex_serve_web` server script. See
+#     by the generated `latex_live` server script. See
 #     latex/private/serve_web.py.tpl for how it's wired in.
 #   - pdf_chunks.py: cross-reference-stream-aware PDF chunker
 #     used by the serve script to content-address the compiled

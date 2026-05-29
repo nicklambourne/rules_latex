@@ -3,8 +3,8 @@
 #   - the README (img tag pointed at the GitHub raw URL)
 #   - the docs site (mkdocs theme logo, mirrored under
 #     docs/site/assets/logo.svg)
-#   - latex_serve_web (favicon + header logo, plumbed via
-#     `_logo` runfile in //latex/private:latex_serve_web.bzl)
+#   - latex_live (favicon + header logo, plumbed via
+#     `_logo` runfile in //latex/private:latex_live.bzl)
 #
 # Public visibility so the rule under //latex/private/ can take it
 # as a label-typed attribute default. exports_files is enough — no

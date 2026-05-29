@@ -8,6 +8,15 @@ that, expect breaking changes in any v0.x release.
 
 ### Changed
 
+- **BREAKING: renamed the `latex_serve_web` rule to `latex_live`.** The
+  live-preview rule is now loaded and called as `latex_live`
+  (`load("@rules_latex//latex:defs.bzl", "latex_live")`), and its source
+  moved to `latex/private/latex_live.bzl`. No behaviour or attribute
+  change — only the rule name. Update your `load()` and rule calls;
+  `latex_serve_web` no longer exists. (Pre-1.0, breaking changes are
+  expected in any v0.x release.) The internal server template and its
+  `/_assets/serve_web.*` routes are unchanged.
+
 - **SyncTeX reverse-sync framing: "click to jump" → "click to copy
   source location."** The in-app hint, the README, and the docs
   previously described clicking on a glyph in the preview as

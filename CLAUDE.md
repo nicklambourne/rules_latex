@@ -71,7 +71,7 @@ buildifier --mode=fix tests/ctan/BUILD.bazel   # auto-fix one file
   the trade-off and the triggers that would justify revisiting
   (the JS test-harness gap left by the UI overhaul is recorded
   there as one such trigger).
-- **System `node`, no Bazel JS ruleset.** The `latex_serve_web`
+- **System `node`, no Bazel JS ruleset.** The `latex_live`
   browser client lives in extracted ES modules
   (`latex/private/serve_web.js` + `serve_web_synctex.js` +
   `serve_web.css`), served at `/_assets/` rather than inlined.
@@ -178,7 +178,7 @@ package and reintroduce flake.
 ## Maintainer-only state
 
 - **`.github/MAINTAINER_TODO.md`** — punch list for maintainer-only
-  follow-ups (currently: capture a `latex_serve_web` screenshot for
+  follow-ups (currently: capture a `latex_live` screenshot for
   the README). Not rendered to docs site, not surfaced anywhere
   user-facing. Add items here rather than in the README.
 

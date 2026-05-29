@@ -114,7 +114,7 @@ deltas hit that bar.
 
 ## Why self-hosted PDF.js?
 
-`latex_serve_web` v0.1.x fetched PDF.js from cdn.jsdelivr.net at
+`latex_live` v0.1.x fetched PDF.js from cdn.jsdelivr.net at
 page-load. v0.2.0 vendors it from a Bazel repository rule fetching
 the pinned npm tarball. The motivations:
 

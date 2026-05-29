@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Minimal stdlib WebSocket server for ``latex_serve_web``.
+"""Minimal stdlib WebSocket server for ``latex_live``.
 
-This module implements the slice of RFC 6455 that ``latex_serve_web``
+This module implements the slice of RFC 6455 that ``latex_live``
 actually needs to push PDF-chunk deltas to the browser:
 
 * HTTP Upgrade handshake (server-side).

@@ -1,6 +1,6 @@
 """Pinned PDF.js distribution.
 
-PDF.js is the JavaScript runtime that `latex_serve_web` uses to render
+PDF.js is the JavaScript runtime that `latex_live` uses to render
 the preview PDF in the browser. We vendor it via a repository rule
 (rather than letting the browser hit cdn.jsdelivr.net at page-load
 time) so the live-preview flow works air-gapped and so the version is

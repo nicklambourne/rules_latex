@@ -13,7 +13,7 @@ jobs:
   test:
     # Build the rules, run the //tests/... unit + analysistest suites,
     # exercise the public rules against each example workspace, run the
-    # latex_test integration target, smoke-test the latex_serve_web
+    # latex_test integration target, smoke-test the latex_live
     # HTTP endpoints, drive a SyncTeX reverse-sync round-trip, and
     # assert that reproducible builds and cache-snapshot regeneration
     # are byte-identical.
@@ -109,7 +109,7 @@ jobs:
           ls -lh bazel-bin/hello/hello_offline.pdf
           file bazel-bin/hello/hello_offline.pdf | grep -q "PDF document"
 
-      - name: Build latex_serve_web launcher and smoke-test endpoints
+      - name: Build latex_live launcher and smoke-test endpoints
         working-directory: examples
         run: |
           bazel build //hello:hello_serve_web //hello:hello_synctex_serve --config=ci

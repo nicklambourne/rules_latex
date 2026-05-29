@@ -14,7 +14,7 @@ load(
     "latex_cache_snapshot",
     "latex_document",
     "latex_library",
-    "latex_serve_web",
+    "latex_live",
     "latex_test",
 )
 
@@ -71,7 +71,7 @@ latex_cache_snapshot(
 # chunks to the browser tab over WebSocket. Includes page nav,
 # in-doc search, outline sidebar, build-log drawer, and a
 # light/dark theme toggle.
-latex_serve_web(
+latex_live(
     name = "hello_serve_web",
     document = ":hello_offline",
 )
@@ -88,7 +88,7 @@ latex_document(
     deps = [":preamble"],
 )
 
-latex_serve_web(
+latex_live(
     name = "hello_synctex_serve",
     document = ":hello_synctex",
     port = 8766,

@@ -5,7 +5,7 @@ contributes, plus any options that downstream documents should inherit.
 
 `LatexDocumentInfo` carries the compile-time inputs (main file, biber binary,
 pkg_files overrides) of a `latex_document` target, so consumers like
-`latex_serve_web` can drive a parallel cache-priming invocation without
+`latex_live` can drive a parallel cache-priming invocation without
 re-introspecting attributes.
 """
 
@@ -26,7 +26,7 @@ LatexInfo = provider(
                             "Set only by `latex_document`; other rules " +
                             "that provide `LatexInfo` (`latex_library`, " +
                             "`latex_pkg`) leave it as the empty string. " +
-                            "Consumed by `latex_serve_web` to decide " +
+                            "Consumed by `latex_live` to decide " +
                             "whether to interpose a persistent serve-time " +
                             "cache snapshot via the " +
                             "`//latex:_serve_cache_override` build setting.",
