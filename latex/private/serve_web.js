@@ -11,6 +11,7 @@ import { pdfBoxToViewportRect } from "./serve_web_synctex.js";
 import {
   paintPage as paintPageImpl,
   renderObserverAction,
+  planPageReconciliation,
 } from "./serve_web_render.js";
 import { planRangeSegments } from "./serve_web_chunks.js";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/_pdfjs/pdf.worker.mjs";
@@ -234,6 +235,7 @@ async function renderDocument() {
       pdf = await loadingTask.promise;
     }
     currentDoc = pdf;
+    _manifestPages = manifest && manifest.pages ? manifest.pages : null;
     _setTotalPages(pdf.numPages);
     // Outline rendering is independent of the per-page render
     // path; kick it off in the background so the canvas paint
@@ -254,6 +256,15 @@ async function renderDocument() {
   }
 }
 
+// Per-page reconciliation state (option B): reuse a page's already-built
+// .page-wrap (and its painted canvas) across reloads when its content +
+// geometry are unchanged at the same zoom. _manifestPages is the latest
+// manifest's page index; _renderedPages is what the live DOM was built
+// from; _renderedScale guards against reusing canvases after a zoom.
+let _manifestPages = null;
+let _renderedPages = null;
+let _renderedScale = null;
+
 async function renderAllPages(pdf) {
   // Lazy paint: every page gets a dimensioned placeholder (a sized
   // canvas + an eagerly-rendered text layer) up front, but the canvas
@@ -261,10 +272,30 @@ async function renderAllPages(pdf) {
   // the viewport — so a reload repaints only what's visible instead of
   // every page. Text layers stay eager because Ctrl+F search
   // (_runSearch) walks every page's text layer. See DESIGN.md §5 #13.
+  //
+  // Reload reuse (option B): when a page's content hash + geometry are
+  // unchanged since the last render (and the zoom hasn't changed), move
+  // the existing wrap over instead of rebuilding it — keeping its painted
+  // canvas and text layer rather than re-rasterizing.
   const prevScroll = { top: viewer.scrollTop, left: viewer.scrollLeft };
   const fresh = document.createElement("div");
   const dpr = window.devicePixelRatio || 1;
+  const reusePlan = scale === _renderedScale
+    ? planPageReconciliation(_renderedPages, _manifestPages)
+    : [];
+  const oldWraps = new Map();
+  if (reusePlan.length) {
+    for (const w of viewer.querySelectorAll(".page-wrap")) {
+      oldWraps.set(parseInt(w.dataset.pageNumber, 10), w);
+    }
+  }
   for (let i = 1; i <= pdf.numPages; i++) {
+    if (reusePlan[i - 1] === "reuse" && oldWraps.has(i)) {
+      // Unchanged content at the same zoom: keep the existing wrap and
+      // whatever canvas / text-layer state it already has.
+      fresh.appendChild(oldWraps.get(i));
+      continue;
+    }
     const page = await pdf.getPage(i);
     const viewport = page.getViewport({ scale });
 
@@ -331,6 +362,10 @@ async function renderAllPages(pdf) {
   // Re-run any active search against the freshly-rendered text
   // layers. If no search is active this is a no-op.
   if (_searchQuery) _runSearch();
+  // Record what this DOM was built from so the next reload can reconcile
+  // against it (and so a later zoom invalidates reuse via the scale).
+  _renderedPages = _manifestPages;
+  _renderedScale = scale;
   await refreshStatus();
 }
 
@@ -646,6 +681,7 @@ async function _flushWsRender() {
     const loadingTask = pdfjsLib.getDocument({ range: transport });
     const pdf = await loadingTask.promise;
     currentDoc = pdf;
+    _manifestPages = manifest.pages || null;
     await renderAllPages(pdf);
   } catch (err) {
     setStatus("fail", `render error: ${err.message || err}`);

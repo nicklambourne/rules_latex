@@ -1079,20 +1079,21 @@ These are deliberately out of scope for v0.1 but worth flagging.
       `replaceChildren`s atomically, so the old render stays up
       until the new layout is ready — no blank intermediate.
 
-    **Still open, in rough order of value vs. cost:**
+    - **Reuse unchanged pages across reloads (option B).** The
+      manifest carries a per-page `{contentHash, width, height}`
+      (`PageInfo`), computed server-side by walking the PDF page tree
+      — including the compressed object stream (`/ObjStm`) tectonic
+      emits — and reusing the chunk hashes, so a page's hash changes
+      iff its content stream did (`pdf_chunks.py`). On reload the
+      client (`planPageReconciliation`) diffs the page index by
+      position and moves the unchanged `.page-wrap`s over instead of
+      rebuilding them, keeping their painted canvases; a zoom (scale
+      change) or any parse failure falls back to a full re-render. So
+      after an edit, only the changed page(s) re-rasterize.
+      Index-based, so page insertions/removals re-render the shifted
+      tail.
 
-    - **Reuse canvases when only chunks changed (option B).** Skip
-      re-rendering pages whose content is unchanged on reload.
-      **Server side shipped:** `pdf_chunks.py` now resolves the page
-      tree — including the compressed object stream (`/ObjStm`)
-      tectonic emits — and the manifest carries a per-page
-      `{contentHash, width, height}` (`PageInfo`), reusing the chunk
-      hashes so a page's hash changes iff its content stream did.
-      Best-effort: an unparseable page tree yields an empty index and
-      the client re-renders every visible page. **Remaining:** the
-      client-side reconciliation that diffs `pages[i].contentHash`
-      across reloads and reuses unchanged canvases. Only pays off on
-      top of the lazy paint above.
+    **Still open:**
 
     - **Web worker rendering.** PDF.js v5 supports OffscreenCanvas
       rendering off the main thread. Mostly avoids main-thread

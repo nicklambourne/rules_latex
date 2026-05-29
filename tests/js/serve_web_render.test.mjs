@@ -7,7 +7,10 @@ import assert from "node:assert/strict";
 import {
   paintPage,
   renderObserverAction,
+  planPageReconciliation,
 } from "../../latex/private/serve_web_render.js";
+
+const PG = (hash, width = 612, height = 792) => ({ contentHash: hash, width, height });
 
 const fakeWrap = () => ({ dataset: {}, _renderTask: null });
 const resolvedTask = () => ({ promise: Promise.resolve(), cancel() {} });
@@ -89,4 +92,40 @@ test("renderObserverAction: off-screen but already painted -> skip", () => {
 test("renderObserverAction: off-screen with nothing in flight -> skip", () => {
   const target = { dataset: {}, _renderTask: null };
   assert.equal(renderObserverAction({ isIntersecting: false, target }), "skip");
+});
+
+test("planPageReconciliation: identical manifests reuse every page", () => {
+  const old = [PG("a"), PG("b"), PG("c")];
+  const neu = [PG("a"), PG("b"), PG("c")];
+  assert.deepEqual(planPageReconciliation(old, neu), ["reuse", "reuse", "reuse"]);
+});
+
+test("planPageReconciliation: a changed page re-renders, neighbours reuse", () => {
+  const old = [PG("a"), PG("b"), PG("c")];
+  const neu = [PG("a"), PG("B2"), PG("c")];
+  assert.deepEqual(planPageReconciliation(old, neu), ["reuse", "render", "reuse"]);
+});
+
+test("planPageReconciliation: same hash but new geometry re-renders", () => {
+  const old = [PG("a", 612, 792)];
+  const neu = [PG("a", 595, 842)]; // Letter -> A4 at the same content hash
+  assert.deepEqual(planPageReconciliation(old, neu), ["render"]);
+});
+
+test("planPageReconciliation: an appended page re-renders", () => {
+  assert.deepEqual(
+    planPageReconciliation([PG("a")], [PG("a"), PG("b")]),
+    ["reuse", "render"],
+  );
+});
+
+test("planPageReconciliation: no previous render -> everything renders", () => {
+  assert.deepEqual(
+    planPageReconciliation(null, [PG("a"), PG("b")]),
+    ["render", "render"],
+  );
+});
+
+test("planPageReconciliation: no new page index -> empty plan (no reuse)", () => {
+  assert.deepEqual(planPageReconciliation([PG("a")], null), []);
 });
