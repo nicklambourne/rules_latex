@@ -513,23 +513,30 @@ tectonic's biber subprocess resolves it by basename.
 
 #### Linux arm64 gap
 
-Upstream doesn't ship a prebuilt biber for Linux arm64. The toolchain
-extension materialises biber repos only for platforms in
-`BIBER_RELEASES` — currently linux/x86_64, macos/x86_64+aarch64
-(universal), and windows/x86_64. On linux/aarch64 a document with
-`biber = True` fails at analysis time with a pointer to the
-workarounds:
+The biblatex-biber project ships no prebuilt biber for Linux arm64, but
+the gap is now mostly closed *by version*. The toolchain extension
+materialises a biber repo for any platform present in the relevant
+releases map:
 
-1. Cross-compile on linux/x86_64 (e.g. CI runs on a Graviton runner
-   but the build happens via a remote executor on x86_64).
-2. Install biber via the distro package manager and set
-   `biber_strategy = "system"` on affected targets. Less hermetic —
-   the build's behaviour depends on which biber version is on
-   `$PATH`, which may not match the rest of the pinned toolchain —
-   but unblocks Linux arm64 users today.
-3. Wait for the v0.3 plan: build biber from source via a `rules_perl`
-   integration. This is a multi-day project (Biber has 50+ CPAN
-   module deps) and not justified for v0.2.
+- **`modern_biblatex = True` (biber 2.21):** `BIBER_MODERN_RELEASES`
+  *includes* linux/aarch64 — a prebuilt 2.21 binary from CTAN's
+  `biber-linux-aarch64` package, mirrored to the `biber-mirror-v2.21`
+  release and CI-verified on the `ubuntu-24.04-arm` runner. These
+  documents build hermetically on arm64.
+- **Default bundle (biber 2.17):** `BIBER_RELEASES` does *not* include
+  linux/aarch64 — no off-the-shelf 2.17 arm64 binary exists. A
+  `biber = True` document here still fails at analysis time on arm64,
+  with a pointer to the workarounds:
+  1. Opt into `modern_biblatex = True` (uses the 2.21 aarch64 binary
+     above) — the simplest fix when the document's styles allow it.
+  2. Install biber via the distro package manager and set
+     `biber_strategy = "system"`. Less hermetic — behaviour depends on
+     the `$PATH` biber version — but unblocks arm64 today.
+  3. Cross-compile on linux/x86_64 (e.g. via a remote executor).
+  4. Source a 2.17 aarch64 biber (e.g. from TeX Live 2022's
+     `aarch64-linux`) and add it to `BIBER_RELEASES`, or build biber
+     from source via `rules_perl` + `pp` — heavier, and now only worth
+     it for the 2.17 path specifically.
 
 ### 4.10 Biber/biblatex version coupling, and the upstream-bundle staleness
 
@@ -840,13 +847,19 @@ These are deliberately out of scope for v0.1 but worth flagging.
    bundle" options remain open for the day a non-biblatex package
    actually needs them. Tracked in
    [GitHub issue #1](https://github.com/nicklambourne/rules_latex/issues/1).
-9. **Biber from source for linux/aarch64.** Upstream ships no
-   prebuilt biber for that triple. Building biber from source means
-   resolving its 50+ CPAN dependencies via a Bazel-friendly Perl
-   ecosystem (most likely `rules_perl` plus a vendored Perl), then
-   driving `pp` (the PAR packager) to bundle everything into a
-   single executable. Not trivial, but the only fully-hermetic
-   answer for that platform. Tracked in
+9. **Biber on linux/aarch64.** **Partially resolved.** The
+   biblatex-biber project ships no prebuilt arm64 binary, but CTAN's
+   `biber-linux-aarch64` package provides a prebuilt biber **2.21**;
+   we mirror it (`biber-mirror-v2.21`) and wire it into
+   `BIBER_MODERN_RELEASES`, so `modern_biblatex = True` documents now
+   build hermetically on linux/aarch64 — verified end-to-end on the
+   `ubuntu-24.04-arm` CI runner. **Still open:** the default-bundle
+   path pins biber **2.17**, for which no off-the-shelf aarch64 binary
+   exists, so those documents still need `biber_strategy = "system"`
+   (or `modern_biblatex`) on arm64. Closing it means sourcing a 2.17
+   aarch64 build (e.g. TeX Live 2022's `aarch64-linux`) or building
+   biber from source (`rules_perl` + `pp`) — the latter is heavier and
+   now only worth it for the 2.17 path. Tracked in
    [GitHub issue #10](https://github.com/nicklambourne/rules_latex/issues/10).
 10. **Rule-version env var to prevent declared-output cache
     poisoning.** **Shipped in v0.4.** The

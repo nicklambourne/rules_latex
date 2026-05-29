@@ -42,11 +42,14 @@ BIBER_MODERN_MIRROR_TAG = "biber-mirror-v" + BIBER_MODERN_VERSION
 # universal binary that works on both Intel and Apple Silicon so it
 # covers both cpu entries.
 #
-# Linux arm64 is not present because upstream doesn't ship a prebuilt
-# binary. Documents that need biber on linux/aarch64 must either use
-# the `biber_strategy = "system"` escape hatch (less hermetic) or be
-# built on a different platform until v0.3 adds biber-from-source for
-# that triple. See DESIGN.md §4.9.
+# Linux arm64 is intentionally absent from this (2.17 / default-bundle)
+# map: the biblatex-biber project ships no prebuilt arm64 binary, and
+# there's no off-the-shelf aarch64 build of this older version. Default-
+# bundle documents on linux/aarch64 therefore still need the
+# `biber_strategy = "system"` escape hatch — or `modern_biblatex = True`,
+# which uses biber 2.21 (BIBER_MODERN_RELEASES below *does* cover
+# aarch64). Closing the 2.17/aarch64 gap is tracked in DESIGN.md §5 #9 /
+# issue #10.
 BIBER_RELEASES = {
     ("linux", "x86_64"): struct(
         asset = "biber-linux_x86_64.tar.gz",
@@ -76,6 +79,18 @@ BIBER_MODERN_RELEASES = {
     ("linux", "x86_64"): struct(
         asset = "biber-linux_x86_64.tar.gz",
         sha256 = "f00dfa29c7f798695339d9155abefcc0da4bd2fb1b4b2d90e46693f261b0a26e",
+        exe = "biber",
+    ),
+    # The biber project ships no arm64 binary, but CTAN's
+    # `biber-linux-aarch64` package provides a prebuilt biber 2.21 for
+    # this triple. Mirrored from
+    # mirrors.ctan.org/biblio/biber/biber-linux-aarch64/biber-2.21-linux-aarch64.tar
+    # (re-gzipped to the standard asset layout). Verified end-to-end on
+    # the ubuntu-24.04-arm CI runner. Only the modern (2.21) stack has an
+    # aarch64 biber; the 2.17 default-bundle stack does not (see above).
+    ("linux", "aarch64"): struct(
+        asset = "biber-linux_aarch64.tar.gz",
+        sha256 = "515a3ffed550a6e71e69c712bff338ce261122de4af2bdb650805d9e23c95c0c",
         exe = "biber",
     ),
     ("macos", "x86_64"): struct(
