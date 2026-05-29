@@ -59,7 +59,7 @@ bzl_library(
         "//latex/private:latex_document.bzl",
         "//latex/private:latex_library.bzl",
         "//latex/private:latex_pkg.bzl",
-        "//latex/private:latex_serve_web.bzl",
+        "//latex/private:latex_live.bzl",
         "//latex/private:latex_test.bzl",
         # latex_document.bzl loads BuildSettingInfo from skylib's
         # common_settings.bzl for the _serve_cache_override build

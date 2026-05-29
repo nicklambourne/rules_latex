@@ -1,7 +1,7 @@
 """The `pdfjs` module extension.
 
 Materialises the `@rules_latex_pdfjs` repository that holds the pinned
-PDF.js distribution used by `latex_serve_web`. Consumers' MODULE.bazel
+PDF.js distribution used by `latex_live`. Consumers' MODULE.bazel
 does:
 
     pdfjs = use_extension("@rules_latex//latex/web:extensions.bzl", "pdfjs")

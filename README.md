@@ -115,7 +115,7 @@ full [user guide](https://nicklambourne.github.io/rules_latex/).
 | [`latex_pkg`](./latex/private/latex_pkg.bzl) | Group non-LaTeX resources (images, fonts, `.bib` files) that documents may need. |
 | [`latex_test`](./latex/private/latex_test.bzl) | Compile a document under `bazel test` and assert on patterns in the tectonic log file (e.g. fail on `LaTeX Error:`). |
 | [`latex_cache_snapshot`](./latex/private/latex_cache_snapshot.bzl) | `bazel run`-able command that captures a small, per-document offline cache snapshot for hermetic builds. |
-| [`latex_serve_web`](./latex/private/latex_serve_web.bzl) | `bazel run`-able live-preview loop: watches the document's sources, rebuilds via `bazel build` on every save, and serves the result as a localhost HTTP page rendered with PDF.js — Overleaf-style in-browser preview with auto-refresh, search, outline sidebar, and a build-log drawer. |
+| [`latex_live`](./latex/private/latex_live.bzl) | `bazel run`-able live-preview loop: watches the document's sources, rebuilds via `bazel build` on every save, and serves the result as a localhost HTTP page rendered with PDF.js — Overleaf-style in-browser preview with auto-refresh, search, outline sidebar, and a build-log drawer. |
 
 All six are loaded from `@rules_latex//latex:defs.bzl`.
 
@@ -123,7 +123,7 @@ All six are loaded from `@rules_latex//latex:defs.bzl`.
 
 ### Live preview
 
-`latex_serve_web` is a `bazel run`-able watcher that rebuilds your
+`latex_live` is a `bazel run`-able watcher that rebuilds your
 document on every save and pushes the result to a localhost HTTP
 page rendered with PDF.js.
 

@@ -5,7 +5,7 @@ Load symbols from here:
     load("@rules_latex//latex:defs.bzl",
          "latex_document", "latex_library", "latex_pkg",
          "latex_test", "latex_cache_snapshot",
-         "latex_serve_web")
+         "latex_live")
 """
 
 load(
@@ -25,12 +25,12 @@ load(
     _latex_library = "latex_library",
 )
 load(
-    "//latex/private:latex_pkg.bzl",
-    _latex_pkg = "latex_pkg",
+    "//latex/private:latex_live.bzl",
+    _latex_live = "latex_live",
 )
 load(
-    "//latex/private:latex_serve_web.bzl",
-    _latex_serve_web = "latex_serve_web",
+    "//latex/private:latex_pkg.bzl",
+    _latex_pkg = "latex_pkg",
 )
 load(
     "//latex/private:latex_test.bzl",
@@ -41,6 +41,6 @@ latex_cache_snapshot = _latex_cache_snapshot
 latex_document = _latex_document
 latex_library = _latex_library
 latex_pkg = _latex_pkg
-latex_serve_web = _latex_serve_web
+latex_live = _latex_live
 latex_test = _latex_test
 LatexInfo = _LatexInfo

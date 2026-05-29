@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PDF chunking for incremental live-preview transfer.
 
-This module is consumed by ``latex_serve_web``'s server. After each
+This module is consumed by ``latex_live``'s server. After each
 successful compile, the server runs ``compute_manifest`` on the
 output PDF to produce a content-addressed view of the document:
 each indirect PDF object becomes a chunk identified by the SHA-256

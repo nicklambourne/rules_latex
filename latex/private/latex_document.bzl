@@ -455,7 +455,7 @@ def _latex_document_impl(ctx):
     bundle_manifest = ctx.file._bundle_manifest
 
     # Read the serve-time cache-override build setting. Non-empty
-    # only when `latex_serve_web` is driving the build; see
+    # only when `latex_live` is driving the build; see
     # //latex:_serve_cache_override for the design rationale.
     serve_cache_override = (
         ctx.attr._serve_cache_override[BuildSettingInfo].value
@@ -481,7 +481,7 @@ def _latex_document_impl(ctx):
         # Serve-time fast path: read the snapshot at an absolute
         # path that's not in the Bazel input graph. The compile
         # action is invalidated by an --action_env nonce passed by
-        # latex_serve_web; see the build-setting comment in
+        # latex_live; see the build-setting comment in
         # //latex:BUILD.bazel.
         offline_mode = "serve_cache_override"
         offline_source_path = serve_cache_override
@@ -533,7 +533,7 @@ def _latex_document_impl(ctx):
 
     # Underlying offline strategy, ignoring any serve-time override.
     # This is what gets surfaced on LatexInfo so consumers like
-    # `latex_serve_web` can decide whether to interpose their own
+    # `latex_live` can decide whether to interpose their own
     # cache management. The serve-time override is by definition
     # ephemeral and only meaningful inside the running serve loop.
     if user_cache:
@@ -600,7 +600,7 @@ latex_document = rule(
             doc = "When True, tectonic is invoked with --synctex and the " +
                   "resulting `<name>.synctex.gz` is exposed as an additional " +
                   "output (also surfaced via the `synctex` OutputGroup). " +
-                  "Consumed by `latex_serve_web` for reverse-sync " +
+                  "Consumed by `latex_live` for reverse-sync " +
                   "lookups (PDF click -> copy `<file>:<line>` to the " +
                   "clipboard; the browser can't drive your editor, so " +
                   "the click doesn't *jump*) and forward-sync (editor -> " +
@@ -692,7 +692,7 @@ latex_document = rule(
         "_serve_cache_override": attr.label(
             doc = "Private build-setting dependency. Holds an absolute " +
                   "filesystem path to a pre-primed tectonic cache snapshot " +
-                  "when set by `latex_serve_web`. Not intended for direct " +
+                  "when set by `latex_live`. Not intended for direct " +
                   "use; see //latex:_serve_cache_override.",
             default = "//latex:_serve_cache_override",
             providers = [BuildSettingInfo],

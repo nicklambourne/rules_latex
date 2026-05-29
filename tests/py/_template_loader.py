@@ -1,7 +1,7 @@
 """Load `latex/private/serve_web.py.tpl` as an importable module.
 
 The serve_web Python code lives in a `.py.tpl` template that the
-`latex_serve_web` rule expands via `ctx.actions.expand_template`
+`latex_live` rule expands via `ctx.actions.expand_template`
 substitutions. To unit-test the helpers inside it (BuildState,
 _combine_output, etc.) without spinning up the full rule, we read
 the template, substitute placeholders with safe defaults, write
@@ -12,7 +12,7 @@ dataclass introspection of `__module__` works correctly — without
 it, `@dataclass` decorators raise at parse time.
 
 The placeholder set must stay in sync with the substitution map in
-`latex/private/latex_serve_web.bzl`; new placeholders added to the
+`latex/private/latex_live.bzl`; new placeholders added to the
 template need a default here. The defaults are deliberately
 benign: empty strings for the implicit-pipeline-only fields,
 numerals for the int-coerced ones, sentinel paths for the
@@ -42,7 +42,7 @@ _TEMPLATE_PATH = (
 )
 
 # Keep alphabetised for grep-ability. Defaults mirror what
-# latex_serve_web.bzl would produce for a minimal latex_document
+# latex_live.bzl would produce for a minimal latex_document
 # target with no cache configured.
 _PLACEHOLDERS = {
     "{{DEBOUNCE_MAX_MS}}": "1500",

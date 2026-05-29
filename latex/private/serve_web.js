@@ -1,4 +1,4 @@
-// serve_web.js — browser-side live-preview client for latex_serve_web.
+// serve_web.js — browser-side live-preview client for latex_live.
 //
 // Extracted from serve_web.py.tpl; the server inlines this file (and
 // serve_web.css) into the page at serve time, and serves them at

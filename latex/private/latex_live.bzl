@@ -1,6 +1,6 @@
-"""The `latex_serve_web` rule.
+"""The `latex_live` rule.
 
-`latex_serve_web` is the live-preview rule. It runs a small HTTP
+`latex_live` is the live-preview rule. It runs a small HTTP
 server on localhost, watches the document's transitive sources,
 rebuilds via `bazel build` on every save, and pushes the changed
 PDF chunks to the connected browser tab over WebSocket (with SSE
@@ -12,7 +12,7 @@ Typical usage:
 
     latex_document(name = "cv", main = "cv.tex", srcs = [...], cache = "cv_cache.tar.gz")
 
-    latex_serve_web(
+    latex_live(
         name = "cv_web",
         document = ":cv",
     )
@@ -55,7 +55,7 @@ Design notes:
 
 load("//latex:providers.bzl", "LatexDocumentInfo", "LatexInfo")
 
-def _latex_serve_web_impl(ctx):
+def _latex_live_impl(ctx):
     info = ctx.attr.document[LatexInfo]
     srcs = info.srcs.to_list()
 
@@ -133,7 +133,7 @@ def _latex_serve_web_impl(ctx):
     if enable_serve_cache:
         if LatexDocumentInfo not in ctx.attr.document:
             fail(
-                ("latex_serve_web target {} attached to document {} " +
+                ("latex_live target {} attached to document {} " +
                  "which doesn't provide LatexDocumentInfo. This is a " +
                  "rules_latex bug: latex_document should always provide " +
                  "this when it provides LatexInfo with offline_strategy " +
@@ -167,7 +167,7 @@ def _latex_serve_web_impl(ctx):
                 # pipeline (30-90 s on edits).
                 # buildifier: disable=print
                 print(
-                    ("latex_serve_web({}): document {} includes a " +
+                    ("latex_live({}): document {} includes a " +
                      "cross-repo source {} which can't be staged from " +
                      "the workspace root at serve time; the serve-cache " +
                      "fast-path won't engage for this target.").format(
@@ -261,8 +261,8 @@ exec "$PYTHON" "$RUNFILES/{server}" "$BUILD_WORKSPACE_DIRECTORY" "$RUNFILES" "$@
     )
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
 
-latex_serve_web = rule(
-    implementation = _latex_serve_web_impl,
+latex_live = rule(
+    implementation = _latex_live_impl,
     doc = "Browser-based live-preview server for a latex_document.",
     executable = True,
     attrs = {

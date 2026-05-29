@@ -7,7 +7,7 @@ done.
 
 ## Open
 
-### README: capture a `latex_serve_web` screenshot
+### README: capture a `latex_live` screenshot
 
 Drop a PNG or GIF of the in-browser preview into `./assets/serve-web.png`
 (or `serve-web.gif` if you want motion) and embed it at the top of the
@@ -15,7 +15,7 @@ Drop a PNG or GIF of the in-browser preview into `./assets/serve-web.png`
 heading:
 
 ```html
-<p align="center"><img src="./assets/serve-web.png" alt="latex_serve_web preview" width="700" /></p>
+<p align="center"><img src="./assets/serve-web.png" alt="latex_live preview" width="700" /></p>
 ```
 
 The CV example is the most photogenic target:

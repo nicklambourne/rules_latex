@@ -4,7 +4,7 @@ Demonstrates:
   * A real-world CV layout with custom `\\header` and `\\itemize`
     tweaks, similar to the kind of thing many users will already
     have.
-  * `latex_serve_web` for the typical 'edit-and-see-it-update' CV
+  * `latex_live` for the typical 'edit-and-see-it-update' CV
     workflow.
 """
 
@@ -12,7 +12,7 @@ load(
     "@rules_latex//latex:defs.bzl",
     "latex_cache_snapshot",
     "latex_document",
-    "latex_serve_web",
+    "latex_live",
     "latex_test",
 )
 
@@ -36,7 +36,7 @@ latex_document(
 
 # `bazel run //cv:cv_serve` -> in-browser live preview with SyncTeX
 # click-to-source.
-latex_serve_web(
+latex_live(
     name = "cv_serve",
     document = ":cv",
     port = 8767,

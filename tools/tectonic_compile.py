@@ -148,7 +148,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Use this pre-extracted cache directory as "
         "TECTONIC_CACHE_DIR directly, skipping the per-action "
         "tarball decompression that --cache-tarball does. Used by "
-        "latex_serve_web's persistent-cache fast-path; the "
+        "latex_live's persistent-cache fast-path; the "
         "directory is expected to be a complete tectonic cache "
         "tree (the same shape an extract of --cache-tarball would "
         "produce) and is consumed read-only. Mutually exclusive "

@@ -52,7 +52,7 @@ Loaded from `@rules_latex//latex:defs.bzl`:
 - `latex_pkg(name, srcs)`
 - `latex_test(name, main, srcs, deps = [], outfmt = "pdf", cache = None, forbidden_patterns = [], forbidden_patterns_replace = False, required_patterns = [])`
 - `latex_cache_snapshot(name, main, srcs, deps = [], output)`
-- `latex_serve_web(name, document, port = 8765, poll_interval_ms = 80, debounce_ms = 250, debounce_max_ms = 1500)`
+- `latex_live(name, document, port = 8765, poll_interval_ms = 80, debounce_ms = 250, debounce_max_ms = 1500)`
 - `LatexInfo` provider (for users authoring their own rules)
 
 The toolchain type is exported at `@rules_latex//latex:toolchain_type` for
@@ -195,7 +195,7 @@ The wrapper also propagates `LC_ALL=C.UTF-8` (some downstream helpers like
 
 One preview rule ships as of v0.6:
 
-* `latex_serve_web` — a tiny localhost HTTP server with PDF.js for
+* `latex_live` — a tiny localhost HTTP server with PDF.js for
   in-browser rendering and a WebSocket push transport (SSE
   fallback) for "the manifest changed, here are the new chunks"
   delivery. Overleaf-style experience without the cloud round-trip.
@@ -224,7 +224,7 @@ One preview rule ships as of v0.6:
 > for them that they couldn't do with `bazel build` + their own
 > tooling.
 
-`latex_serve_web` is intentionally implemented as a thin watcher
+`latex_live` is intentionally implemented as a thin watcher
 around `bazel build`, not a separately-driven Tectonic process.
 The justification:
 
@@ -262,7 +262,7 @@ set, so any source edit invalidates it and forces a fresh online
 prime on every keystroke save. For live preview that turns 2-3 s
 compiles into 30-90 s per-edit hangs — unacceptable.
 
-`latex_serve_web` works around this without changing the
+`latex_live` works around this without changing the
 implicit-pipeline semantics: on startup it primes a persistent
 cache snapshot at
 `$BUILD_WORKSPACE_DIRECTORY/.cache/rules_latex/<doc-slug>/cache.tar.gz`,
@@ -412,7 +412,7 @@ See `tools/pdf_chunks.py` for the parser and
 `latex/private/serve_web.py.tpl` for the HTTP endpoints and
 client-side transport.
 
-`latex_serve_web` vendors PDF.js into the rule set via the
+`latex_live` vendors PDF.js into the rule set via the
 `@rules_latex_pdfjs` repository (materialised by the `pdfjs` module
 extension). The browser imports `pdf.mjs` and `pdf.worker.mjs` from
 the running server (`/_pdfjs/pdf.mjs`, `/_pdfjs/pdf.worker.mjs`)
@@ -424,7 +424,7 @@ rule set.
 
 When `latex_document(synctex = True)` is set, tectonic is invoked with
 `--synctex` and the resulting `<name>.synctex.gz` is exposed as an
-additional output. `latex_serve_web` auto-discovers that file via the
+additional output. `latex_live` auto-discovers that file via the
 document's `synctex` `OutputGroupInfo` and offers two affordances:
 
 * **Reverse-lookup (PDF → source location).** Clicking on the
@@ -786,7 +786,7 @@ These are deliberately out of scope for v0.1 but worth flagging.
    benchmarking on multi-pass documents (e.g. with biblatex). Tracked in
    [GitHub issue #7](https://github.com/nicklambourne/rules_latex/issues/7).
 6. **Forward-sync (editor → PDF) for SyncTeX.** **Shipped in v0.4.**
-   `latex_serve_web` exposes a `POST /sync/forward` endpoint that
+   `latex_live` exposes a `POST /sync/forward` endpoint that
    maps `(file, line)` → first matching SyncTeX box → broadcasts a
    `{"type": "jump", "page": N, "x": X, "y": Y, "w": W, "h": H}`
    event over the existing SSE channel. The browser scrolls the
@@ -821,7 +821,7 @@ These are deliberately out of scope for v0.1 but worth flagging.
    — to close when the issue is updated.
 
    *Original (now-superseded) deferral rationale, kept for the
-   audit trail:* `latex_serve_web` originally used Server-Sent
+   audit trail:* `latex_live` originally used Server-Sent
    Events only. The cost of WebSockets was non-trivial (~100-200
    LOC of security-relevant Python for RFC 6455 framing, or a
    third-party dep + `rules_python`) and the only duplex feature

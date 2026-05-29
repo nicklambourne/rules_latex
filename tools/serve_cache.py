@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serve-time cache management for ``latex_serve_web``.
+"""Serve-time cache management for ``latex_live``.
 
 This module is consumed by the generated ``serve_web.py`` (see
 ``latex/private/serve_web.py.tpl``) when the document being served
@@ -11,7 +11,7 @@ every keystroke save (Bazel's action cache keys it on the full
 source set), turning a 2-3 s compile into a 30-90 s online prime.
 
 The fix is to side-step Bazel's action cache for the prime step.
-``latex_serve_web``:
+``latex_live``:
 
 1. On startup, derives a stable per-document persistent cache path
    under ``$BUILD_WORKSPACE_DIRECTORY/.cache/rules_latex/`` and
@@ -238,7 +238,7 @@ class PrimeSpec:
     itself, biber) remain absolute because they live in the
     runfiles tree, not the workspace.
 
-    ``latex_serve_web`` snapshots these at rule analysis time and
+    ``latex_live`` snapshots these at rule analysis time and
     feeds them into this script via the serve_web.py template
     substitutions; ``run_prime`` invokes the populate tool with
     cwd set to the workspace root so the relative paths resolve.
@@ -400,7 +400,7 @@ def run_prime(
                 env.setdefault("PATH", "/usr/bin:/bin")
 
             log(
-                "latex_serve_web: priming serve cache "
+                "latex_live: priming serve cache "
                 f"({layout.snapshot}); this may take 30-90s on first run...",
             )
             result = subprocess.run(
@@ -432,7 +432,7 @@ def run_prime(
             _extract_snapshot(layout)
 
     elapsed = time.monotonic() - start
-    log(f"latex_serve_web: prime completed in {elapsed:.1f}s")
+    log(f"latex_live: prime completed in {elapsed:.1f}s")
     return elapsed
 
 

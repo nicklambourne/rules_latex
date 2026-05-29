@@ -75,7 +75,7 @@ Create the `BUILD.bazel`:
 load(
     "@rules_latex//latex:defs.bzl",
     "latex_document",
-    "latex_serve_web",
+    "latex_live",
     "latex_test",
 )
 
@@ -87,7 +87,7 @@ latex_document(
 )
 
 # `bazel run //:cv_serve` — live preview in the browser
-latex_serve_web(
+latex_live(
     name = "cv_serve",
     document = ":cv",
 )

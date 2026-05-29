@@ -1,6 +1,6 @@
 # Live preview
 
-`rules_latex` ships `latex_serve_web` for the
+`rules_latex` ships `latex_live` for the
 "edit-the-source-watch-the-PDF-update" workflow. It watches the
 document's transitive sources via `LatexInfo` and rebuilds via
 `bazel build` on every save, pushing the result to a localhost
@@ -21,12 +21,12 @@ HTTP page rendered with PDF.js.
     `bazel-bin/.../<doc>.pdf` directly — `bazel build` keeps
     that path fresh on every save.
 
-## `latex_serve_web` — in-browser preview
+## `latex_live` — in-browser preview
 
-Declare a `latex_serve_web` target alongside your `latex_document`:
+Declare a `latex_live` target alongside your `latex_document`:
 
 ```python
-load("@rules_latex//latex:defs.bzl", "latex_document", "latex_serve_web")
+load("@rules_latex//latex:defs.bzl", "latex_document", "latex_live")
 
 latex_document(
     name = "cv",
@@ -35,7 +35,7 @@ latex_document(
     synctex = True,   # PDF clicks copy <file>:<line> to clipboard
 )
 
-latex_serve_web(
+latex_live(
     name = "cv_web",
     document = ":cv",
 )
@@ -89,7 +89,7 @@ Bazel module) are not watched. Edit those and re-run `bazel run
 
 ## SyncTeX forward-sync
 
-When `latex_document(synctex = True)` is set, `latex_serve_web`
+When `latex_document(synctex = True)` is set, `latex_live`
 exposes a `POST /sync/forward` endpoint that maps a source
 `(file, line)` tuple to a PDF location and flashes a highlight in
 every open browser tab. The complement to the click-on-PDF
@@ -167,7 +167,7 @@ what most editors and users expect for a "jump-to" action.
 
 ## Architecture
 
-`latex_serve_web` synthesises a small launcher script that:
+`latex_live` synthesises a small launcher script that:
 
 1. Polls the watched paths every 250 ms via `os.stat`.
 2. Shells out to `bazel build <document_label>` on change.
@@ -183,7 +183,7 @@ for the rationale.
 
 ### WebSocket push transport
 
-`latex_serve_web` exposes `/ws` for live updates. After each
+`latex_live` exposes `/ws` for live updates. After each
 successful rebuild the server pushes the chunk manifest plus any
 PDF chunks the connected client doesn't already have. The browser
 applies them to its in-memory chunk cache and re-renders.

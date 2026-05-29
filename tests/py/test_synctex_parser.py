@@ -1,7 +1,7 @@
 """Unit tests for the SyncTeX parser embedded in serve_web.py.tpl.
 
 The parser lives inside the template so it can be shipped as a
-single-file Python module by latex_serve_web. To test it without
+single-file Python module by latex_live. To test it without
 shipping the template-substitution machinery, we load the template,
 substitute placeholders with safe defaults, and import the result.
 """
