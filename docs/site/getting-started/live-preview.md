@@ -36,13 +36,13 @@ latex_document(
 )
 
 latex_live(
-    name = "cv_web",
+    name = "cv_live",
     document = ":cv",
 )
 ```
 
 ```bash
-bazel run //:cv_web
+bazel run //:cv_live
 # serving live preview at http://127.0.0.1:8765/
 ```
 
@@ -85,7 +85,7 @@ analysis layer, so they trigger correct rebuilds too.
 
 External-repo files (e.g. from a `latex_library` published in another
 Bazel module) are not watched. Edit those and re-run `bazel run
-//:cv_web` to pick up the change.
+//:cv_live` to pick up the change.
 
 ## SyncTeX forward-sync
 

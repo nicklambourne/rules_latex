@@ -15,7 +15,9 @@ that, expect breaking changes in any v0.x release.
   change — only the rule name. Update your `load()` and rule calls;
   `latex_serve_web` no longer exists. (Pre-1.0, breaking changes are
   expected in any v0.x release.) The internal server template and its
-  `/_assets/serve_web.*` routes are unchanged.
+  `/_assets/serve_web.*` routes are unchanged. The repo's example targets
+  were renamed to match: `hello_serve_web` → `hello_live`,
+  `hello_synctex_serve` → `hello_synctex_live`, `cv_serve` → `cv_live`.
 
 - **SyncTeX reverse-sync framing: "click to jump" → "click to copy
   source location."** The in-app hint, the README, and the docs

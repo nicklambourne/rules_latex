@@ -13,13 +13,13 @@ Typical usage:
     latex_document(name = "cv", main = "cv.tex", srcs = [...], cache = "cv_cache.tar.gz")
 
     latex_live(
-        name = "cv_web",
+        name = "cv_live",
         document = ":cv",
     )
 
 Then:
 
-    $ bazel run //:cv_web
+    $ bazel run //:cv_live
     serving live preview at http://127.0.0.1:8765/
 
 Open the URL in your browser; edit the source; watch the PDF update.

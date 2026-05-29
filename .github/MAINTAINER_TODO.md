@@ -21,7 +21,7 @@ heading:
 The CV example is the most photogenic target:
 
 ```bash
-cd examples && bazel run //cv:cv_serve
+cd examples && bazel run //cv:cv_live
 # → http://127.0.0.1:8767/
 ```
 
