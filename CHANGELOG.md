@@ -8,14 +8,19 @@ that, expect breaking changes in any v0.x release.
 
 ### Added
 
-- **Hermetic biber on linux/aarch64 (modern biblatex).** `modern_biblatex
-  = True` documents now build hermetically on Linux arm64: the toolchain
-  fetches a prebuilt biber 2.21 sourced from CTAN's `biber-linux-aarch64`
-  package and mirrored to the `biber-mirror-v2.21` release. Verified
-  end-to-end on a `ubuntu-24.04-arm` CI runner (builds `//paper:paper`
-  and checks the resolved citation). The default-bundle (biber 2.17) path
-  on aarch64 still needs `biber_strategy = "system"` or `modern_biblatex`
-  — no off-the-shelf 2.17 arm64 binary exists yet. See `DESIGN.md` §5 #9 /
+- **Hermetic biber on linux/aarch64 — both version stacks.** `biber =
+  True` documents now build hermetically on Linux arm64 with *or*
+  without `modern_biblatex`:
+  - **biber 2.21** (modern) — prebuilt binary from CTAN's
+    `biber-linux-aarch64`, mirrored to `biber-mirror-v2.21`.
+  - **biber 2.17** (default bundle) — no off-the-shelf arm64 binary
+    exists, so it's **built from source** for aarch64 (Perl 5.34 on
+    Debian buster) and mirrored to `biber-mirror-v2.17`.
+
+  Both are pinned by SHA in `biber_versions.bzl` and CI-verified on a
+  `ubuntu-24.04-arm` runner (2.21 by building `//paper:paper`; 2.17 by a
+  `biber --tool` functional run). Previously Linux arm64 had no biber and
+  `biber = True` failed at analysis. See `DESIGN.md` §4.9 / §5 #9 /
   issue #10.
 
 ### Changed
