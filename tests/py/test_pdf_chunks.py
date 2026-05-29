@@ -57,6 +57,7 @@ def _build_xref_stream_pdf(
     object_payloads: list[bytes],
     *,
     w: tuple[int, int, int] = (1, 2, 2),
+    root_obj_id: "int | None" = None,
 ) -> bytes:
     """Build a minimal PDF with a cross-reference stream.
 
@@ -68,6 +69,10 @@ def _build_xref_stream_pdf(
     Object numbering is 1-based (object 0 is implicitly the free
     head in the xref table). Generation is always 0. Object IDs
     start at 1 and run consecutively.
+
+    ``root_obj_id``, when given, adds ``/Root N 0 R`` to the xref
+    stream dictionary so the page-index walk (option B) can find the
+    catalog.
     """
     header = b"%PDF-1.5\n%\xe4\xf0\xed\xf8\n"
     out = bytearray(header)
@@ -95,8 +100,9 @@ def _build_xref_stream_pdf(
     compressed = zlib.compress(bytes(entries))
     size = len(object_payloads) + 2  # objects 0..N + xref-stream object
 
+    root_part = f"/Root {root_obj_id} 0 R" if root_obj_id is not None else ""
     dict_part = (
-        f"<</Type/XRef/Size {size}/W[{w[0]} {w[1]} {w[2]}]"
+        f"<</Type/XRef/Size {size}/W[{w[0]} {w[1]} {w[2]}]{root_part}"
         f"/Filter/FlateDecode/Length {len(compressed)}>>"
     ).encode("ascii")
     out.extend(f"{xref_obj_id} 0 obj\n".encode("ascii"))
@@ -445,6 +451,147 @@ class TestChunkDeduplication(unittest.TestCase):
                     f"chunk {c.hash} was rewritten "
                     "(mtime should be stable)",
                 )
+
+
+def _build_objstm_pdf(
+    objstm_payloads: list[tuple[int, bytes]],
+    type1_payloads: list[tuple[int, bytes]],
+    *,
+    root_obj_id: int,
+) -> bytes:
+    """Build a PDF whose page-tree dicts live in a compressed object
+    stream (type-2), like real tectonic output. ``objstm_payloads`` are
+    (objnum, body) put inside one /ObjStm; ``type1_payloads`` are
+    (objnum, body) written as uncompressed objects. An xref stream with
+    /Root ties it together."""
+    header = b"%PDF-1.5\n%\xe4\xf0\xed\xf8\n"
+    out = bytearray(header)
+    all_nums = [n for n, _ in objstm_payloads] + [n for n, _ in type1_payloads]
+    objstm_num = max(all_nums) + 1
+    xref_num = objstm_num + 1
+    locs: dict[int, tuple] = {}
+
+    for num, payload in type1_payloads:
+        locs[num] = ("u", len(out))
+        out.extend(f"{num} 0 obj\n".encode("ascii"))
+        out.extend(payload)
+        out.extend(b"\nendobj\n")
+
+    bodies = bytearray()
+    pairs = []
+    for index, (num, payload) in enumerate(objstm_payloads):
+        pairs.append(f"{num} {len(bodies)}")
+        bodies.extend(payload)
+        bodies.extend(b" ")
+        locs[num] = ("c", objstm_num, index)
+    header_bytes = (" ".join(pairs) + "\n").encode("ascii")
+    first = len(header_bytes)
+    compressed = zlib.compress(bytes(header_bytes + bodies))
+    locs[objstm_num] = ("u", len(out))
+    out.extend(f"{objstm_num} 0 obj\n".encode("ascii"))
+    out.extend((
+        f"<</Type/ObjStm/N {len(objstm_payloads)}/First {first}"
+        f"/Filter/FlateDecode/Length {len(compressed)}>>"
+    ).encode("ascii"))
+    out.extend(b"\nstream\n")
+    out.extend(compressed)
+    out.extend(b"\nendstream\nendobj\n")
+
+    locs[xref_num] = ("u", len(out))
+    w = (1, 2, 2)
+    size = xref_num + 1
+    entries = bytearray()
+    for n in range(size):
+        loc = locs.get(n)
+        if n == 0 or loc is None:
+            entries.extend(_pack_entry((0, 0, 65535 if n == 0 else 0), w))
+        elif loc[0] == "u":
+            entries.extend(_pack_entry((1, loc[1], 0), w))
+        else:
+            entries.extend(_pack_entry((2, loc[1], loc[2]), w))
+    compressed_xref = zlib.compress(bytes(entries))
+    out.extend(f"{xref_num} 0 obj\n".encode("ascii"))
+    out.extend((
+        f"<</Type/XRef/Size {size}/W[1 2 2]/Root {root_obj_id} 0 R"
+        f"/Filter/FlateDecode/Length {len(compressed_xref)}>>"
+    ).encode("ascii"))
+    out.extend(b"\nstream\n")
+    out.extend(compressed_xref)
+    out.extend(b"\nendstream\nendobj\n")
+    out.extend(f"startxref\n{locs[xref_num][1]}\n%%EOF\n".encode("ascii"))
+    return bytes(out)
+
+
+class TestPageIndex(unittest.TestCase):
+    """Per-page content index for incremental render reuse (option B)."""
+
+    _TWO_PAGE = [
+        b"<</Type/Catalog/Pages 2 0 R>>",
+        b"<</Type/Pages/Kids[3 0 R 4 0 R]/Count 2/MediaBox[0 0 612 792]>>",
+        b"<</Type/Page/Parent 2 0 R/Contents 5 0 R>>",
+        b"<</Type/Page/Parent 2 0 R/Contents 6 0 R>>",
+        b"<</Length 4>>stream\np1\nendstream",
+        b"<</Length 4>>stream\np2\nendstream",
+    ]
+
+    def _pages(self, payloads, *, root):
+        pdf = _build_xref_stream_pdf(payloads, root_obj_id=root)
+        with _PdfFixture(pdf) as f:
+            m = _PC.compute_manifest(f.pdf_path, f.chunks_dir)
+            self.assertIsNotNone(m)
+            return m.pages
+
+    def test_multi_page_walk_with_inherited_mediabox(self):
+        pages = self._pages(self._TWO_PAGE, root=1)
+        self.assertEqual(len(pages), 2)
+        for p in pages:
+            self.assertEqual((p.width, p.height), (612.0, 792.0))
+        self.assertNotEqual(
+            pages[0].content_hash, pages[1].content_hash,
+            "pages with different content streams must hash differently",
+        )
+
+    def test_edit_isolates_to_one_page(self):
+        before = self._pages(self._TWO_PAGE, root=1)
+        edited = list(self._TWO_PAGE)
+        edited[4] = b"<</Length 4>>stream\npX\nendstream"
+        after = self._pages(edited, root=1)
+        self.assertNotEqual(after[0].content_hash, before[0].content_hash)
+        self.assertEqual(
+            after[1].content_hash, before[1].content_hash,
+            "an untouched page's hash must stay stable",
+        )
+
+    def test_no_root_yields_empty_index(self):
+        # Without /Root the page tree is unreachable; degrade gracefully
+        # (the client just re-renders visible pages).
+        self.assertEqual(self._pages(self._TWO_PAGE, root=None), ())
+
+    def test_page_tree_in_object_stream(self):
+        # The real tectonic layout: catalog/pages/page dicts compressed in
+        # an /ObjStm (type-2), content stream uncompressed (type-1).
+        pdf = _build_objstm_pdf(
+            objstm_payloads=[
+                (1, b"<</Type/Catalog/Pages 2 0 R>>"),
+                (2, b"<</Type/Pages/Kids[3 0 R]/Count 1/MediaBox[0 0 200 300]>>"),
+                (3, b"<</Type/Page/Parent 2 0 R/Contents 4 0 R>>"),
+            ],
+            type1_payloads=[(4, b"<</Length 3>>stream\nXY\nendstream")],
+            root_obj_id=1,
+        )
+        with _PdfFixture(pdf) as f:
+            m = _PC.compute_manifest(f.pdf_path, f.chunks_dir)
+            self.assertIsNotNone(m)
+            self.assertEqual(len(m.pages), 1)
+            self.assertEqual((m.pages[0].width, m.pages[0].height), (200.0, 300.0))
+            self.assertTrue(m.pages[0].content_hash)
+
+    def test_page_index_stable_across_calls(self):
+        a = self._pages(self._TWO_PAGE, root=1)
+        b = self._pages(self._TWO_PAGE, root=1)
+        self.assertEqual(
+            [p.content_hash for p in a], [p.content_hash for p in b],
+        )
 
 
 if __name__ == "__main__":

@@ -80,6 +80,9 @@ class _Manifest:
     pdf_size: int
     chunks: tuple
     skeleton_ranges: tuple
+    # Mirrors the real Manifest (pdf_chunks.py): per-page identity index,
+    # default empty. The WS manifest push serialises it.
+    pages: tuple = ()
 
 
 def _chunk(object_id: int, start: int, end: int, hash: str) -> _Chunk:

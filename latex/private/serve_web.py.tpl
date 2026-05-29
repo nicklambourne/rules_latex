@@ -700,6 +700,11 @@ class BuildState:
             "skeletonRanges": [
                 [r[0], r[1]] for r in manifest.skeleton_ranges
             ],
+            "pages": [
+                {"contentHash": p.content_hash,
+                 "width": p.width, "height": p.height}
+                for p in manifest.pages
+            ],
         })
         try:
             conn.send_text(manifest_payload)
@@ -1692,6 +1697,11 @@ class Handler(BaseHTTPRequestHandler):
             ],
             "skeletonRanges": [
                 [s, e] for s, e in manifest.skeleton_ranges
+            ],
+            "pages": [
+                {"contentHash": p.content_hash,
+                 "width": p.width, "height": p.height}
+                for p in manifest.pages
             ],
         }
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")

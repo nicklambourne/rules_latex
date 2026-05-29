@@ -1083,11 +1083,16 @@ These are deliberately out of scope for v0.1 but worth flagging.
 
     - **Reuse canvases when only chunks changed (option B).** Skip
       re-rendering pages whose content is unchanged on reload.
-      Needs a reliable per-page change signal — the manifest is
-      object-level, not page-level (`pdf_chunks.py` deliberately
-      doesn't decode the page tree), so this most likely means
-      emitting a per-page content hash server-side. Subtler; only
-      pays off on top of the lazy paint above.
+      **Server side shipped:** `pdf_chunks.py` now resolves the page
+      tree — including the compressed object stream (`/ObjStm`)
+      tectonic emits — and the manifest carries a per-page
+      `{contentHash, width, height}` (`PageInfo`), reusing the chunk
+      hashes so a page's hash changes iff its content stream did.
+      Best-effort: an unparseable page tree yields an empty index and
+      the client re-renders every visible page. **Remaining:** the
+      client-side reconciliation that diffs `pages[i].contentHash`
+      across reloads and reuses unchanged canvases. Only pays off on
+      top of the lazy paint above.
 
     - **Web worker rendering.** PDF.js v5 supports OffscreenCanvas
       rendering off the main thread. Mostly avoids main-thread
