@@ -490,6 +490,59 @@ jobs:
           fi
           echo "OK: snapshot regeneration is byte-identical (sha256=$first_sha)"
 
+  biber-aarch64:
+    # Verify the linux/aarch64 biber binary added to BIBER_MODERN_RELEASES
+    # (CTAN-sourced biber 2.21, mirrored to the biber-mirror-v2.21 release)
+    # actually runs on real arm64 hardware. The rest of the matrix is
+    # x86_64 Linux + arm64 macOS, so nothing else exercises linux/aarch64.
+    # The examples use modern_biblatex (biber 2.21), so building
+    # //paper:paper here runs tectonic-linux-aarch64 + biber-2.21-aarch64
+    # end to end. See DESIGN.md §5 #9 / issue #10.
+    name: Biber on linux/aarch64 (biber 2.21)
+    runs-on: ubuntu-24.04-arm
+    env:
+      USE_BAZEL_VERSION: "8.0.0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Set up Bazelisk
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-ubuntu-24.04-arm
+          repository-cache: true
+
+      - name: Install poppler-utils (for citation grep)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -qq -y poppler-utils
+
+      - name: Build a biblatex/biber document on arm64
+        working-directory: examples
+        run: |
+          # //paper:paper uses biblatex + biber via modern_biblatex (biber
+          # 2.21), so building it on arm64 runs the aarch64 biber binary
+          # end to end. No `cache` attr means it primes online, so retry
+          # transient CDN 502s like the x86_64 job does.
+          attempt=1
+          max_attempts=3
+          while true; do
+            if bazel build //paper:paper --config=ci; then
+              break
+            fi
+            if (( attempt >= max_attempts )); then
+              echo "FAIL: //paper:paper build failed after ${max_attempts} attempts." >&2
+              exit 1
+            fi
+            sleep $(( 5 * attempt ))
+            attempt=$(( attempt + 1 ))
+          done
+          file bazel-bin/paper/paper.pdf | grep -q "PDF document"
+          # The citation only appears if biber ran and resolved it.
+          pdftotext bazel-bin/paper/paper.pdf - | grep -q "Morgenthaler"
+          echo "biber 2.21 on linux/aarch64: citation resolved OK"
+
   lint:
     name: buildifier
     runs-on: ubuntu-22.04

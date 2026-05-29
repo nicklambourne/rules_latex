@@ -142,15 +142,17 @@ def _tectonic_impl(module_ctx):
         biblatex_repository(name = _BIBLATEX_OVERLAY_REPO_NAME)
 
     for p in _PLATFORMS:
-        # Materialise a biber repo for platforms with an upstream
-        # binary. Platforms without one (currently linux/aarch64) get
-        # no biber and latex_document(biber = True) targets fail at
-        # analysis with a pointer to the system escape hatch. See
-        # DESIGN.md §4.9.
+        # Materialise a biber repo for platforms present in the releases
+        # map. Platforms without an entry get no biber, and
+        # latex_document(biber = True) targets fail at analysis with a
+        # pointer to the system escape hatch. See DESIGN.md §4.9.
         #
         # When modern_biblatex is on, fetch biber 2.21 instead of the
-        # default 2.17; the biblatex/biber pair is version-coupled
-        # via the .bcf control-file format.
+        # default 2.17; the biblatex/biber pair is version-coupled via
+        # the .bcf control-file format. Note linux/aarch64 has a biber
+        # only on the 2.21 (modern) map — the 2.17 default-bundle map has
+        # no arm64 binary, so default-bundle biber on aarch64 still needs
+        # the system escape hatch (DESIGN.md §5 #9).
         biber_releases = BIBER_MODERN_RELEASES if want_modern_biblatex else BIBER_RELEASES
         biber_repo = ""
         if (p.os, p.cpu) in biber_releases:

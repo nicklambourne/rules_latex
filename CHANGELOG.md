@@ -6,6 +6,18 @@ that, expect breaking changes in any v0.x release.
 
 ## [Unreleased]
 
+### Added
+
+- **Hermetic biber on linux/aarch64 (modern biblatex).** `modern_biblatex
+  = True` documents now build hermetically on Linux arm64: the toolchain
+  fetches a prebuilt biber 2.21 sourced from CTAN's `biber-linux-aarch64`
+  package and mirrored to the `biber-mirror-v2.21` release. Verified
+  end-to-end on a `ubuntu-24.04-arm` CI runner (builds `//paper:paper`
+  and checks the resolved citation). The default-bundle (biber 2.17) path
+  on aarch64 still needs `biber_strategy = "system"` or `modern_biblatex`
+  — no off-the-shelf 2.17 arm64 binary exists yet. See `DESIGN.md` §5 #9 /
+  issue #10.
+
 ### Changed
 
 - **BREAKING: renamed the `latex_serve_web` rule to `latex_live`.** The
