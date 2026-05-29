@@ -135,6 +135,29 @@ class Chunk:
 
 
 @dataclasses.dataclass(frozen=True)
+class PageInfo:
+    """Per-page identity for incremental render reuse (DESIGN.md §5 #13,
+    option B).
+
+    ``content_hash`` is the SHA-256 (hex) of the page's content-stream
+    object(s) — derived from the same content-addressed chunk hashes, so
+    a body edit that rewrites one page's content stream changes only that
+    page's ``content_hash``. ``width`` / ``height`` are the MediaBox
+    dimensions in PDF points (possibly inherited from an ancestor
+    ``/Pages`` node). The browser diffs ``content_hash`` across reloads to
+    skip re-rendering pages whose content is unchanged.
+
+    Best-effort: ``Manifest.pages`` is empty when the page tree can't be
+    resolved (e.g. an unsupported structure), and the client simply
+    falls back to re-rendering every visible page.
+    """
+
+    content_hash: str
+    width: float
+    height: float
+
+
+@dataclasses.dataclass(frozen=True)
 class Manifest:
     """A complete chunk manifest for one PDF.
 
@@ -151,12 +174,17 @@ class Manifest:
     Together the chunks + skeleton ranges cover the full byte
     range ``[0, pdf_size)`` without overlaps or gaps. Tested
     invariant in ``test_pdf_chunks``.
+
+    ``pages`` is the per-page identity index (one ``PageInfo`` per page,
+    in document order) used for incremental render reuse, or empty when
+    the page tree couldn't be resolved.
     """
 
     pdf_size: int
     chunks: tuple
     # Pairs of (start, end) for byte ranges not covered by any chunk.
     skeleton_ranges: tuple
+    pages: tuple = ()
 
 
 def compute_manifest(
@@ -245,10 +273,22 @@ def compute_manifest(
     if cursor < pdf_size:
         skeleton.append((cursor, pdf_size))
 
+    # Per-page content identity for incremental render reuse (option B,
+    # DESIGN.md §5 #13). Best-effort: any parse failure yields an empty
+    # page index, and the client falls back to re-rendering visible pages.
+    # Reuses the chunk hashes already computed, so a page's hash changes
+    # iff one of its content-stream objects changed.
+    chunk_hash_by_objid = {c.object_id: c.hash for c in chunks_list}
+    try:
+        pages = _compute_page_index(data, chunk_hash_by_objid)
+    except _ParseError:
+        pages = ()
+
     return Manifest(
         pdf_size=pdf_size,
         chunks=tuple(chunks_list),
         skeleton_ranges=tuple(skeleton),
+        pages=pages,
     )
 
 
@@ -498,3 +538,335 @@ def _parse_classic_xref(data: bytes, xref_offset: int) -> list[tuple[int, int]]:
             cursor += 20
 
     return uncompressed
+
+
+# -----------------------------------------------------------------------------
+# Page index (option B): resolve the page tree to a per-page content hash.
+#
+# Walk /Root -> /Pages -> /Kids -> /Page, reading each dict from wherever
+# it lives: a directly-addressable (type-1) object, or a compressed object
+# stream (/ObjStm, type-2) — tectonic puts the whole page tree in an
+# /ObjStm. For each leaf page, combine the chunk hashes of its /Contents
+# object(s) into one content hash and read its (possibly inherited)
+# /MediaBox geometry. Intentionally defensive: any surprise raises
+# _ParseError and the caller drops the page index (the client then just
+# re-renders every visible page — correctness is unaffected).
+# -----------------------------------------------------------------------------
+
+_MAX_PAGE_TREE_DEPTH = 50
+_MAX_PAGES = 100000
+
+
+def _compute_page_index(data, chunk_hash_by_objid):
+    """Return a tuple of PageInfo in document order, or () when there's no
+    resolvable /Root (e.g. the synthetic test PDFs and classic PDFs that
+    omit it)."""
+    locations, root_ref = _parse_object_locations(data)
+    if root_ref is None:
+        return ()
+    objstm_cache = {}
+
+    def resolve(obj_id):
+        return _resolve_object_dict(data, obj_id, locations, objstm_cache)
+
+    catalog = resolve(root_ref)
+    if catalog is None:
+        raise _ParseError("catalog not resolvable")
+    pages_ref = _dict_ref(catalog, "Pages")
+    if pages_ref is None:
+        raise _ParseError("catalog has no /Pages")
+
+    pages = []
+
+    def walk(node_id, inherited_box, depth, seen):
+        if depth > _MAX_PAGE_TREE_DEPTH:
+            raise _ParseError("page tree too deep")
+        if node_id in seen:
+            raise _ParseError("page tree cycle")
+        seen = seen | {node_id}
+        text = resolve(node_id)
+        if text is None:
+            raise _ParseError("page-tree node %d not resolvable" % node_id)
+        box = _dict_num_array(text, "MediaBox") or inherited_box
+        typ = _dict_name(text, "Type")
+        is_branch = typ == "Pages" or (
+            typ != "Page" and re.search(r"/Kids\b", text) is not None
+        )
+        if is_branch:
+            kids = _dict_ref_array(text, "Kids")
+            if not kids:
+                raise _ParseError("page-tree branch with no /Kids")
+            for kid in kids:
+                walk(kid, box, depth + 1, seen)
+            return
+        # Leaf /Page.
+        if len(pages) >= _MAX_PAGES:
+            raise _ParseError("too many pages")
+        hashes = []
+        for cid in _dict_ref_or_array(text, "Contents"):
+            h = chunk_hash_by_objid.get(cid)
+            if h is None:
+                # Content stream isn't a directly-addressable chunk
+                # (e.g. compressed in an objstm). Without it we can't give
+                # a reliable per-page signal, so drop the whole index.
+                raise _ParseError("page content obj %d not a chunk" % cid)
+            hashes.append(h)
+        if box is None:
+            raise _ParseError("page has no MediaBox")
+        content_hash = hashlib.sha256("".join(hashes).encode("ascii")).hexdigest()
+        width = abs(box[2] - box[0])
+        height = abs(box[3] - box[1])
+        pages.append(PageInfo(content_hash=content_hash, width=width, height=height))
+
+    walk(pages_ref, None, 0, frozenset())
+    return tuple(pages)
+
+
+def _parse_object_locations(data):
+    """Map every in-use object to where its bytes live, plus the /Root id.
+
+    Returns ``({obj_id: ("u", offset) | ("c", objstm_id, index)}, root_id)``
+    where "u" is an uncompressed (type-1) object at ``offset`` and "c" is a
+    compressed (type-2) object at ``index`` within object stream
+    ``objstm_id``. ``root_id`` is None when the trailer has no /Root.
+    """
+    xref_offset = _xref_offset(data)
+    head = data[xref_offset:xref_offset + 64]
+    if head.startswith(b"xref"):
+        return _locations_from_classic(data, xref_offset)
+    return _locations_from_xref_stream(data, xref_offset)
+
+
+def _xref_offset(data):
+    startxref_pos = _find_startxref(data)
+    m = re.match(rb"\s*(\d+)", data[startxref_pos + len(b"startxref"):])
+    if not m:
+        raise _ParseError("startxref offset not parseable")
+    off = int(m.group(1))
+    if off >= len(data):
+        raise _ParseError("xref offset past EOF")
+    return off
+
+
+def _locations_from_xref_stream(data, obj_offset):
+    dict_text = _extract_balanced_dict(data, obj_offset)
+    if dict_text is None:
+        raise _ParseError("xref stream dict not found")
+    w_match = re.search(r"/W\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s*\]", dict_text)
+    if not w_match:
+        raise _ParseError("xref stream /W missing")
+    W = tuple(int(x) for x in w_match.groups())
+    if sum(W) == 0:
+        raise _ParseError("xref stream /W all zero")
+    size_match = re.search(r"/Size\s+(\d+)", dict_text)
+    if not size_match:
+        raise _ParseError("xref stream /Size missing")
+    N = int(size_match.group(1))
+    if N <= 0 or N > 10_000_000:
+        raise _ParseError("xref stream /Size out of range")
+
+    decompressed = _decode_stream(data, obj_offset, dict_text)
+
+    index_match = re.search(r"/Index\s*\[\s*([\d\s]+)\]", dict_text)
+    if index_match:
+        nums = [int(x) for x in index_match.group(1).split()]
+        if len(nums) < 2 or len(nums) % 2 != 0:
+            raise _ParseError("xref stream /Index malformed")
+        sections = [(nums[i], nums[i + 1]) for i in range(0, len(nums), 2)]
+    else:
+        sections = [(0, N)]
+
+    entry_len = sum(W)
+    if len(decompressed) < sum(c for _, c in sections) * entry_len:
+        raise _ParseError("xref stream payload too short")
+
+    locations = {}
+    pos = 0
+    for first_obj, count in sections:
+        for i in range(count):
+            object_id = first_obj + i
+            fields = []
+            for w in W:
+                val = 0
+                for _ in range(w):
+                    val = (val << 8) | decompressed[pos]
+                    pos += 1
+                fields.append(val)
+            # Default for a missing first field (W[0]==0) is type 1.
+            type_ = fields[0] if W[0] != 0 else 1
+            if type_ == 1 and fields[1] > 0:
+                locations[object_id] = ("u", fields[1])
+            elif type_ == 2:
+                locations[object_id] = ("c", fields[1], fields[2])
+
+    root_ref = _dict_ref(dict_text, "Root")
+    return locations, root_ref
+
+
+def _locations_from_classic(data, xref_offset):
+    locations = {}
+    for object_id, offset in _parse_classic_xref(data, xref_offset):
+        locations[object_id] = ("u", offset)
+    # /Root lives in the trailer dict after the "trailer" keyword.
+    root_ref = None
+    tpos = data.find(b"trailer", xref_offset)
+    if tpos >= 0:
+        trailer = _extract_balanced_dict(data, tpos)
+        if trailer is not None:
+            root_ref = _dict_ref(trailer, "Root")
+    return locations, root_ref
+
+
+def _resolve_object_dict(data, obj_id, locations, objstm_cache):
+    """Return the latin-1 dict text ``<<...>>`` of an object, or None."""
+    loc = locations.get(obj_id)
+    if loc is None:
+        return None
+    if loc[0] == "u":
+        objkw = data.find(b"obj", loc[1])
+        if objkw < 0 or objkw - loc[1] > 40:
+            return None
+        return _extract_balanced_dict(data, objkw + 3)
+    _, objstm_id, index = loc
+    objs = objstm_cache.get(objstm_id)
+    if objs is None:
+        objs = _parse_objstm(data, objstm_id, locations)
+        objstm_cache[objstm_id] = objs
+    return objs.get(index)
+
+
+def _parse_objstm(data, objstm_id, locations):
+    """Decompress an object stream and return ``{index: dict_text}`` for the
+    objects it contains (index = 0-based ordinal, matching type-2 entries)."""
+    loc = locations.get(objstm_id)
+    if loc is None or loc[0] != "u":
+        raise _ParseError("objstm %d not an uncompressed object" % objstm_id)
+    offset = loc[1]
+    dict_text = _extract_balanced_dict(data, offset)
+    if dict_text is None:
+        raise _ParseError("objstm dict not found")
+    n = _dict_int(dict_text, "N")
+    first = _dict_int(dict_text, "First")
+    if n is None or first is None:
+        raise _ParseError("objstm missing /N or /First")
+    if n < 0 or n > 1_000_000:
+        raise _ParseError("objstm /N out of range")
+    decompressed = _decode_stream(data, offset, dict_text)
+    header = decompressed[:first].split()
+    if len(header) < 2 * n:
+        raise _ParseError("objstm header too short")
+    rel_offsets = [int(header[2 * k + 1]) for k in range(n)]
+    objs = {}
+    for k in range(n):
+        start = first + rel_offsets[k]
+        end = first + rel_offsets[k + 1] if k + 1 < n else len(decompressed)
+        if start > end or end > len(decompressed):
+            raise _ParseError("objstm offset out of range")
+        objs[k] = _extract_balanced_dict(decompressed, start)
+    return objs
+
+
+def _decode_stream(data, obj_offset, dict_text):
+    """Return the (FlateDecode-decompressed) stream payload of the object at
+    ``obj_offset``. Only no-filter and /FlateDecode are supported."""
+    stream_kw = data.find(b"stream", obj_offset)
+    if stream_kw < 0:
+        raise _ParseError("stream payload start not found")
+    payload_start = stream_kw + len(b"stream")
+    if data[payload_start:payload_start + 2] == b"\r\n":
+        payload_start += 2
+    elif data[payload_start:payload_start + 1] == b"\n":
+        payload_start += 1
+    else:
+        raise _ParseError("stream payload prefix malformed")
+    endstream_kw = data.find(b"endstream", payload_start)
+    if endstream_kw < 0:
+        raise _ParseError("endstream not found")
+    payload_end = endstream_kw
+    if data[payload_end - 2:payload_end] == b"\r\n":
+        payload_end -= 2
+    elif data[payload_end - 1:payload_end] == b"\n":
+        payload_end -= 1
+    payload = data[payload_start:payload_end]
+    if len(payload) > MAX_XREF_STREAM_SIZE:
+        raise _ParseError("stream payload too large")
+    if "/FlateDecode" in dict_text:
+        try:
+            return zlib.decompress(payload)
+        except zlib.error as e:
+            raise _ParseError("flate decompress failed: %s" % e)
+    if "/Filter" in dict_text:
+        raise _ParseError("unsupported stream filter")
+    return payload
+
+
+def _extract_balanced_dict(data, start):
+    """Return the first balanced ``<<...>>`` dict at/after ``start`` as a
+    latin-1 string, or None. Counts nesting on << / >> tokens; sufficient
+    for page-tree dicts (no literal angle-bracket pairs inside strings)."""
+    if isinstance(data, str):
+        data = data.encode("latin-1", "replace")
+    i = data.find(b"<<", start)
+    if i < 0:
+        return None
+    depth = 0
+    j = i
+    n = len(data)
+    while j < n - 1:
+        pair = data[j:j + 2]
+        if pair == b"<<":
+            depth += 1
+            j += 2
+        elif pair == b">>":
+            depth -= 1
+            j += 2
+            if depth == 0:
+                return data[i:j].decode("latin-1", "replace")
+        else:
+            j += 1
+    return None
+
+
+# --- minimal dict-value accessors (operate on the latin-1 dict text) ---
+
+
+def _dict_ref(text, key):
+    m = re.search(r"/%s\s+(\d+)\s+(\d+)\s+R\b" % key, text)
+    return int(m.group(1)) if m else None
+
+
+def _dict_int(text, key):
+    m = re.search(r"/%s\s+(\d+)\b" % key, text)
+    return int(m.group(1)) if m else None
+
+
+def _dict_name(text, key):
+    m = re.search(r"/%s\s*/([A-Za-z0-9.+-]+)" % key, text)
+    return m.group(1) if m else None
+
+
+def _dict_num_array(text, key):
+    m = re.search(r"/%s\s*\[([^\]]*)\]" % key, text)
+    if not m:
+        return None
+    try:
+        vals = [float(x) for x in m.group(1).split()]
+    except ValueError:
+        return None
+    return vals if len(vals) == 4 else None
+
+
+def _dict_ref_array(text, key):
+    m = re.search(r"/%s\s*\[([^\]]*)\]" % key, text)
+    if not m:
+        return []
+    return [int(x) for x in re.findall(r"(\d+)\s+\d+\s+R\b", m.group(1))]
+
+
+def _dict_ref_or_array(text, key):
+    """/Contents may be a single ref or an array of refs."""
+    m = re.search(r"/%s\s*\[" % key, text)
+    if m:
+        return _dict_ref_array(text, key)
+    single = _dict_ref(text, key)
+    return [single] if single is not None else []

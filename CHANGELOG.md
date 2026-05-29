@@ -59,6 +59,18 @@ that, expect breaking changes in any v0.x release.
   `latex_serve_web` rule now globs its client assets via a filegroup so
   new modules need no rule change.
 
+- **Per-page content index in the live-preview manifest (server side of
+  option B).** `pdf_chunks.py` now resolves the PDF page tree —
+  including the compressed object stream (`/ObjStm`) tectonic emits —
+  and `/pdf-manifest` (and the WebSocket manifest push) carry a per-page
+  `{contentHash, width, height}`, so a future change can skip
+  re-rendering unchanged pages on reload. Reuses the existing chunk
+  hashes, so a page's hash changes iff its content stream did.
+  Best-effort: an unparseable page tree yields an empty index and the
+  client re-renders every visible page. No behavior change yet — the
+  client doesn't consume it until the reuse logic lands. See
+  `DESIGN.md` §5 #13.
+
 ### Removed
 
 - **`latex_serve` rule (system-PDF-viewer live preview).** The
