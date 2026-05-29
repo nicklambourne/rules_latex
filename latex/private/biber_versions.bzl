@@ -42,18 +42,22 @@ BIBER_MODERN_MIRROR_TAG = "biber-mirror-v" + BIBER_MODERN_VERSION
 # universal binary that works on both Intel and Apple Silicon so it
 # covers both cpu entries.
 #
-# Linux arm64 is intentionally absent from this (2.17 / default-bundle)
-# map: the biblatex-biber project ships no prebuilt arm64 binary, and
-# there's no off-the-shelf aarch64 build of this older version. Default-
-# bundle documents on linux/aarch64 therefore still need the
-# `biber_strategy = "system"` escape hatch — or `modern_biblatex = True`,
-# which uses biber 2.21 (BIBER_MODERN_RELEASES below *does* cover
-# aarch64). Closing the 2.17/aarch64 gap is tracked in DESIGN.md §5 #9 /
-# issue #10.
+# The biblatex-biber project ships no prebuilt arm64 binary, and there's
+# no off-the-shelf aarch64 build of this older version — so we build biber
+# 2.17 from source for aarch64 ourselves (Perl 5.34 on Debian buster, via
+# the sbrass/biber-linux-aarch64 PAR recipe) and mirror it to the
+# biber-mirror-v2.17 release. The build/refresh procedure is documented in
+# DESIGN.md §4.9. With this entry, default-bundle biber on linux/aarch64 is
+# hermetic like every other platform.
 BIBER_RELEASES = {
     ("linux", "x86_64"): struct(
         asset = "biber-linux_x86_64.tar.gz",
         sha256 = "129d2e0332a57e985ffa253e5e9fbd28ef99af5a068d1b141145211969aa8999",
+        exe = "biber",
+    ),
+    ("linux", "aarch64"): struct(
+        asset = "biber-linux_aarch64.tar.gz",
+        sha256 = "3738607464ab87bb72011a2dd6b53e430b7632b263c59048fd8f32023ec97b21",
         exe = "biber",
     ),
     ("macos", "x86_64"): struct(
