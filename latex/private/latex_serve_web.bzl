@@ -289,17 +289,10 @@ latex_serve_web = rule(
             default = 80,
         ),
         "open_on_start": attr.bool(
-            doc = "If True, open the preview automatically once the server " +
-                  "starts. When the launching terminal belongs to a " +
-                  "VS Code-family editor (VS Code, Cursor, VSCodium — " +
-                  "detected via TERM_PROGRAM), the preview is opened as a " +
-                  "Simple Browser tab in that editor via its CLI " +
-                  "(`code --open-url`, `cursor --open-url`, " +
-                  "`codium --open-url`). Otherwise it falls back to the " +
-                  "system default web browser. JetBrains IDEs and other " +
-                  "terminals without a Simple Browser equivalent fall back " +
-                  "to the web-browser path. The plain http URL is always " +
-                  "printed regardless, so users can copy/paste manually.",
+            doc = "If True, open the preview in the system default web " +
+                  "browser once the server starts. The plain http URL is " +
+                  "always printed regardless, so you can open it however " +
+                  "you prefer.",
             default = False,
         ),
         "debounce_ms": attr.int(

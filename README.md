@@ -172,11 +172,6 @@ bazel run //:cv_serve_web   # http://127.0.0.1:8765/
   location; the matching glyph scrolls into view and gets a
   brief highlight flash. This is the half of SyncTeX where the
   jump is real, because the editor is the one driving it.
-- **VS Code-family terminal detection** — when invoked from
-  VS Code / Cursor / Windsurf / VSCodium, the preview opens in
-  the editor's built-in Simple Browser by default instead of a
-  separate window. Outside those terminals it opens the system
-  browser. Tunable via the `open_on_start` attribute.
 - **DPI-aware rendering** — canvases render at `devicePixelRatio`,
   so the preview is crisp on Retina / 4K displays.
 - **Configurable port and debouncer** — `port`, `poll_interval_ms`,

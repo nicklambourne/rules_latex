@@ -33,10 +33,10 @@ sh_test(
 )
 
 sh_test(
-    name = "test_editor_detection",
+    name = "test_open_browser",
     srcs = ["run_pytest.sh"],
-    args = ["tests/py/test_editor_detection.py"],
-    data = _TEST_DATA + ["test_editor_detection.py"],
+    args = ["tests/py/test_open_browser.py"],
+    data = _TEST_DATA + ["test_open_browser.py"],
 )
 
 sh_test(
@@ -157,8 +157,8 @@ test_suite(
         ":test_build_state_log",
         ":test_build_state_ws",
         ":test_combine_output",
-        ":test_editor_detection",
         ":test_http_head",
+        ":test_open_browser",
         ":test_pdf_chunks",
         ":test_populate_cache_e2e",
         ":test_populate_cache_hints",

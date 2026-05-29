@@ -90,6 +90,17 @@ that, expect breaking changes in any v0.x release.
 
 ### Removed
 
+- **VS Code "Simple Browser" auto-open from `open_on_start`.** It tried
+  to open the preview as a Simple Browser tab via `code --open-url
+  vscode://vscode.simpleBrowser/show?url=…`, but that never worked: VS
+  Code routes a `vscode://` URI by extension id, and the built-in Simple
+  Browser registers no URI handler — so it failed with "extension
+  'vscode.simplebrowser' … not found." Dropped the editor detection /
+  handoff entirely; `open_on_start` now just opens the system default
+  browser, and the http URL is always printed (paste it into Simple
+  Browser manually if you prefer). Same "don't fake driving the editor"
+  stance as DESIGN.md §4.8.
+
 - **`latex_serve` rule (system-PDF-viewer live preview).** The
   rule opened the built document in `open` / `xdg-open` /
   `start` and relied on the PDF viewer to detect the file-on-
