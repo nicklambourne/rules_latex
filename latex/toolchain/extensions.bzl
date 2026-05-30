@@ -24,6 +24,10 @@ load(
     "BIBER_RELEASES",
 )
 load(
+    "//latex/private:bundles.bzl",
+    "DEFAULT_BUNDLE",
+)
+load(
     "//latex/toolchain:repositories.bzl",
     "biber_repository",
     "biblatex_repository",
@@ -114,11 +118,16 @@ _toolchain_hub_repository = repository_rule(
 )
 
 def _tectonic_impl(module_ctx):
-    # `tectonic.bundle()` is a no-arg tag that opts the workspace into the
-    # pinned offline package bundle. Any module declaring it triggers bundle
-    # creation; this lets root and transitive modules independently request
-    # offline mode without coordination.
+    # `tectonic.bundle()` opts the workspace into the pinned offline package
+    # bundle. Any module declaring it triggers bundle creation; this lets
+    # root and transitive modules independently request offline mode without
+    # coordination. The optional url/sha256 override (root module only)
+    # repoints the download at a mirror — e.g. a self-hosted R2 bucket — for
+    # availability independence; unset, it uses the pinned DEFAULT_BUNDLE.
     want_bundle = False
+    bundle_url = DEFAULT_BUNDLE.url
+    bundle_sha256 = DEFAULT_BUNDLE.sha256
+    bundle_version = DEFAULT_BUNDLE.version
 
     # `tectonic.toolchain(modern_biblatex = True)` opts into the
     # newer biblatex + biber 2.21 stack. Same any-module-wins
@@ -126,15 +135,31 @@ def _tectonic_impl(module_ctx):
     # independently request it.
     want_modern_biblatex = False
     for mod in module_ctx.modules:
-        for _ in mod.tags.bundle:
+        for t in mod.tags.bundle:
             want_bundle = True
+
+            # Only the root module may repoint the bundle, so a transitive
+            # dependency can't silently swap the package source under you.
+            if mod.is_root and t.url:
+                if not t.sha256:
+                    fail("tectonic.bundle(url = ...) also requires " +
+                         "sha256 = ... (the SHA-256 of the bundle at that URL).")
+                bundle_url = t.url
+                bundle_sha256 = t.sha256
+                if t.version:
+                    bundle_version = t.version
         for t in mod.tags.toolchain:
             if t.modern_biblatex:
                 want_modern_biblatex = True
 
     bundle_repo = _BUNDLE_REPO_NAME if want_bundle else ""
     if want_bundle:
-        tectonic_bundle_repository(name = _BUNDLE_REPO_NAME)
+        tectonic_bundle_repository(
+            name = _BUNDLE_REPO_NAME,
+            url = bundle_url,
+            sha256 = bundle_sha256,
+            version = bundle_version,
+        )
 
     biblatex_overlay_repo = ""
     if want_modern_biblatex:
@@ -197,6 +222,27 @@ tectonic = module_extension(
         # When present, every materialised toolchain points at the bundle
         # and latex_document actions run with `--bundle` + `--only-cached`,
         # making compilation fully hermetic.
-        "bundle": tag_class(attrs = {}),
+        #
+        # `url`/`sha256` let the ROOT module point the bundle download at a
+        # mirror (e.g. a self-hosted Cloudflare R2 bucket) instead of the
+        # default `data1.fullyjustified.net` CDN — for availability
+        # independence or to serve a rebuilt bundle. Both must be set
+        # together; omit them (the common case) to use the pinned default.
+        # Only the root module may override; a transitive dep can't silently
+        # repoint your bundle. See DESIGN.md §4.4.
+        "bundle": tag_class(attrs = {
+            "url": attr.string(
+                doc = "Override URL for the bundle tar (root module only). " +
+                      "Requires `sha256`. Defaults to the pinned bundle.",
+            ),
+            "sha256": attr.string(
+                doc = "SHA-256 of the bundle at `url`. Required when `url` " +
+                      "is set.",
+            ),
+            "version": attr.string(
+                doc = "Optional human-readable version label for an " +
+                      "overridden bundle (informational).",
+            ),
+        }),
     },
 )

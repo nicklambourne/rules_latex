@@ -123,17 +123,31 @@ alias(
 
 def _tectonic_bundle_repository_impl(rctx):
     # We don't extract the tar — Tectonic consumes the archive as a single
-    # file via its `--bundle` flag.
+    # file via its `--bundle` flag. url/sha256 default to the pinned
+    # DEFAULT_BUNDLE but may be overridden (e.g. a self-hosted R2 mirror) by
+    # the root module via tectonic.bundle(url = ..., sha256 = ...).
     rctx.download(
-        url = DEFAULT_BUNDLE.url,
+        url = rctx.attr.url or DEFAULT_BUNDLE.url,
         output = "bundle.tar",
-        sha256 = DEFAULT_BUNDLE.sha256,
+        sha256 = rctx.attr.sha256 or DEFAULT_BUNDLE.sha256,
     )
     rctx.file("BUILD.bazel", _BUNDLE_BUILD_FILE)
 
 tectonic_bundle_repository = repository_rule(
     implementation = _tectonic_bundle_repository_impl,
-    doc = "Downloads the pinned tectonic offline package bundle.",
+    doc = "Downloads the pinned (or root-overridden) tectonic offline " +
+          "package bundle.",
+    attrs = {
+        "url": attr.string(
+            doc = "Bundle tar URL; empty uses the pinned DEFAULT_BUNDLE.url.",
+        ),
+        "sha256": attr.string(
+            doc = "SHA-256 of the bundle; empty uses DEFAULT_BUNDLE.sha256.",
+        ),
+        "version": attr.string(
+            doc = "Informational version label for the bundle.",
+        ),
+    },
 )
 
 _BIBER_BUILD_FILE = """\

@@ -8,6 +8,14 @@ that, expect breaking changes in any v0.x release.
 
 ### Added
 
+- **`tectonic.bundle()` can now mirror the package bundle.** The tag
+  accepts optional `url` + `sha256` (root module only) to repoint the
+  full-bundle download away from the default `data1.fullyjustified.net`
+  CDN — e.g. at a self-hosted Cloudflare R2 bucket — for availability
+  independence or to serve a rebuilt bundle. Omitting them (the common
+  case) keeps the pinned default, so this is fully backward-compatible.
+  Setup runbook in `DESIGN.md` §4.4 "Self-hosting the bundle".
+
 - **Hermetic biber on linux/aarch64 — both version stacks.** `biber =
   True` documents now build hermetically on Linux arm64 with *or*
   without `modern_biblatex`:
