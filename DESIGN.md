@@ -133,10 +133,14 @@ point of failure.
    [`latex/private/latex_cache_snapshot.bzl`](./latex/private/latex_cache_snapshot.bzl).
 2. **Full bundle.** When `tectonic.bundle()` is declared on the
    `tectonic` module extension, a `tectonic_bundle_repository`
-   http-fetches the pinned bundle (`tlextras-2022.0r0.tar`) and feeds
-   it into every materialised `latex_toolchain`. Actions run with
-   `--bundle <path>` and `--only-cached`, no network access at build
-   time. The downside: every first build fetches ~3 GB.
+   http-fetches the pinned bundle (`tlextras-2022.0r0.tar`, ~2.7 GiB)
+   and feeds it into every materialised `latex_toolchain`. Actions run
+   with `--bundle <path>` and `--only-cached`, no network access at
+   build time. The downside: every first build fetches the whole bundle
+   (Bazel's repository cache makes it once-per-machine). The bundle is
+   downloaded as a single file (not range-fetched), so the host only
+   needs to serve a static object. The **root** module may repoint the
+   download at a mirror — see "Self-hosting the bundle" below.
 3. **Implicit cache pipeline (default, new in v0.2).** When neither
    (1) nor (2) is set, the `latex_document` rule synthesises a
    two-action pipeline:
@@ -170,6 +174,59 @@ sources.
 
 See [`latex/private/latex_document.bzl`](./latex/private/latex_document.bzl)
 and [`tools/make_cache_snapshot.py`](./tools/make_cache_snapshot.py).
+
+#### Self-hosting the bundle (e.g. Cloudflare R2)
+
+The full-bundle path (mode 2) defaults to `data1.fullyjustified.net`
+(Tectonic's CDN). A root module can point it at its own mirror for
+availability independence — or to serve a rebuilt bundle (§4.10 / §5
+#1) — without touching rules_latex:
+
+```python
+# MODULE.bazel (root only; transitive deps can't override this)
+tectonic.bundle(
+    url = "https://<your-bucket>.r2.dev/tlextras-2022.0r0.tar",
+    sha256 = "425685e124746c15ba9bb8e0596bdaad98fce886afa347fbcf9ec0e9acd7fe79",
+)
+```
+
+Mirroring the existing bundle keeps the **same sha256** (identical
+bytes). Because mode 2 downloads the whole file once (no range
+requests), any static object host works; **Cloudflare R2** is the
+recommended target — zero egress, durable, and a ~2.7 GiB bundle sits
+inside its free storage tier. Setup (one-time, requires a Cloudflare
+account — *not* something rules_latex can do for you):
+
+1. **Create a bucket** in the Cloudflare dashboard (R2 → Create bucket),
+   e.g. `rules-latex-bundle`.
+2. **Expose it publicly** — either enable the bucket's `r2.dev`
+   development URL, or (better for production) attach a **custom
+   domain** via a Cloudflare-managed DNS zone. Public read is required;
+   the bundle is non-secret (it's a curated TeX Live subset).
+3. **Upload** the bundle with any S3-compatible client against R2's
+   endpoint (`https://<account-id>.r2.cloudflarestorage.com`), using an
+   R2 API token (R2 → Manage API Tokens):
+
+   ```bash
+   # rclone (configure an R2 remote once, then:)
+   curl -fL https://data1.fullyjustified.net/tlextras-2022.0r0.tar -o bundle.tar
+   sha256sum bundle.tar            # confirm 425685e1…fe79
+   rclone copy bundle.tar r2:rules-latex-bundle/
+   # or aws-cli:
+   #   aws s3 cp bundle.tar s3://rules-latex-bundle/ \
+   #     --endpoint-url https://<account-id>.r2.cloudflarestorage.com
+   ```
+
+4. **Verify** the public URL serves it (`curl -I <public-url>` → `200`),
+   then set `tectonic.bundle(url = ..., sha256 = ...)` as above. The
+   sha256 pin makes the download tamper-evident regardless of host.
+
+Note this only covers the full-bundle (mode 2) path. The default
+implicit pipeline (mode 3) still uses Tectonic's relay for its online
+prime; pointing *that* at a mirror would require Tectonic's web-bundle
+URL mechanism, which is out of scope here. For most consumers,
+`latex_cache_snapshot` already gives per-document CDN independence with
+no hosting at all.
 
 ### 4.5 Reproducibility
 

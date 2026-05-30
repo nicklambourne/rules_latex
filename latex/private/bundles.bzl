@@ -26,6 +26,11 @@ same way if you ever bump the version.
 
 To update: pick a new bundle URL, fetch it, run `sha256sum` on the result,
 and bump the constants below.
+
+These are the *defaults*. A root module can repoint the full-bundle
+download at its own mirror (e.g. a Cloudflare R2 bucket) without editing
+this file, via `tectonic.bundle(url = ..., sha256 = ...)` — see
+`DESIGN.md` §4.4 "Self-hosting the bundle".
 """
 
 # The canonical tlextras bundle that ships with tectonic 0.16.9 (bundle
