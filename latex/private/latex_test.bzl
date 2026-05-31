@@ -21,6 +21,7 @@ build.
 """
 
 load("//latex:providers.bzl", "LatexInfo")
+load("//latex/private:bundles.bzl", "DEFAULT_BUNDLE")
 
 # Patterns that, if present in the log, fail the test by default. Users can
 # add to this list via `forbidden_patterns` or override entirely with
@@ -117,6 +118,15 @@ def _latex_test_impl(ctx):
         '--biber "{}"'.format(biber_file.short_path) if biber_file else ""
     )
 
+    # Cache-replay modes (user cache + inlined implicit prime) must name
+    # the bundle the cache was primed against -- the default TL2026 .ttb
+    # on R2 -- so tectonic resolves the format cached under that bundle's
+    # identity. The toolchain-bundle path passes `--bundle <local-path>`
+    # instead, so it needs no URL. Mirrors latex_document. See DESIGN §4.10.
+    bundle_url_arg = (
+        "" if toolchain.bundle else '--bundle-url "{}"'.format(DEFAULT_BUNDLE.url)
+    )
+
     ctan_args = " \\\n    ".join([
         '--ctan-package "{}"'.format(pkg)
         for pkg in ctx.attr.ctan_packages
@@ -174,6 +184,7 @@ PYTHON="${PYTHON:-python3}"
     --tectonic "{tectonic}" \\
     --main "{main}" \\
     --output "$WORK/cache.tar.gz" \\
+    {bundle_url_arg} \\
     {biber_arg} \\
     {ctan_args} \\
     {bundle_manifest_arg} \\
@@ -185,6 +196,7 @@ PYTHON="${PYTHON:-python3}"
             populate_tool = ctx.file._populate_tool.short_path,
             tectonic = tectonic.short_path,
             main = main.short_path,
+            bundle_url_arg = bundle_url_arg,
             biber_arg = biber_arg,
             ctan_args = ctan_args,
             bundle_manifest_arg = bundle_manifest_arg,
@@ -204,6 +216,7 @@ PYTHON="${PYTHON:-python3}"
     --output "$WORK/output.{outfmt}" \\
     --log-output "$WORK/output.log" \\
     {compile_cache_args} \\
+    {bundle_url_arg} \\
     {biber_arg} \\
     {biblatex_overlay_args} \\
     {src_args} \\
@@ -225,6 +238,7 @@ exit $status
         main = main.short_path,
         outfmt = ctx.attr.outfmt,
         compile_cache_args = compile_cache_args,
+        bundle_url_arg = bundle_url_arg,
         biber_arg = biber_arg,
         biblatex_overlay_args = biblatex_overlay_args,
         src_args = src_args,
