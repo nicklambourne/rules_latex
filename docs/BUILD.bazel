@@ -55,6 +55,10 @@ bzl_library(
         # reference to satisfy its load graph even though the symbol
         # isn't part of the public docs surface.
         "//latex/private:action_schema.bzl",
+        # latex_document.bzl loads DEFAULT_BUNDLE from this private
+        # module to pass the bundle URL to the implicit-pipeline
+        # populate step; Stardoc needs the transitive bzl_library ref.
+        "//latex/private:bundles.bzl",
         "//latex/private:latex_cache_snapshot.bzl",
         "//latex/private:latex_document.bzl",
         "//latex/private:latex_library.bzl",
