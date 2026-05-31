@@ -351,14 +351,15 @@ class FormatBiblatexVersionHintTest(unittest.TestCase):
         self.assertNotIn("biblatex-apa, lipsum", msg)
         self.assertNotIn("lipsum, biblatex-apa", msg)
 
-    def test_includes_module_bazel_snippet(self):
-        # The fix is verbatim:
-        # `tectonic.toolchain(modern_biblatex = True)`. The hint
-        # should include it so users can copy-paste.
+    def test_names_the_bundle_biblatex_version(self):
+        # The bundle now ships biblatex 3.21; the hint should name that
+        # version (no more modern_biblatex opt-in to suggest) and point at
+        # the bundle-refresh path for styles needing something even newer.
         msg = tpc._format_biblatex_version_hint(
             "apa.bbx", ctan_packages=[],
         )
-        self.assertIn("modern_biblatex = True", msg)
+        self.assertIn("3.21", msg)
+        self.assertNotIn("modern_biblatex", msg)
 
     def test_includes_docs_link(self):
         msg = tpc._format_biblatex_version_hint(
@@ -379,7 +380,7 @@ class FormatBiblatexVersionHintTest(unittest.TestCase):
             "apa.bbx", ctan_packages=["apa7"],
         )
         self.assertNotIn("likely culprit", msg)
-        self.assertIn("modern_biblatex = True", msg)
+        self.assertIn("3.21", msg)
 
 
 if __name__ == "__main__":

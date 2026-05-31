@@ -8,7 +8,6 @@ toolchain per platform that has an upstream binary.
 
 load(
     "//latex/private:biber_versions.bzl",
-    "BIBER_MIRROR_TAG",
     "BIBER_RELEASES",
     "biber_download_url",
 )
@@ -193,4 +192,3 @@ biber_repository = repository_rule(
         "cpu": attr.string(mandatory = True, values = ["x86_64", "aarch64"]),
     },
 )
-

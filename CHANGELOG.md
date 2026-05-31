@@ -6,6 +6,24 @@ that, expect breaking changes in any v0.x release.
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: adopted a fresh TeX Live 2026 package bundle; retired the
+  `modern_biblatex` opt-in and the biber 2.17 pin.** rules_latex now ships
+  its own bundle — a TeX Live 2026 `.ttb` built from source and hosted on
+  Cloudflare R2 (`rules-latex.ndl.au`) — instead of relying on tectonic's
+  relay (the frozen 2022 bundle). The implicit-pipeline prime range-fetches
+  packages from it (`--bundle <R2 .ttb URL>`); `tectonic.bundle()` downloads
+  it whole. Because TL2026 ships **biblatex 3.21 natively**, the default
+  bibliography stack is now **biber 2.21** and the
+  `tectonic.toolchain(modern_biblatex = True)` overlay is **gone** (its
+  3.21/2.21 stack is the default). Migration: remove any
+  `tectonic.toolchain(modern_biblatex = True)` from your `MODULE.bazel` —
+  modern citation styles (biblatex-apa 9.x, etc.) now work out of the box.
+  Resolves the bundle-staleness issue (DESIGN.md §4.10 / §5 #1) and makes
+  the linux/aarch64 biber the off-the-shelf CTAN 2.21 binary (retiring the
+  from-source 2.17 build, issue #10). See DESIGN.md §4.4 / §4.9 / §4.10.
+
 ### Added
 
 - **`tectonic.bundle()` can now mirror the package bundle.** The tag

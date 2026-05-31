@@ -198,6 +198,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--bundle-url",
+        default=None,
+        help=(
+            "URL of the package bundle (rules_latex's TL2026 .ttb on R2) to "
+            "pass to tectonic as --bundle for the online prime. Tectonic "
+            "range-fetches the needed files from it. When omitted, tectonic "
+            "uses its built-in default (relay) bundle."
+        ),
+    )
+    parser.add_argument(
         "--biblatex-overlay-file",
         dest="biblatex_overlay_files",
         action="append",
@@ -719,22 +729,19 @@ def _format_biblatex_version_hint(
     if biblatex_seeds:
         seed_clause = (
             f" The likely culprit is {', '.join(biblatex_seeds)} in your "
-            f"ctan_packages — modern releases of these styles need "
-            f"biblatex 3.18+ / biber 2.18+."
+            f"ctan_packages — a release of one of these styles that needs a "
+            f"biblatex newer than the bundle's 3.21."
         )
     return (
         f"hint: '{offending_file}' failed with 'Undefined control sequence', "
         f"which is the signature of a biblatex extension style fetched from "
-        f"CTAN being too new for the bundle's pinned biblatex 3.17 / biber "
-        f"2.17.{seed_clause}\n"
+        f"CTAN being too new for the bundle's biblatex 3.21 / biber 2.21."
+        f"{seed_clause}\n"
         f"\n"
-        f"Fix: opt the toolchain into the modern biblatex overlay by adding\n"
-        f"\n"
-        f"    tectonic.toolchain(modern_biblatex = True)\n"
-        f"\n"
-        f"to your workspace's MODULE.bazel. That fetches biblatex 3.21 + "
-        f"biber 2.21 alongside the toolchain and overlays them via -Z "
-        f"search-path so modern style files actually work.\n"
+        f"The pinned TL2026 bundle already ships modern biblatex (3.21); if a "
+        f"style still fails this way it needs a biblatex newer than the "
+        f"bundle provides. Options: pin an older release of the style, or "
+        f"refresh the bundle to a newer TeX Live (see DESIGN.md §4.10).\n"
         f"\n"
         f"Background and gotchas: "
         f"https://nicklambourne.github.io/rules_latex/getting-started/"
@@ -804,6 +811,7 @@ def run_tectonic(
     ctan_packages: list[str] | None = None,
     package_deps: dict[str, set[str]] | None = None,
     biblatex_overlay_files: list[Path] | None = None,
+    bundle_url: str | None = None,
 ) -> None:
     """Run tectonic with cwd set to the staged work directory.
 
@@ -839,6 +847,12 @@ def run_tectonic(
         "compile",
         "--keep-logs",
     ]
+    # Point the online prime at rules_latex's pinned package bundle (the
+    # TL2026 .ttb on R2) rather than tectonic's built-in relay (the frozen
+    # 2022 bundle). Tectonic range-fetches the files it needs from the .ttb
+    # URL; the resulting cache is what the offline TectonicCompile reuses.
+    if bundle_url:
+        cmd += ["--bundle", bundle_url]
     # One `-Z search-path` per directory under ctan_dir that holds
     # package files. Tectonic prefers cwd > search-path entries >
     # bundle, so this overlays fetched packages without disturbing
@@ -1001,6 +1015,7 @@ def main() -> int:
             ctan_packages=args.ctan_packages,
             package_deps=package_deps,
             biblatex_overlay_files=args.biblatex_overlay_files,
+            bundle_url=args.bundle_url,
         )
         pack_cache(cache_dir, output, ctan_dir=ctan_dir)
 

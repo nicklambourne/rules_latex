@@ -53,6 +53,7 @@ resolve as the author would expect.
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("//latex:providers.bzl", "LatexDocumentInfo", "LatexInfo")
 load("//latex/private:action_schema.bzl", "RULES_LATEX_ACTION_SCHEMA")
+load("//latex/private:bundles.bzl", "DEFAULT_BUNDLE")
 
 _OUTFMTS = ["pdf", "html", "xdv", "aux"]
 
@@ -130,6 +131,12 @@ def _populate_cache_action(
     args.add("--tectonic", tectonic.path)
     args.add("--main", main_in.path)
     args.add("--output", output_tarball.path)
+
+    # The implicit-pipeline prime resolves packages from rules_latex's
+    # pinned bundle (the TL2026 .ttb on R2), range-fetched, rather than
+    # tectonic's built-in relay (the frozen 2022 bundle). This is what
+    # makes the implicit default ship biblatex 3.21 (matching biber 2.21).
+    args.add("--bundle-url", DEFAULT_BUNDLE.url)
 
     for src in srcs_depset.to_list():
         args.add("--src", src.path)
