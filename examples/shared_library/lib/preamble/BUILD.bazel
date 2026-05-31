@@ -1,0 +1,15 @@
+"""Shared house-style preamble for the Meridian example documents.
+
+A `latex_library` that exposes a single `preamble.tex`. Sibling
+documents depend on it and `\\input` it by workspace-relative path
+(see ../../report/main.tex). Centralising the preamble means the
+house style is defined once and reused by every document.
+"""
+
+load("@rules_latex//latex:defs.bzl", "latex_library")
+
+latex_library(
+    name = "preamble",
+    srcs = ["preamble.tex"],
+    visibility = ["//visibility:public"],
+)

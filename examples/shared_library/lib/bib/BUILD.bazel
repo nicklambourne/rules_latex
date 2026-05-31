@@ -1,0 +1,14 @@
+"""Shared bibliography for the Meridian example documents.
+
+A `latex_library` exposing a single `.bib`. Multiple documents add it
+with `\\addbibresource{shared_library/lib/bib/references.bib}` so they
+cite from one curated reference list.
+"""
+
+load("@rules_latex//latex:defs.bzl", "latex_library")
+
+latex_library(
+    name = "bib",
+    srcs = ["references.bib"],
+    visibility = ["//visibility:public"],
+)

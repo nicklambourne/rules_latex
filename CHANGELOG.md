@@ -6,6 +6,16 @@ that, expect breaking changes in any v0.x release.
 
 ## [Unreleased]
 
+### Added
+
+- **`shared_library` example.** A miniature monorepo showing how to
+  share LaTeX infrastructure across packages: a house-style preamble
+  and a bibliography (both `latex_library`) plus the shared logo
+  (`latex_pkg`), consumed by two sibling documents (a report and a
+  memo) via `deps` and workspace-relative-path references. Demonstrates
+  the cross-package main-rooted staging (DESIGN.md §4.11) and the
+  "edit the style once, every document updates" payoff.
+
 ## [0.6.0] - 2026-05-31
 
 ### Changed

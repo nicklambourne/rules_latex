@@ -394,7 +394,9 @@ jobs:
           # letter, cv, thesis, beamer — exercise the full range of
           # document shapes. CV is online (no cache attribute), letter
           # and thesis use biber, beamer pulls in the metropolis theme.
-          # Combining them in one step lets Bazel parallelise.
+          # The shared_library report + memo exercise the cross-package
+          # shared-library pattern (a preamble + bib shared across two
+          # documents). Combining them in one step lets Bazel parallelise.
           attempt=1
           max_attempts=3
           while true; do
@@ -403,6 +405,8 @@ jobs:
                 //cv:cv \
                 //thesis:thesis \
                 //beamer:slides \
+                //shared_library/report:report \
+                //shared_library/memo:memo \
                 --config=ci; then
               break
             fi
@@ -414,7 +418,9 @@ jobs:
             attempt=$(( attempt + 1 ))
           done
           for pdf in bazel-bin/letter/letter.pdf bazel-bin/cv/cv.pdf \
-                     bazel-bin/thesis/thesis.pdf bazel-bin/beamer/slides.pdf; do
+                     bazel-bin/thesis/thesis.pdf bazel-bin/beamer/slides.pdf \
+                     bazel-bin/shared_library/report/report.pdf \
+                     bazel-bin/shared_library/memo/memo.pdf; do
             file "$pdf" | grep -q "PDF document"
             echo "OK: $pdf"
           done

@@ -1,0 +1,34 @@
+"""A short memo that reuses the report's shared infrastructure.
+
+`memo` is a completely different document from `report`, but it depends
+on the *same* three shared packages -- preamble, bibliography, logo --
+and so renders with the identical house style and cites from the same
+reference list. This is the shared-library payoff: define the house
+style and references once, reuse them across every document in the
+repo.
+"""
+
+load("@rules_latex//latex:defs.bzl", "latex_document", "latex_test")
+
+_DEPS = [
+    "//shared_library/lib/preamble",
+    "//shared_library/lib/bib",
+    "//_shared/logo",
+]
+
+latex_document(
+    name = "memo",
+    srcs = ["main.tex"],
+    biber = True,
+    main = "main.tex",
+    visibility = ["//visibility:public"],
+    deps = _DEPS,
+)
+
+latex_test(
+    name = "memo_compiles",
+    srcs = ["main.tex"],
+    biber = True,
+    main = "main.tex",
+    deps = _DEPS,
+)

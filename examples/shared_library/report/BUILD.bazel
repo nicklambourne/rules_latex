@@ -1,0 +1,52 @@
+"""Technical report sharing infrastructure across packages.
+
+The point of this example is the dependency wiring, not the prose.
+`report` pulls its house preamble, bibliography, and logo from three
+*separate* packages via `deps`:
+
+    //shared_library/lib/preamble   (a latex_library: preamble.tex)
+    //shared_library/lib/bib        (a latex_library: references.bib)
+    //_shared/logo                  (a latex_pkg: logo.png)
+
+main.tex references each by its workspace-relative path
+(`\\input{...}`, `\\addbibresource{...}`, `\\includegraphics{...}`).
+rules_latex's main-rooted staging (DESIGN.md 4.11) places those
+cross-package files at exactly those paths in the compile work
+directory, so the references resolve without copying anything.
+
+The sibling `//shared_library/memo` target depends on the same
+preamble + bibliography + logo. Change the house style once and both
+documents pick it up on the next build -- the shared-library payoff.
+
+Section bodies live in this package's `sections/` subdir and are
+globbed into `srcs`; being in the same package, they stage next to
+main.tex.
+"""
+
+load("@rules_latex//latex:defs.bzl", "latex_document", "latex_test")
+
+_DEPS = [
+    "//shared_library/lib/preamble",
+    "//shared_library/lib/bib",
+    "//_shared/logo",
+]
+
+_SRCS = ["main.tex"] + glob(["sections/*.tex"])
+
+latex_document(
+    name = "report",
+    srcs = _SRCS,
+    biber = True,
+    main = "main.tex",
+    synctex = True,
+    visibility = ["//visibility:public"],
+    deps = _DEPS,
+)
+
+latex_test(
+    name = "report_compiles",
+    srcs = _SRCS,
+    biber = True,
+    main = "main.tex",
+    deps = _DEPS,
+)
