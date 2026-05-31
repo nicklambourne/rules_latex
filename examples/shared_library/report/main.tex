@@ -1,0 +1,27 @@
+\documentclass[11pt]{article}
+
+% Shared house style, pulled from a sibling package by its
+% workspace-relative path. The file physically lives in
+% //shared_library/lib/preamble, not here -- rules_latex stages it to
+% this path at compile time (DESIGN.md 4.11) because `report` lists
+% that package in its `deps`.
+\input{shared_library/lib/preamble/preamble}
+
+% Shared bibliography, likewise from a sibling package.
+\addbibresource{shared_library/lib/bib/references.bib}
+
+\begin{document}
+
+% \doctitle (defined in the shared preamble) renders the shared logo
+% and the house title block.
+\doctitle{Estuary Survey: Spring Field Report}
+
+% Section bodies live in this package's sections/ subdirectory and are
+% globbed into srcs in the BUILD file. Being in the same package as
+% main.tex, they stage adjacent to it, so the relative \input works.
+\input{sections/introduction}
+\input{sections/findings}
+
+\printbibliography
+
+\end{document}

@@ -1,0 +1,51 @@
+% Shared "house style" preamble for the Meridian example documents.
+%
+% Consumed by sibling latex_document targets (report, memo) via:
+%
+%     \input{shared_library/lib/preamble/preamble}
+%
+% The path is workspace-relative. Because the preamble lives in a
+% different Bazel package than the documents that use it, rules_latex's
+% main-rooted staging layout places it at exactly that path in the
+% compile work directory (see rules_latex DESIGN.md 4.11), so the
+% \input resolves. This is the idiomatic way to share LaTeX
+% infrastructure across packages: reference shared files by their
+% workspace-relative path rather than \usepackage-ing a cross-package
+% .sty (tectonic only searches the cwd and the bundle for \usepackage).
+%
+% Edit the house style here once and every document that \inputs it
+% updates on the next build.
+
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{titlesec}
+\usepackage{graphicx}
+\usepackage{hyperref}
+% biblatex is loaded after hyperref (its recommended order) so every
+% document shares the same citation style and backend.
+\usepackage[style=numeric,backend=biber]{biblatex}
+
+% House brand colour, reused for links and section headings.
+\definecolor{meridian}{RGB}{0,90,130}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=meridian,
+    citecolor=meridian,
+    urlcolor=meridian,
+}
+
+% House section formatting.
+\titleformat{\section}
+    {\Large\bfseries\color{meridian}}
+    {\thesection}{1em}{}
+
+% House macros shared across all documents.
+\newcommand{\orgname}{Meridian Field Station}
+\newcommand{\doctitle}[1]{%
+    \begin{center}
+        \includegraphics[width=3cm]{_shared/logo/logo.png}\\[1em]
+        {\color{meridian}\Huge\bfseries #1}\\[0.5em]
+        {\large\orgname}
+    \end{center}
+    \vspace{1em}%
+}

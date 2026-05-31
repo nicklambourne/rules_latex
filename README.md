@@ -103,8 +103,10 @@ bazel test //:cv_compiles
 ```
 
 For more, see the [examples](./examples/) directory — letter, CV,
-paper, thesis, beamer slides, and a CTAN-overlay paper — and the
-full [user guide](https://nicklambourne.github.io/rules_latex/).
+paper, thesis, beamer slides, a CTAN-overlay paper, and a
+[shared-library monorepo](./examples/shared_library/) (a preamble +
+bibliography shared across multiple documents) — and the full
+[user guide](https://nicklambourne.github.io/rules_latex/).
 
 ## Rules
 
@@ -291,7 +293,7 @@ unsupported platforms.
 - [User guide](https://nicklambourne.github.io/rules_latex/) — generated from Stardoc, with the Material theme
 - [`DESIGN.md`](./DESIGN.md) — architectural rationale, the v0.x → v1.0 roadmap, and open questions
 - [`CHANGELOG.md`](./CHANGELOG.md)
-- [`examples/`](./examples/) — five runnable examples (letter, CV, paper, thesis, beamer)
+- [`examples/`](./examples/) — runnable examples (hello, letter, CV, paper, ctan_paper, thesis, beamer, and a shared-library monorepo)
 
 ## License
 
