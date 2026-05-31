@@ -106,25 +106,6 @@ def _ctan_search_paths(ctan_dir: Path) -> list[str]:
     return [str(d) for d in sorted(dirs)]
 
 
-def _biblatex_overlay_search_paths(
-    overlay_files: list[Path] | None,
-) -> list[str]:
-    """Same shape as `_ctan_search_paths` but for the modern-biblatex
-    toolchain overlay.
-
-    The overlay is a flat list of files (passed via repeated
-    ``--biblatex-overlay-file`` flags from the rule plumbing). One
-    unique parent directory per file, sorted for determinism.
-    """
-    if not overlay_files:
-        return []
-    dirs: set[Path] = set()
-    for f in overlay_files:
-        if f.is_file() and f.suffix.lower() in _PACKAGE_FILE_EXTS:
-            dirs.add(f.parent.resolve())
-    return [str(d) for d in sorted(dirs)]
-
-
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tectonic", required=True, type=Path)
@@ -195,21 +176,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--tectonic-arg", dest="tectonic_args", action="append", default=[],
         help="Extra arguments passed through to tectonic, in order.",
-    )
-    parser.add_argument(
-        "--biblatex-overlay-file",
-        dest="biblatex_overlay_files",
-        action="append",
-        default=[],
-        type=Path,
-        help=(
-            "A file from the modern-biblatex toolchain overlay. May be "
-            "repeated. One -Z search-path flag is emitted per unique "
-            "parent directory among these files so tectonic loads the "
-            "overlaid biblatex instead of the bundle's pinned 3.17. "
-            "See tools/tectonic_populate_cache.py for the matching "
-            "wiring."
-        ),
     )
     return parser
 
@@ -298,7 +264,6 @@ def run_tectonic(
     extra_args: list[str],
     biber: Path | None,
     ctan_dir: Path | None = None,
-    biblatex_overlay_files: list[Path] | None = None,
 ) -> None:
     """Run tectonic with cwd set to the staged work directory.
 
@@ -360,9 +325,6 @@ def run_tectonic(
     if ctan_dir is not None:
         for search_dir in _ctan_search_paths(ctan_dir):
             cmd.extend(["-Z", "search-path={}".format(search_dir)])
-    # Modern-biblatex toolchain overlay (when the workspace opted in).
-    for search_dir in _biblatex_overlay_search_paths(biblatex_overlay_files):
-        cmd.extend(["-Z", "search-path={}".format(search_dir)])
     if reproducible:
         cmd += ["-Z", "deterministic-mode"]
     if synctex:
@@ -411,14 +373,12 @@ def run_tectonic(
             f"{main_in_workdir.parent} for details."
         )
         # Surface the biblatex-version-coupling hint when the failure
-        # signature matches *and* the workspace hasn't already opted
-        # into the modern_biblatex overlay. (If they have and it's
-        # still failing, the hint would be misleading.) Same detection
-        # logic as in tectonic_populate_cache.py — kept inline rather
-        # than refactored into a shared module because these two
-        # scripts are run as independent stdlib-only entry-points.
+        # signature matches. Same detection logic as in
+        # tectonic_populate_cache.py — kept inline rather than
+        # refactored into a shared module because these two scripts are
+        # run as independent stdlib-only entry-points.
         log_path = main_in_workdir.parent / (main_in_workdir.stem + ".log")
-        if log_path.is_file() and not biblatex_overlay_files:
+        if log_path.is_file():
             try:
                 log_text = log_path.read_text(encoding="utf-8", errors="replace")
             except OSError:
@@ -525,7 +485,6 @@ def run_one(args: argparse.Namespace) -> int:
             extra_args=list(args.tectonic_args),
             biber=args.biber,
             ctan_dir=ctan_dir,
-            biblatex_overlay_files=args.biblatex_overlay_files,
         )
 
         # Tectonic names outputs after the main file's stem. Copy them
