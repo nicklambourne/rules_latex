@@ -6,28 +6,40 @@ that, expect breaking changes in any v0.x release.
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: adopted a fresh TeX Live 2026 package bundle; retired the
+  `modern_biblatex` opt-in and the biber 2.17 pin.** rules_latex now ships
+  its own bundle — a TeX Live 2026 `.ttb` built from source and hosted on
+  Cloudflare R2 (`rules-latex.ndl.au`) — instead of relying on tectonic's
+  relay (the frozen 2022 bundle). The implicit-pipeline prime range-fetches
+  packages from it (`--bundle <R2 .ttb URL>`); `tectonic.bundle()` downloads
+  it whole. Because TL2026 ships **biblatex 3.21 natively**, the default
+  bibliography stack is now **biber 2.21** and the
+  `tectonic.toolchain(modern_biblatex = True)` overlay is **gone** (its
+  3.21/2.21 stack is the default). Migration: remove any
+  `tectonic.toolchain(modern_biblatex = True)` from your `MODULE.bazel` —
+  modern citation styles (biblatex-apa 9.x, etc.) now work out of the box.
+  Resolves the bundle-staleness issue (DESIGN.md §4.10 / §5 #1) and makes
+  the linux/aarch64 biber the off-the-shelf CTAN 2.21 binary (retiring the
+  from-source 2.17 build, issue #10). See DESIGN.md §4.4 / §4.9 / §4.10.
+
 ### Added
 
 - **`tectonic.bundle()` can now mirror the package bundle.** The tag
   accepts optional `url` + `sha256` (root module only) to repoint the
-  full-bundle download away from the default `data1.fullyjustified.net`
-  CDN — e.g. at a self-hosted Cloudflare R2 bucket — for availability
-  independence or to serve a rebuilt bundle. Omitting them (the common
-  case) keeps the pinned default, so this is fully backward-compatible.
-  Setup runbook in `DESIGN.md` §4.4 "Self-hosting the bundle".
+  full-bundle download at your own mirror — e.g. an internal artifact
+  host — for availability independence. Omitting them (the common case)
+  keeps the pinned default (the self-hosted TeX Live 2026 bundle on
+  R2), so this is fully backward-compatible. Setup runbook in
+  `DESIGN.md` §4.4 "Self-hosting the bundle".
 
-- **Hermetic biber on linux/aarch64 — both version stacks.** `biber =
-  True` documents now build hermetically on Linux arm64 with *or*
-  without `modern_biblatex`:
-  - **biber 2.21** (modern) — prebuilt binary from CTAN's
-    `biber-linux-aarch64`, mirrored to `biber-mirror-v2.21`.
-  - **biber 2.17** (default bundle) — no off-the-shelf arm64 binary
-    exists, so it's **built from source** for aarch64 (Perl 5.34 on
-    Debian buster) and mirrored to `biber-mirror-v2.17`.
-
-  Both are pinned by SHA in `biber_versions.bzl` and CI-verified on a
-  `ubuntu-24.04-arm` runner (2.21 by building `//paper:paper`; 2.17 by a
-  `biber --tool` functional run). Previously Linux arm64 had no biber and
+- **Hermetic biber on linux/aarch64.** `biber = True` documents now
+  build hermetically on Linux arm64, using a prebuilt **biber 2.21**
+  binary from CTAN's `biber-linux-aarch64` package (mirrored to
+  `biber-mirror-v2.21`, pinned by SHA in `biber_versions.bzl`, and
+  CI-verified on a `ubuntu-24.04-arm` runner by building
+  `//paper:paper`). Previously Linux arm64 had no biber and
   `biber = True` failed at analysis. See `DESIGN.md` §4.9 / §5 #9 /
   issue #10.
 

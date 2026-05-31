@@ -160,6 +160,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--cache-tarball.",
     )
     parser.add_argument(
+        "--bundle-url", default=None,
+        help="Bundle URL the consumed cache was primed against (the "
+        "implicit-pipeline / snapshot / serve-override modes). tectonic "
+        "namespaces the cached format by bundle identity, so the compile "
+        "must name the same bundle to resolve the primed format. Passed "
+        "as `--bundle <url> --only-cached`; the URL->digest mapping is in "
+        "the cache (bundles/hashes/), so this stays fully offline. "
+        "Accompanies --cache-tarball/--cache-dir; orthogonal to (a local "
+        "file) --bundle. See DESIGN.md §4.10.",
+    )
+    parser.add_argument(
         "--outfmt", default="pdf",
         help="Output format (pdf|xdv|html|aux). Default: pdf.",
     )
@@ -280,6 +291,7 @@ def run_tectonic(
     main_in_workdir: Path,
     cache_dir: Path,
     bundle: Path | None,
+    bundle_url: str | None = None,
     outfmt: str,
     synctex: bool,
     reproducible: bool,
@@ -328,6 +340,17 @@ def run_tectonic(
     ]
     if bundle is not None:
         cmd += ["--bundle", str(bundle.resolve()), "--only-cached"]
+    elif bundle_url is not None:
+        # Cache-replay modes (implicit pipeline, user snapshot, serve
+        # override). The cache was primed against this bundle URL, and
+        # tectonic namespaces the cached format (`latex.fmt`) by bundle
+        # identity. Without naming the same bundle, tectonic resolves
+        # its built-in default bundle, computes a different digest, and
+        # misses the primed format -> "generating format latex" ->
+        # fails under --only-cached. --only-cached keeps this offline:
+        # the URL->digest mapping lives in the cache (bundles/hashes/).
+        # See DESIGN.md §4.10.
+        cmd += ["--bundle", bundle_url, "--only-cached"]
     else:
         cmd += ["--only-cached"]
     # One `-Z search-path` per directory in ctan_dir that holds
@@ -407,12 +430,11 @@ def run_tectonic(
                     f"\n\nhint: '{file}' failed with 'Undefined control "
                     f"sequence', which is the signature of a biblatex "
                     f"extension style being too new for the bundle's "
-                    f"pinned biblatex 3.17 / biber 2.17. Add\n"
-                    f"\n"
-                    f"    tectonic.toolchain(modern_biblatex = True)\n"
-                    f"\n"
-                    f"to your workspace's MODULE.bazel to fetch biblatex "
-                    f"3.21 + biber 2.21 alongside the toolchain. See "
+                    f"biblatex 3.21 / biber 2.21. The pinned TL2026 bundle "
+                    f"already ships modern biblatex; a style failing this "
+                    f"way needs a newer biblatex than the bundle provides — "
+                    f"pin an older release of the style, or refresh the "
+                    f"bundle to a newer TeX Live (see DESIGN.md §4.10). "
                     f"https://nicklambourne.github.io/rules_latex/"
                     f"getting-started/bibliography/#modern-citation-styles"
                 )
@@ -496,6 +518,7 @@ def run_one(args: argparse.Namespace) -> int:
             main_in_workdir=main_in_workdir,
             cache_dir=cache_dir / "cache" if ctan_dir else cache_dir,
             bundle=args.bundle,
+            bundle_url=args.bundle_url,
             outfmt=args.outfmt,
             synctex=args.synctex_output is not None,
             reproducible=args.reproducible,

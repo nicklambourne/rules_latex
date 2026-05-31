@@ -37,6 +37,7 @@ destination. It's a developer command, run on demand, much like
 """
 
 load("//latex:providers.bzl", "LatexInfo")
+load("//latex/private:bundles.bzl", "DEFAULT_BUNDLE")
 
 def _collect_transitive_srcs(deps):
     return [dep[LatexInfo].srcs for dep in deps if LatexInfo in dep]
@@ -130,6 +131,7 @@ exec "$PYTHON" "{tool}" \\
     {ctan_args} \\
     {bundle_manifest_arg} \\
     {biblatex_overlay_args} \\
+    --bundle-url "{bundle_url}" \\
     --workspace "$BUILD_WORKSPACE_DIRECTORY" \\
     --output "{output}" \\
     {biber_arg}
@@ -144,6 +146,11 @@ exec "$PYTHON" "{tool}" \\
         ctan_args = ctan_args,
         bundle_manifest_arg = bundle_manifest_arg,
         biblatex_overlay_args = biblatex_overlay_args,
+        # Prime against the default bundle (the TL2026 .ttb on R2) so
+        # the snapshot's cached format is keyed under that bundle's
+        # identity -- matching the --bundle-url the consuming
+        # latex_document/latex_test compile passes. See DESIGN §4.10.
+        bundle_url = DEFAULT_BUNDLE.url,
         output = ctx.attr.output,
         biber_arg = biber_arg,
     )

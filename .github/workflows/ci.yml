@@ -491,13 +491,12 @@ jobs:
           echo "OK: snapshot regeneration is byte-identical (sha256=$first_sha)"
 
   biber-aarch64:
-    # Verify the linux/aarch64 biber binary added to BIBER_MODERN_RELEASES
-    # (CTAN-sourced biber 2.21, mirrored to the biber-mirror-v2.21 release)
+    # Verify the linux/aarch64 biber binary (the only biber pinned now —
+    # CTAN-sourced biber 2.21, mirrored to the biber-mirror-v2.21 release)
     # actually runs on real arm64 hardware. The rest of the matrix is
     # x86_64 Linux + arm64 macOS, so nothing else exercises linux/aarch64.
-    # The examples use modern_biblatex (biber 2.21), so building
-    # //paper:paper here runs tectonic-linux-aarch64 + biber-2.21-aarch64
-    # end to end. See DESIGN.md §5 #9 / issue #10.
+    # Building //paper:paper here runs tectonic-linux-aarch64 +
+    # biber-2.21-aarch64 end to end. See DESIGN.md §4.9 / issue #10.
     name: Biber on linux/aarch64 (biber 2.21)
     runs-on: ubuntu-24.04-arm
     env:
@@ -521,9 +520,9 @@ jobs:
       - name: Build a biblatex/biber document on arm64
         working-directory: examples
         run: |
-          # //paper:paper uses biblatex + biber via modern_biblatex (biber
-          # 2.21), so building it on arm64 runs the aarch64 biber binary
-          # end to end. No `cache` attr means it primes online, so retry
+          # //paper:paper uses biblatex + biber (2.21), so building it on
+          # arm64 runs the aarch64 biber binary end to end. No `cache` attr
+          # means it primes online (from the R2 TL2026 bundle), so retry
           # transient CDN 502s like the x86_64 job does.
           attempt=1
           max_attempts=3

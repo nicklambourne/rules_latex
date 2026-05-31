@@ -71,42 +71,22 @@ for the full implementation details.
 ## Version coupling
 
 Biber is tightly coupled to biblatex's "control file format" version.
-By default `rules_latex` pins biber 2.17 to match the biblatex 3.17
-that ships in the upstream Tectonic bundle. You can't use a newer
-biber against that bundle's biblatex.
-
-If you need biblatex 3.18+ features (most modern citation styles —
-APA 7th edition, Chicago, IEEE, Nature — sit above that line), set
-`modern_biblatex = True` on the toolchain in `MODULE.bazel`. That
-fetches biblatex 3.21 + biber 2.21 and overlays them. See
-"[Modern citation styles](#modern-citation-styles)" below.
+`rules_latex` pins biber 2.21 to match the biblatex 3.21 that ships in
+the self-hosted TeX Live 2026 bundle. The pin and the bundle are
+bumped together, so the pair can never drift — you don't manage it.
 
 ## Citation styles not in the bundle
 
-The bundle ships only the five core biblatex styles: `numeric`,
-`alphabetic`, `authoryear`, `authortitle`, and `verbose`. Anything
-else — APA, Chicago, IEEE, Nature, Vancouver, etc. — lives in
-separate CTAN packages.
-
-For those, you'll need **both** the `ctan_packages` attribute on
-your document **and** the `modern_biblatex` toolchain opt-in —
-because the extension styles are versioned ahead of the bundle's
-pinned biblatex.
+The bundle ships the standard biblatex styles (`numeric`,
+`alphabetic`, `authoryear`, `authortitle`, `verbose`). Extension
+styles — APA, Chicago, IEEE, Nature, Vancouver, etc. — live in
+separate CTAN packages. Add them with the `ctan_packages` attribute;
+no toolchain opt-in is needed, because the bundle's biblatex 3.21 is
+new enough to process them.
 
 ## Modern citation styles
 
-To use modern biblatex extension styles, opt the toolchain into the
-newer biblatex / biber pair in your workspace's `MODULE.bazel`:
-
-```python
-tectonic = use_extension("@rules_latex//latex/toolchain:extensions.bzl", "tectonic")
-tectonic.toolchain(modern_biblatex = True)
-use_repo(tectonic, "rules_latex_tectonic_toolchains")
-register_toolchains("@rules_latex_tectonic_toolchains//:all")
-```
-
-Then list the style in `ctan_packages` and use it in your
-document:
+Just list the style package in `ctan_packages` and turn on `biber`:
 
 ```python
 latex_document(
@@ -123,29 +103,34 @@ latex_document(
 \usepackage[style=apa]{biblatex}
 ```
 
-Background: the modern style files (`apa.bbx`, `chicago.bbx`, …)
-need biblatex 3.18+ and biber 2.18+. Without `modern_biblatex = True`,
-the fetched style files reach tectonic but the bundle's older
-biblatex chokes on the newer control-file format. See the
+Modern extension styles (`apa.bbx`, `chicago.bbx`, …) need biblatex
+3.18+ / biber 2.18+; the TeX Live 2026 bundle ships 3.21 / 2.21, so
+they work with no extra configuration. See the
 [CTAN packages](ctan-packages.md#modern-biblatex-extension-styles)
-page for the full discussion of the version coupling and when *not*
-to opt in.
+page for the full version-coupling discussion.
+
+> **Upgrading from ≤ v0.5?** Earlier versions required a
+> `tectonic.toolchain(modern_biblatex = True)` opt-in for these
+> styles. It was **removed** in v0.6.0 — the rebuilt bundle ships the
+> modern stack natively. Delete that argument from your `MODULE.bazel`.
 
 ## Platform support
 
 | Platform        | Toolchain biber? | Note |
 |-----------------|------------------|------|
 | Linux x86_64    | :material-check: | Upstream prebuilt |
-| Linux aarch64   | :material-close: | Use `biber_strategy = "system"` |
+| Linux aarch64   | :material-check: | Prebuilt biber 2.21 (CTAN) |
 | macOS x86_64    | :material-check: | Universal binary |
 | macOS aarch64   | :material-check: | Universal binary |
 | Windows x86_64  | :material-check: | |
 
-### Linux arm64 workaround
+### Unsupported platforms
 
-The upstream biber project doesn't ship a Linux arm64 binary, so the
-toolchain has a gap there. Install biber via your distro
-(`apt-get install biber`) and set:
+biber 2.21 is vendored for every platform above, including Linux
+arm64 (a prebuilt binary from CTAN's `biber-linux-aarch64` package,
+new in v0.6.0). If you're on a platform without a vendored binary,
+install biber via your distro (`apt-get install biber`) and fall back
+to the system binary on `PATH`:
 
 ```python
 latex_document(
@@ -158,5 +143,4 @@ latex_document(
 ```
 
 This is less hermetic — your build depends on whatever biber is
-installed — but it's the only option until v0.3 ships a built-from-
-source biber for that platform.
+installed — so it's an escape hatch, not the recommended path.

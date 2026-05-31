@@ -72,8 +72,10 @@ GitHub release mirror (because SourceForge only serves predictable
 URLs for the `current` release, which makes content-addressed
 pinning fragile across upstream bumps).
 
-The escape hatch (`biber_strategy = "system"`) covers (1) for
-platforms where we can't ship a binary (currently linux/aarch64).
+biber 2.21 is vendored for every supported platform, including
+linux/aarch64 (a prebuilt binary from CTAN's `biber-linux-aarch64`
+package). The escape hatch (`biber_strategy = "system"`) remains as
+option (1) for any platform we don't ship a binary for.
 
 ## Why WebSocket *and* Server-Sent Events?
 
@@ -123,13 +125,15 @@ the pinned npm tarball. The motivations:
   every other dependency.
 - No third-party CDN in the critical path.
 
-## Open questions
+## Bundle freshness
 
-The pinned Tectonic bundle dates from 2022 — the upstream
-`tectonic-texlive-bundles` project was archived in October 2024.
-Documents using packages or features added after that are stuck.
-The five solution options are documented in
-[`DESIGN.md` §4.10](https://github.com/nicklambourne/rules_latex/blob/master/DESIGN.md);
+The upstream `tectonic-texlive-bundles` project was archived in
+October 2024, freezing Tectonic's default bundle at TeX Live 2022.
+Rather than stay stuck there, `rules_latex` now **rebuilds the bundle
+itself** — a TeX Live 2026 `.ttb` self-hosted on Cloudflare R2
+(`rules-latex.ndl.au`), pinned by SHA. The whole distribution is
+current (biblatex 3.21, biber 2.21, tikz, …), so the package-staleness
+and biblatex/biber version-coupling problems are resolved at the root.
+The full rationale and the graded options considered are in
+[`DESIGN.md` §4.10](https://github.com/nicklambourne/rules_latex/blob/master/DESIGN.md#410-biberbiblatex-version-coupling-and-the-upstream-bundle-staleness);
 tracked in [issue #1](https://github.com/nicklambourne/rules_latex/issues/1).
-For v0.2 we ship with the 2022 stack and document the limitation
-clearly.
