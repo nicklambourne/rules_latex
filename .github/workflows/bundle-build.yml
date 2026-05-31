@@ -1,0 +1,150 @@
+# Maintainer-only: rebuild the pinned Tectonic package bundle from a TeX
+# Live source release. This produces the texliveYYYY.ttb that
+# DEFAULT_BUNDLE (latex/private/bundles.bzl) points at on Cloudflare R2.
+#
+# NOT shipped to consumers: .gitattributes marks this file export-ignore,
+# so it is excluded from the `git archive` release tarball that consumers
+# fetch via archive_override / BCR. It lives in master purely so the
+# bundle-refresh recipe is tracked and reproducible.
+#
+# Trigger is workflow_dispatch only -- it never runs automatically. The
+# job is heavy (~20 GiB peak disk; it extracts ~13 GiB of TeX Live and
+# runs the Rust builder), so it has to run on a GitHub-hosted Linux
+# runner rather than locally.
+#
+# To refresh to a newer TeX Live:
+#   1. Bump TL_YEAR + TL_DATE below to the target historic release.
+#   2. Run this workflow; download the `texlive-ttb` artifact.
+#   3. Upload it to R2 as rules-latex.ndl.au/texliveYYYY.ttb (plus its
+#      .index.gz sidecar).
+#   4. Bump DEFAULT_BUNDLE (sha256 + url) and BIBER_VERSION, and
+#      regenerate latex/toolchain/bundle_manifest.txt from the new
+#      .ttb.index.gz (tools/extract_bundle_manifest.py).
+# See DESIGN.md §4.10 / §5 #4.
+#
+# Reproducibility notes: the builder is the (archived, hence frozen)
+# tectonic-texlive-bundles repo; the TeX Live source hash is computed and
+# pinned into bundle.toml at build time. The .ttb is not guaranteed
+# byte-identical across rebuilds, but the recipe reliably yields a valid
+# bundle. The spec is authored in-CI from the builder's texlive2023
+# template (it ships only a 2023 spec); the 2023-era patches may need
+# per-patch attention across a large TL jump.
+
+name: bundle-build
+
+on:
+  workflow_dispatch: {}
+
+env:
+  TL_YEAR: "2026"
+  TL_DATE: "20260301"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Free runner disk (need ~20 GiB peak)
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            /usr/local/lib/node_modules || true
+          sudo apt-get clean || true
+          df -h /
+
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -qq -y pv patch diffutils xz-utils
+          cargo --version
+
+      - name: Clone the (archived) bundle builder
+        run: git clone --depth 1 https://github.com/tectonic-typesetting/tectonic-texlive-bundles.git ttb
+
+      - name: Author a texliveYYYY spec from the 2023 template
+        working-directory: ttb/bundles
+        run: |
+          cp -r texlive2023 "texlive${TL_YEAR}"
+          cd "texlive${TL_YEAR}"
+          # Retarget name + tarball path + extraction root_dir from the
+          # 2023 template to the target TL. source.tarball.hash is filled
+          # in after we compute it (next step).
+          sed -i \
+            -e "s/name = \"texlive2023\"/name = \"texlive${TL_YEAR}\"/" \
+            -e "s#texlive-20230313-texmf\.tar#texlive-${TL_DATE}-texmf.tar#g" \
+            -e "s#texlive-20230313-texmf/texmf-dist#texlive-${TL_DATE}-texmf/texmf-dist#g" \
+            bundle.toml
+          echo "--- retargeted [inputs.texlive] ---"
+          grep -nE "name =|tarball|root_dir|patch_dir" bundle.toml
+
+      - name: Fetch + decompress TeX Live source, pin its hash
+        working-directory: ttb/bundles
+        run: |
+          TL="texlive-${TL_DATE}-texmf"
+          cd "texlive${TL_YEAR}"
+          curl -fL --retry 3 \
+            "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/${TL_YEAR}/${TL}.tar.xz" \
+            -o "${TL}.tar.xz"
+          echo "Decompressing (~5 GiB -> ~13 GiB); unxz removes the .xz as it goes."
+          unxz "${TL}.tar.xz"
+          ls -lh "${TL}.tar"
+          H="$(sha256sum "${TL}.tar" | cut -d' ' -f1)"
+          echo "TL source .tar sha256 = $H"
+          sed -i "s#^source.tarball.hash = \".*\"#source.tarball.hash = \"$H\"#" bundle.toml
+          grep -n "source.tarball.hash" bundle.toml
+          df -h /
+
+      - name: Build the bundle (select + pack -> .ttb)
+        working-directory: ttb/builder
+        run: |
+          cargo run --release -- --build-dir ../build "../bundles/texlive${TL_YEAR}/bundle.toml"
+          find ../build -maxdepth 2 -type f -printf '%s\t%p\n' 2>/dev/null | sort -n | tail -20
+
+      - name: Locate, measure, checksum the .ttb
+        working-directory: ttb
+        run: |
+          ttb_file="$(find build -name '*.ttb' -type f | head -1)"
+          if [ -z "$ttb_file" ]; then
+            echo "FAIL: no .ttb produced." >&2
+            find build -maxdepth 3 -type f | head -40 >&2
+            exit 1
+          fi
+          echo "=== bundle artifact ==="
+          ls -lh "$ttb_file"
+          echo "ttb bytes: $(stat -c%s "$ttb_file")  ($(numfmt --to=iec "$(stat -c%s "$ttb_file")"))"
+          sha256sum "$ttb_file"
+          mkdir -p out && cp "$ttb_file" "out/texlive${TL_YEAR}.ttb"
+          echo "TTB_FILE=$PWD/out/texlive${TL_YEAR}.ttb" >> "$GITHUB_ENV"
+
+      - name: Smoke-test the freshly-built bundle (tectonic 0.16.9)
+        working-directory: ttb
+        run: |
+          # Confirm the pinned tectonic reads the new .ttb and the
+          # biblatex/biber coupling holds before you publish it.
+          curl -fL "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.16.9/tectonic-0.16.9-x86_64-unknown-linux-musl.tar.gz" | tar xz
+          ./tectonic --version
+          sudo apt-get install -qq -y biber || true
+          cat > plain.tex <<'EOF'
+          \documentclass{article}\usepackage{geometry}\usepackage{xcolor}\usepackage{lipsum}
+          \begin{document}\textcolor{blue}{TL bundle smoke test.}\par\lipsum[1]\end{document}
+          EOF
+          cat > ref.bib <<'EOF'
+          @article{k, author={Ada Lovelace}, title={Notes}, journal={J}, year={1843}}
+          EOF
+          cat > bib.tex <<'EOF'
+          \documentclass{article}\usepackage[backend=biber]{biblatex}\addbibresource{ref.bib}
+          \begin{document}Cite \cite{k}.\printbibliography\end{document}
+          EOF
+          mkdir -p out_plain out_bib
+          ./tectonic -X compile --bundle "$TTB_FILE" --outdir out_plain plain.tex
+          file out_plain/plain.pdf | grep -q "PDF document" && echo "OK: plain doc compiles against the new bundle"
+          ./tectonic -X compile --bundle "$TTB_FILE" --outdir out_bib bib.tex
+          file out_bib/bib.pdf | grep -q "PDF document" && echo "OK: biblatex+biber compiles against the new bundle"
+
+      - name: Upload the bundle artifact (download, then host on R2)
+        uses: actions/upload-artifact@v4
+        with:
+          name: texlive-ttb
+          path: ttb/out/*
+          if-no-files-found: error
+          retention-days: 7
