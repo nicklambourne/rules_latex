@@ -272,21 +272,32 @@ def _compile_action(
 
     if offline_mode == "bundle":
         args.add("--bundle", offline_source.path)
-    elif offline_mode == "serve_cache_override":
-        # The cache file is not in the Bazel input graph; read it
-        # by absolute path at action execution time. We discriminate
-        # between a tarball (legacy override path) and a
-        # pre-extracted directory (fast path: skips per-action
-        # decompression) by the path suffix -- the serve script
-        # always names the extracted directory just `cache`, not
-        # `cache.tar.gz`.
-        if offline_source_path.endswith(".tar.gz") or offline_source_path.endswith(".tgz"):
-            args.add("--cache-tarball", offline_source_path)
-        else:
-            args.add("--cache-dir", offline_source_path)
     else:
-        # user_cache and implicit_pipeline both pass a cache tarball.
-        args.add("--cache-tarball", offline_source.path)
+        # Cache-replay modes (user_cache, implicit_pipeline,
+        # serve_cache_override) consume a cache that was primed against
+        # the default bundle (the TL2026 .ttb on R2). tectonic
+        # namespaces the cached format by bundle identity, so the
+        # compile must name the same bundle to resolve the primed
+        # format -- even though --only-cached keeps it fully offline
+        # (the URL->digest mapping is captured in the cache). Mirrors
+        # `_populate_cache_action`'s --bundle-url. See DESIGN.md §4.10.
+        args.add("--bundle-url", DEFAULT_BUNDLE.url)
+
+        if offline_mode == "serve_cache_override":
+            # The cache file is not in the Bazel input graph; read it
+            # by absolute path at action execution time. We discriminate
+            # between a tarball (legacy override path) and a
+            # pre-extracted directory (fast path: skips per-action
+            # decompression) by the path suffix -- the serve script
+            # always names the extracted directory just `cache`, not
+            # `cache.tar.gz`.
+            if offline_source_path.endswith(".tar.gz") or offline_source_path.endswith(".tgz"):
+                args.add("--cache-tarball", offline_source_path)
+            else:
+                args.add("--cache-dir", offline_source_path)
+        else:
+            # user_cache and implicit_pipeline both pass a cache tarball.
+            args.add("--cache-tarball", offline_source.path)
 
     if ctx.attr.reproducible:
         args.add("--reproducible")
