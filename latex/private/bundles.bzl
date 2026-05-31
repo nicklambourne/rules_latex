@@ -1,44 +1,38 @@
-"""Pinned tectonic package bundles.
+"""Pinned tectonic package bundle.
 
 Tectonic resolves `\\usepackage{...}` directives at compile time by fetching
-files from a "package bundle" — a single tar archive that mirrors a subset of
-TeX Live. By default tectonic downloads the bundle on first run from
-`relay.fullyjustified.net`, which is convenient but non-hermetic.
+files from a "package bundle" that mirrors a subset of TeX Live.
 
-`rules_latex` ships an optional pinned bundle that consumers can opt into for
-fully offline, content-addressed compilation. To use it, add a
-`tectonic.bundle()` tag to the `tectonic` module extension call in your
-`MODULE.bazel`. See [`DESIGN.md` §4.4](../../DESIGN.md) for the network policy.
+`rules_latex` pins its own bundle: **`texlive2026`**, a freshly-built
+TeX Live 2026 bundle in the `.ttb` (formatspec-v1) format — per-file gzip
+plus an internal offset index, so it's HTTP-range-addressable (tectonic
+fetches only the files a document needs). We host it on Cloudflare R2 at
+`rules-latex.ndl.au` (zero egress, durable), with the `.ttb.index.gz`
+sidecar alongside for the web-fetch path. The pinned tectonic 0.16.9
+reads this `.ttb` directly (verified in CI).
 
-The pinned bundle MUST match the version Tectonic itself expects (it asks
-the relay for `default_bundle_v<N>.tar` where N is encoded in the binary).
-Tectonic 0.16.9 expects v33, which the relay resolves to
-`tlextras-2022.0r0.tar`. Mismatched bundles produce confusing
-"requested file not found in bundle" errors at compile time.
+Why we host our own: upstream `tectonic-texlive-bundles` was archived in
+October 2024 with no bundle newer than 2022, and tectonic's relay still
+serves the frozen `tlextras-2022.0r0` (biblatex 3.17). Building + hosting
+TL2026 ourselves keeps packages current and removes the third-party CDN
+dependency. See `DESIGN.md` §4.4 (network policy) and §4.10 (the
+bundle-staleness rationale and the rebuild procedure).
 
-Note that the upstream `tectonic-texlive-bundles` repo (which historically
-published the matching `.sha256sum` companion file) was archived in October
-2024 with `tlextras-2021.3r1` as its only tagged release. The 2022.0r0
-bundle is unreleased on GitHub but the asset on `data1.fullyjustified.net`
-is content-stable (same Last-Modified and ETag since 2022-09-25). The
-sha256 below was computed locally from a fresh download; update it the
-same way if you ever bump the version.
+A root module can still repoint the full-bundle download at a different
+mirror via `tectonic.bundle(url = ..., sha256 = ...)` — see `DESIGN.md`
+§4.4 "Self-hosting the bundle".
 
-To update: pick a new bundle URL, fetch it, run `sha256sum` on the result,
-and bump the constants below.
-
-These are the *defaults*. A root module can repoint the full-bundle
-download at its own mirror (e.g. a Cloudflare R2 bucket) without editing
-this file, via `tectonic.bundle(url = ..., sha256 = ...)` — see
-`DESIGN.md` §4.4 "Self-hosting the bundle".
+To refresh: rebuild the bundle (DESIGN.md §4.10), upload the new
+`.ttb` + `.ttb.index.gz` to R2, and bump `url`/`sha256`/`version` below.
 """
 
-# The canonical tlextras bundle that ships with tectonic 0.16.9 (bundle
-# format v33). Hosted on Tectonic's CDN; the hash was computed locally
-# from a fresh download because upstream stopped publishing companion
-# sha256 files after 2021.3r1.
+# rules_latex's TeX Live 2026 bundle, built via the tectonic-texlive-bundles
+# Rust builder and hosted on Cloudflare R2. `.ttb` formatspec-v1; consumed
+# by tectonic 0.16.9 (local `--bundle` or the range-fetched web URL). The
+# matching bibliography stack is biblatex 3.21 / biber 2.21 (biber_versions.bzl).
 DEFAULT_BUNDLE = struct(
-    version = "2022.0r0",
-    url = "https://data1.fullyjustified.net/tlextras-2022.0r0.tar",
-    sha256 = "425685e124746c15ba9bb8e0596bdaad98fce886afa347fbcf9ec0e9acd7fe79",
+    version = "texlive2026",
+    url = "https://rules-latex.ndl.au/texlive2026.ttb",
+    sha256 = "e1778ceb8a2f5cc6196d476d076592bc946f3319faf7101fcd957f8580e62b80",
+    format = "ttb",
 )
