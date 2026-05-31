@@ -125,6 +125,8 @@ All six are loaded from `@rules_latex//latex:defs.bzl`.
 
 ### Live preview
 
+<p align="center"><img src="./assets/serve-web.png" alt="latex_live in-browser preview: a CV rendered with PDF.js, with the page toolbar, build-status badge, and build-log drawer" width="700" /></p>
+
 `latex_live` is a `bazel run`-able watcher that rebuilds your
 document on every save and pushes the result to a localhost HTTP
 page rendered with PDF.js.
