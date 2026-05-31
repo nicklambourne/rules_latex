@@ -133,7 +133,7 @@ point of failure.
    [`latex/private/latex_cache_snapshot.bzl`](./latex/private/latex_cache_snapshot.bzl).
 2. **Full bundle.** When `tectonic.bundle()` is declared on the
    `tectonic` module extension, a `tectonic_bundle_repository`
-   http-fetches the pinned bundle (`tlextras-2022.0r0.tar`, ~2.7 GiB)
+   http-fetches the pinned bundle (`texlive2026.ttb`, ~1.78 GiB)
    and feeds it into every materialised `latex_toolchain`. Actions run
    with `--bundle <path>` and `--only-cached`, no network access at
    build time. The downside: every first build fetches the whole bundle
@@ -153,6 +153,18 @@ point of failure.
    - `TectonicCompile` consumes that tarball as an action input,
      extracts it into `$TECTONIC_CACHE_DIR`, and runs tectonic with
      `--only-cached` — fully hermetic.
+
+   Both the PopulateCache prime and the TectonicCompile replay pass
+   `--bundle <DEFAULT_BUNDLE.url>` (the self-hosted TeX Live 2026 `.ttb`
+   on R2), not Tectonic's built-in relay. The compile keeps
+   `--only-cached`, so it never touches the network — but it **must**
+   name the same bundle, because Tectonic namespaces the cached format
+   (`latex.fmt`) by bundle identity. If the prime and the replay
+   disagree on the bundle, the replay resolves a different digest,
+   misses the primed format, and fails with `generating format
+   "latex"`. The URL→digest mapping is captured inside the cache
+   (`bundles/hashes/`), which is why the replay stays offline. See
+   §4.10.
 
    Because PopulateCache is content-addressed, Bazel's action cache
    makes it a one-time cost per (sources × tectonic × bundle URL)
@@ -177,23 +189,26 @@ and [`tools/make_cache_snapshot.py`](./tools/make_cache_snapshot.py).
 
 #### Self-hosting the bundle (e.g. Cloudflare R2)
 
-The full-bundle path (mode 2) defaults to `data1.fullyjustified.net`
-(Tectonic's CDN). A root module can point it at its own mirror for
-availability independence — or to serve a rebuilt bundle (§4.10 / §5
-#1) — without touching rules_latex:
+`rules_latex` already self-hosts its default bundle (the rebuilt TeX
+Live 2026 `.ttb`) on Cloudflare R2 at `rules-latex.ndl.au` — both the
+implicit pipeline (mode 3) and the full-bundle path (mode 2) fetch from
+there by default, with zero egress cost and no dependency on Tectonic's
+CDN. The mechanism below is therefore only for consumers who want to
+point at *their own* mirror (e.g. an internal artifact host, or to pin
+a different bundle):
 
 ```python
 # MODULE.bazel (root only; transitive deps can't override this)
 tectonic.bundle(
-    url = "https://<your-bucket>.r2.dev/tlextras-2022.0r0.tar",
-    sha256 = "425685e124746c15ba9bb8e0596bdaad98fce886afa347fbcf9ec0e9acd7fe79",
+    url = "https://<your-bucket>.r2.dev/texlive2026.ttb",
+    sha256 = "e1778ceb8a2f5cc6196d476d076592bc946f3319faf7101fcd957f8580e62b80",
 )
 ```
 
-Mirroring the existing bundle keeps the **same sha256** (identical
+Mirroring the default bundle keeps the **same sha256** (identical
 bytes). Because mode 2 downloads the whole file once (no range
 requests), any static object host works; **Cloudflare R2** is the
-recommended target — zero egress, durable, and a ~2.7 GiB bundle sits
+recommended target — zero egress, durable, and a ~1.78 GiB bundle sits
 inside its free storage tier. Setup (one-time, requires a Cloudflare
 account — *not* something rules_latex can do for you):
 
@@ -209,11 +224,11 @@ account — *not* something rules_latex can do for you):
 
    ```bash
    # rclone (configure an R2 remote once, then:)
-   curl -fL https://data1.fullyjustified.net/tlextras-2022.0r0.tar -o bundle.tar
-   sha256sum bundle.tar            # confirm 425685e1…fe79
-   rclone copy bundle.tar r2:rules-latex-bundle/
+   curl -fL https://rules-latex.ndl.au/texlive2026.ttb -o bundle.ttb
+   sha256sum bundle.ttb            # confirm e1778ceb…e62b80
+   rclone copy bundle.ttb r2:rules-latex-bundle/
    # or aws-cli:
-   #   aws s3 cp bundle.tar s3://rules-latex-bundle/ \
+   #   aws s3 cp bundle.ttb s3://rules-latex-bundle/ \
    #     --endpoint-url https://<account-id>.r2.cloudflarestorage.com
    ```
 
@@ -221,12 +236,11 @@ account — *not* something rules_latex can do for you):
    then set `tectonic.bundle(url = ..., sha256 = ...)` as above. The
    sha256 pin makes the download tamper-evident regardless of host.
 
-Note this only covers the full-bundle (mode 2) path. The default
-implicit pipeline (mode 3) still uses Tectonic's relay for its online
-prime; pointing *that* at a mirror would require Tectonic's web-bundle
-URL mechanism, which is out of scope here. For most consumers,
-`latex_cache_snapshot` already gives per-document CDN independence with
-no hosting at all.
+An overridden `url`/`sha256` repoints the mode-2 full-bundle download
+only. The implicit pipeline (mode 3) and cache snapshots always prime
+against the built-in `DEFAULT_BUNDLE.url`; since the prime and the
+offline replay both reference that same URL, they stay digest-consistent
+regardless of any mode-2 mirror override.
 
 ### 4.5 Reproducibility
 
@@ -547,19 +561,16 @@ serves predictable URLs for the `current` release rather than
 version-pinned ones — content-addressed pinning against upstream's
 URL scheme would break on every biber bump.
 
-Two pinned versions exist, governed by the `modern_biblatex` opt-in
-on the toolchain tag:
+A single version is pinned: **biber 2.21**, matching the TeX Live 2026
+bundle's biblatex 3.21 via the `.bcf` control-file format (v3.11).
+The release table is `BIBER_RELEASES` in
+`latex/private/biber_versions.bzl`, mirrored at `biber-mirror-v2.21`.
 
-* **biber 2.17 (default).** Matches the bundle's biblatex 3.17
-  via the `.bcf` control-file format (v3.8). Selected when
-  `tectonic.toolchain()` is called with the default arguments;
-  release table is `BIBER_RELEASES` in
-  `latex/private/biber_versions.bzl`.
-* **biber 2.21 (opt-in).** Paired with a CTAN-fetched biblatex
-  3.21 via the `-Z search-path` overlay (§4.10 option 6).
-  Selected when `tectonic.toolchain(modern_biblatex = True)`.
-  Same mirror pattern (`biber-mirror-v2.21`); release table is
-  `BIBER_MODERN_RELEASES`.
+(Before the TL2026 adoption the bundle shipped biblatex 3.17, so the
+default was biber 2.17 and an opt-in `modern_biblatex = True` toolchain
+flag overlaid CTAN biblatex 3.21 + biber 2.21 via `-Z search-path`.
+The rebuilt bundle ships 3.21 natively, so that opt-in, the 2.17 pin,
+and the overlay machinery were all retired — see §4.10.)
 
 #### Activation modes
 
@@ -570,49 +581,18 @@ tectonic's biber subprocess resolves it by basename.
 
 #### Linux arm64 gap
 
-The biblatex-biber project ships no prebuilt biber for Linux arm64, but
-the gap is now closed for **both** version stacks — the toolchain
-materialises a biber repo for every platform in the relevant releases
-map, including linux/aarch64:
+The biblatex-biber project historically shipped no prebuilt biber for
+Linux arm64, but the gap is closed: a prebuilt biber **2.21** binary
+from CTAN's `biber-linux-aarch64` package is mirrored to
+`biber-mirror-v2.21`, and the toolchain materialises a biber repo for
+every supported platform including linux/aarch64. CI verifies it on the
+free `ubuntu-24.04-arm` runner by building `//paper:paper` end to end.
 
-- **`modern_biblatex = True` (biber 2.21):** a prebuilt 2.21 binary from
-  CTAN's `biber-linux-aarch64` package, mirrored to `biber-mirror-v2.21`.
-- **Default bundle (biber 2.17):** no off-the-shelf 2.17 arm64 binary
-  exists (the biber project added arm64 only later, and TeX Live 2022's
-  aarch64-linux had no biber), so we **build 2.17 from source** for
-  aarch64 and mirror it to `biber-mirror-v2.17`.
-
-Both are CI-verified on the free `ubuntu-24.04-arm` runner — the 2.21
-path by building `//paper:paper` end to end, the 2.17 binary by a
-`biber --tool` functional run.
-
-**Building the 2.17 aarch64 binary (refresh procedure).** Uses the
-[`sbrass/biber-linux-aarch64`](https://github.com/sbrass/biber-linux-aarch64)
-PAR recipe, with these deviations (all forced by building a 2022-era
-biber today) applied to a one-off arm64 CI job — *not* committed to the
-rules package:
-
-  1. Base image `perl:5.34-buster`, **not** the recipe's default
-     `perl:5.36.0-buster`: biber 2.17 (2022-03, pre-5.36) doesn't parse
-     on Perl 5.36 (`Section.pm`: "Can't modify undef operator…"), and
-     the build.sh's `pp --link` list hardcodes buster-era SONAMEs
-     (e.g. `libicui18n.so.63`) that bullseye's ICU 67 would break.
-  2. buster is archived → repoint apt at `archive.debian.org`.
-  3. Install `LWP::Protocol::https` with `--notest` (its `t/example.t`
-     is a live-network test that fails sandboxed).
-  4. Alias `…/perl5/5.36.0` → the real `5.34.3` dirs so build.sh's
-     hardcoded-`PERL_VERSION` `--addfile` data paths (Unicode::Collate
-     `allkeys.txt`, ISBN ranges, CA certs) resolve and embed.
-  5. Add `--module=Specio::PP` to build.sh's `pp` invocation:
-     `DateTime::Types`→`Specio` loads its backend dynamically, which pp
-     can't statically detect, so the binary otherwise dies at runtime
-     ("Could not find a suitable Specio implementation").
-
-  Then mirror the resulting `biber-linux_aarch64.tar.gz` to the
-  `biber-mirror-v2.17` GitHub release and update the SHA in
-  `biber_versions.bzl`. (When the frozen 2022 bundle is eventually
-  refreshed — DESIGN.md §5 #9 / issue #1 — the 2.17 pin and this whole
-  procedure go away.)
+(The pre-TL2026 default stack pinned biber 2.17, for which no
+off-the-shelf arm64 binary existed — TeX Live 2022's aarch64-linux had
+none — so we built 2.17 from source via a one-off CI job. The TL2026
+adoption moved the default to biber 2.21, which CTAN ships prebuilt for
+arm64, so the from-source 2.17 build was retired.)
 
 Remaining fallbacks for anyone off the mirrored binaries:
 `biber_strategy = "system"`, or cross-compile on linux/x86_64.
@@ -626,13 +606,18 @@ recognise. Each minor biber release maps to a single acceptable
 control file version, and biblatex point-releases bump the format
 version periodically.
 
-Concretely, the pinned tectonic bundle (`tlextras-2022.0r0`, dated
-2022-09-25) ships biblatex 3.17 which writes control file v3.8.
-Biber 2.17 reads v3.8; biber 2.18+ require v3.9 or newer. So
-rules_latex pins biber 2.17 — not the upstream-latest 2.21 — to match
-what the bundle ships.
+Concretely, the pinned tectonic bundle (the self-hosted
+`texlive2026.ttb`) ships biblatex 3.21, which writes control file
+v3.11. Biber 2.21 reads v3.11, so rules_latex pins biber 2.21 to match
+what the bundle ships. The pin and the bundle are bumped together
+(`BIBER_VERSION` in `biber_versions.bzl` alongside `DEFAULT_BUNDLE` in
+`bundles.bzl`), so the coupling can't drift.
 
-#### Why the bundle is so old
+This used to be a much harder problem, because the only available
+bundle was frozen at TeX Live 2022. The history below explains why we
+ended up rebuilding the bundle ourselves.
+
+#### Why the upstream bundle was so old
 
 There are four links in the "engine → bundle → package → backend"
 chain, each of which is part of the problem:
@@ -656,11 +641,13 @@ chain, each of which is part of the problem:
    `--bundle <path>` flag overrides the URL but the engine still
    expects v33-format contents.
 
-Net effect: the LaTeX ecosystem is shipping biblatex 3.21, tikz 3.1.10,
-new biblatex-apa/biblatex-ieee releases, etc., but no one is rebuilding
-the Tectonic bundle. Anyone using Tectonic — not just rules_latex — is
-running 2022-vintage packages. We made it visible by writing a Bazel
-rule set around Tectonic; we didn't cause it.
+Net effect: the LaTeX ecosystem moved on to biblatex 3.21, tikz
+3.1.10, new biblatex-apa/biblatex-ieee releases, etc., but upstream
+stopped rebuilding the Tectonic bundle, leaving everyone on Tectonic —
+not just rules_latex — running 2022-vintage packages. We made it
+visible by writing a Bazel rule set around Tectonic; we didn't cause
+it. **rules_latex now ships its own rebuilt bundle (TeX Live 2026) to
+close the gap — see the recommendation below.**
 
 #### Solution options (graded)
 
@@ -704,55 +691,57 @@ durability:
    install required. Cost: high (effectively rewriting the
    toolchain layer). Risk: we'd be reinventing what `bazel_latex`
    does, which is the project we set out to *replace*.
-6. **Toolchain-side overlay via `-Z search-path`** (**shipped, opt-in**).
+6. **Toolchain-side overlay via `-Z search-path`** (**superseded**).
    Tectonic's `-Z search-path=<dir>` flag adds search directories
-   in front of the bundle. We use this to overlay a CTAN-fetched
-   biblatex package and a vendored newer biber on top of the
-   bundle, swapping just the two version-coupled components without
-   touching the rest of the bundle. Opt-in via
-   `tectonic.toolchain(modern_biblatex = True)` in `MODULE.bazel`;
-   default workspaces stay on biblatex 3.17 / biber 2.17. Cost paid:
-   ~1 day. Pinned to biblatex 3.21 + biber 2.21 today (see
-   `latex/private/biblatex_versions.bzl` + `BIBER_MODERN_*` in
-   `biber_versions.bzl`). Risk: we own two more upstream version
-   pins; the rest of the bundle (hyperref, csquotes, kernel) stays
-   on 2022-vintage, so a future hard requirement in biblatex 3.22+
-   for newer kernel features could still bite.
+   in front of the bundle. An earlier release used this to overlay a
+   CTAN-fetched biblatex 3.21 + a vendored biber 2.21 on top of the
+   2022 bundle, swapping just the two version-coupled components,
+   gated behind an opt-in `tectonic.toolchain(modern_biblatex = True)`.
+   It worked, but it owned two extra version pins and left the rest of
+   the bundle (hyperref, csquotes, kernel) on 2022-vintage — a future
+   hard requirement in biblatex 3.22+ for newer kernel features could
+   still have bitten. Retired in favour of option 3.
 
 #### Recommendation
 
-**Implemented:** option 6 above. The `modern_biblatex = True`
-toolchain opt-in unlocks modern citation styles (`biblatex-apa`
-9.x, `biblatex-chicago`, `biblatex-ieee`, etc.) for workspaces that
-need them. Workspaces that don't opt in stay on the stable
-biblatex 3.17 / biber 2.17 pair from the bundle — fine for the
-five core styles (numeric / alphabetic / authoryear /
-authortitle / verbose) the bundle ships and for the ~95% of
-real-world documents that don't need post-2022 biblatex features.
+**Implemented:** option 3 — rebuild the bundle and self-host it.
+We built a fresh `texlive2026.ttb` from the TeX Live 2026 source via
+the (archived) `tectonic-texlive-bundles` builder, and host it on
+Cloudflare R2 at `rules-latex.ndl.au` (zero egress, range-addressable
+`.ttb` format). `DEFAULT_BUNDLE` in `latex/private/bundles.bzl` points
+every mode — implicit pipeline, full bundle, cache snapshots — at it.
 
-Why this combination, rather than the heavier options (2)/(3) that
-rebuild the whole bundle:
+This solves the staleness problem at the root rather than patching the
+two most-visible symptoms:
 
-* The biblatex/biber pair is the only place inside the bundle
-  where we've observed a real version-coupling problem in
-  practice. The other "stale" pieces (tikz, beamer, etc.) work
-  fine for almost all documents.
-* Tectonic's `-Z search-path` cleanly shadows just the affected
-  files; no need to repackage the bundle.
-* The opt-in shape leaves the stable default unchanged.
+* The **whole** distribution is current (biblatex 3.21, biber 2.21,
+  tikz, hyperref, kernel, …), so version-coupling can't resurface for
+  some *other* package the overlay didn't cover.
+* Modern citation styles (`biblatex-apa` 9.x, `biblatex-chicago`,
+  `biblatex-ieee`, etc.) work with no toolchain opt-in — the bundle
+  ships the matching biblatex.
+* The `modern_biblatex` opt-in, the biber 2.17 pin, the from-source
+  2.17 arm64 build, and the `-Z search-path` overlay machinery are all
+  retired. biber is a single pin (2.21) coupled to the bundle's
+  biblatex 3.21.
 
-Re-evaluate the heavier options if:
+The cost is ongoing maintenance — we now own a bundle that has to track
+TeX Live upstream once or twice a year (refresh procedure: rebuild the
+`.ttb`, upload to R2, bump `DEFAULT_BUNDLE` + `BIBER_VERSION`, and
+regenerate `bundle_manifest.txt` via `tools/extract_bundle_manifest.py`
+from the new `.ttb.index.gz`).
 
-* Tectonic upstream cuts a fresh bundle (do option 1 — just bump
-  the pin).
-* Real users hit version coupling for a package *other than*
-  biblatex (then option 2 or 3 starts to earn its complexity).
-* The pinned biblatex 3.21 starts demanding a newer kernel than
-  TL 2022 ships (then option 3 is the right answer for the whole
-  ecosystem, not just biblatex).
+Re-evaluate if:
 
-Tracked at the open-question level in §5.8 below for the upstream
-fresh-bundle case, which would supersede the overlay.
+* Tectonic upstream resumes cutting fresh bundles (then drop ours and
+  just track theirs — option 1).
+* The maintenance burden of owning the bundle outweighs the benefit
+  (then reconsider the overlay, option 6, for just the coupled pair).
+* The maintenance burden of owning the bundle outweighs the benefit,
+  *and* Tectonic upstream has resumed publishing — then drop ours.
+
+Tracked at the open-question level in §5 item #8 below, now marked
+resolved by the rebuilt bundle.
 
 ### 4.11 Source staging (main-rooted layout)
 
@@ -860,12 +849,15 @@ These are deliberately out of scope for v0.1 but worth flagging.
 3. **`latex_lint`.** Wraps `chktex` / `lacheck`. Could ship as an optional
    toolchain. Tracked in
    [GitHub issue #5](https://github.com/nicklambourne/rules_latex/issues/5).
-4. **Bundle updates.** The current pinned bundle is `tlextras-2022.0r0`
-   (the version tectonic 0.16.9 itself asks for by default). Upstream
-   has not cut a newer tlextras release since 2022 and the
-   `tectonic-texlive-bundles` repo was archived in October 2024; we
-   should track that repo for any new releases and bump when (if) they
-   appear. Tracked in
+4. **Bundle updates.** The pinned bundle is now a self-hosted
+   `texlive2026.ttb` (TeX Live 2026), since upstream stopped cutting
+   tlextras releases and archived `tectonic-texlive-bundles` in October
+   2024 (§4.10). We own the refresh cadence: rebuild the `.ttb` from a
+   newer TeX Live source, upload to R2, bump `DEFAULT_BUNDLE`
+   (`bundles.bzl`) + `BIBER_VERSION` (`biber_versions.bzl`), and
+   regenerate `bundle_manifest.txt` from the new `.ttb.index.gz`. If
+   Tectonic upstream resumes publishing bundles, reconsider tracking
+   theirs instead. Tracked in
    [GitHub issue #6](https://github.com/nicklambourne/rules_latex/issues/6).
 5. **Caching of intermediate aux files.** Tectonic is fast and Bazel caches
    the action output, so this is probably never worth doing — but worth
@@ -915,31 +907,27 @@ These are deliberately out of scope for v0.1 but worth flagging.
    a `POST /sync/forward` endpoint over the existing SSE channel.
    The threshold for moving was "we'd actually save round-trips
    on the hot path." Server-pushed PDF deltas hit that bar.
-8. **Modern biblatex / fresh TeX Live bundle.** **Partially
-   resolved.** §4.10 originally listed five graded options; we
-   shipped a sixth (a toolchain-side overlay via `-Z search-path`)
-   in v0.4 as `tectonic.toolchain(modern_biblatex = True)`. That
-   covers the biblatex+biber slice of the staleness problem —
-   modern citation styles like `biblatex-apa` 9.x now work via
-   opt-in. The rest of the bundle (tikz, beamer, font packages,
-   etc.) stays on 2022-vintage. The original "rebuild the whole
-   bundle" options remain open for the day a non-biblatex package
-   actually needs them. Tracked in
+8. **Modern biblatex / fresh TeX Live bundle.** **Resolved.** §4.10
+   originally listed five graded options; v0.4 shipped a sixth (a
+   toolchain-side overlay via `-Z search-path`, opt-in as
+   `tectonic.toolchain(modern_biblatex = True)`) that covered only the
+   biblatex+biber slice. We then did the durable fix — option 3:
+   rebuilt the whole bundle from TeX Live 2026 and self-host it on R2
+   (`rules-latex.ndl.au`). The entire distribution is now current, so
+   modern citation styles work with no opt-in, and the overlay / the
+   `modern_biblatex` flag / the biber 2.17 pin were all retired.
+   Tracked in
    [GitHub issue #1](https://github.com/nicklambourne/rules_latex/issues/1).
-9. **Biber on linux/aarch64.** **Resolved.** The biblatex-biber project
-   ships no prebuilt arm64 binary, so both pinned versions are now
-   covered on linux/aarch64: biber **2.21** (modern) from CTAN's
-   `biber-linux-aarch64` package, and biber **2.17** (default bundle)
-   **built from source** for aarch64 (Perl 5.34 on Debian buster, via
-   the sbrass PAR recipe — see §4.9 for the full procedure and the
-   five 2022-era-build deviations it required). Both are mirrored
-   (`biber-mirror-v2.21` / `-v2.17`), pinned by SHA in
-   `biber_versions.bzl`, and CI-verified on the `ubuntu-24.04-arm`
-   runner (2.21 by building `//paper:paper`; 2.17 by a `biber --tool`
-   functional run). `biber = True` documents now build hermetically on
-   arm64 with or without `modern_biblatex`. The from-source 2.17 build
-   becomes unnecessary if/when the frozen 2022 bundle is refreshed
-   (issue #1). Tracked in
+9. **Biber on linux/aarch64.** **Resolved.** biber **2.21** (matching
+   the TL2026 bundle's biblatex 3.21) is covered on linux/aarch64 by a
+   prebuilt binary from CTAN's `biber-linux-aarch64` package, mirrored
+   (`biber-mirror-v2.21`), pinned by SHA in `biber_versions.bzl`, and
+   CI-verified on the `ubuntu-24.04-arm` runner by building
+   `//paper:paper`. `biber = True` documents build hermetically on
+   arm64. (The pre-TL2026 default — biber 2.17 — had no off-the-shelf
+   arm64 binary and was built from source via a one-off CI job; the
+   TL2026 adoption retired that build, since 2.21 ships prebuilt.)
+   Tracked in
    [GitHub issue #10](https://github.com/nicklambourne/rules_latex/issues/10).
 10. **Rule-version env var to prevent declared-output cache
     poisoning.** **Shipped in v0.4.** The
@@ -1017,16 +1005,15 @@ These are deliberately out of scope for v0.1 but worth flagging.
     entry-point packages in `ctan_packages`, the resolver follows
     the chain.
 
-    > **Caveat that emerged during implementation:** biblatex
+    > **Historical caveat (now resolved):** when the bundle was
+    > frozen at TeX Live 2022 (biblatex 3.17 / biber 2.17), biblatex
     > extension styles (`biblatex-apa`, `biblatex-chicago`, etc.)
-    > need an explicit toolchain opt-in. Modern releases require
-    > `biblatex 3.18+` / `biber 2.18+` while the bundle pins
-    > `3.17 / 2.17`. The fetched style files reach tectonic via
-    > `-Z search-path` correctly, but biblatex 3.17 can't process
-    > them. Resolved by `tectonic.toolchain(modern_biblatex = True)`
-    > in `MODULE.bazel`, which fetches biblatex 3.21 + biber 2.21
-    > and overlays them alongside the bundle. See the "Modern
-    > biblatex extension styles" section in the user guide.
+    > needed an explicit `tectonic.toolchain(modern_biblatex = True)`
+    > opt-in that overlaid CTAN biblatex 3.21 + biber 2.21 — the
+    > fetched style files reached tectonic via `-Z search-path`, but
+    > the bundle's 3.17 couldn't process them. The TL2026 bundle ships
+    > biblatex 3.21 + biber 2.21 natively, so these styles now work
+    > with no opt-in; the overlay was retired (§4.10).
 
     **Algorithm:**
 
@@ -1070,8 +1057,10 @@ These are deliberately out of scope for v0.1 but worth flagging.
     re-fetch bundle-resident packages from CTAN and shadow the
     bundle's versions via the `-Z search-path` overlay. That's
     catastrophic for the biblatex/biber version coupling (§4.10):
-    fetching biblatex 3.18+ over the bundle's 3.17 breaks biber
-    2.17 control-file compatibility. The manifest is therefore
+    fetching a CTAN biblatex newer than the bundle's 3.21 over the top
+    would break biber 2.21 control-file compatibility. The manifest
+    must therefore track the bundle (regenerated from the bundle's
+    `.ttb.index.gz` whenever `DEFAULT_BUNDLE` changes) — it is
     load-bearing for correctness, not just performance.
 
     **How the overlay reaches tectonic.** Tectonic's `\usepackage`

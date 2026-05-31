@@ -91,8 +91,8 @@ See the [Design rationale](about/design.md) for the full story.
 |----------------------|----------------|
 | **Bazel**            | 8.0+ (Bzlmod-only) |
 | **Tectonic**         | 0.16.9 |
-| **biber / biblatex** | 2.17 / 3.17 (paired by control-file format) |
-| **TeX Live**         | 2022 (frozen — see [Roadmap](about/roadmap.md)) |
+| **biber / biblatex** | 2.21 / 3.21 (paired by control-file format) |
+| **TeX Live**         | 2026 (self-hosted bundle — see [Roadmap](about/roadmap.md)) |
 
 ## Project status
 
@@ -105,10 +105,10 @@ See the [Design rationale](about/design.md) for the full story.
 | Implicit cache pipeline | Stable since v0.2.0 |
 | Self-hosted PDF.js | Stable since v0.2.0 |
 | `ctan_packages` (auto-resolved transitive closure) | Stable since v0.4.2 |
-| `tectonic.toolchain(modern_biblatex = True)` (3.18+ styles) | Stable since v0.4.2 |
+| Self-hosted TeX Live 2026 bundle (biblatex 3.21 / biber 2.21) | Stable since v0.6.0 |
 | SyncTeX forward-sync | Stable since v0.4.2 |
 | WebSocket push transport for live preview | Stable since v0.5.0 |
 | In-doc search, outline sidebar, build-log drawer, theme toggle | Stable since v0.5.0 |
-| Linux arm64 biber | Not vendored — use `biber_strategy = "system"` ([#10][issue-10]) |
+| Linux arm64 biber | Vendored (prebuilt biber 2.21) since v0.6.0 |
 
 [issue-10]: https://github.com/nicklambourne/rules_latex/issues/10

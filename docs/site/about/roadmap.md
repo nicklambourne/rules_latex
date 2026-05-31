@@ -8,7 +8,7 @@ This page is a friendlier summary of what's planned.
 
 | Feature | Status | Issue |
 |---------|--------|-------|
-| Linux arm64 biber (build from source via `rules_perl`) | Planned | — |
+| Linux arm64 biber | Done (v0.6.0) — prebuilt biber 2.21 from CTAN | [#10][issue-10] |
 | SyncTeX forward-sync (editor → PDF jump) | Planned | — |
 | `latex_lint` rule (wraps chktex / lacheck) | Considered | — |
 | BCR publication automation | In progress | — |
@@ -17,7 +17,7 @@ This page is a friendlier summary of what's planned.
 
 | Feature | Status | Issue |
 |---------|--------|-------|
-| Modern biblatex (3.18+) via own TeX Live bundle | Watching upstream | [#1][issue-1] |
+| Modern biblatex (3.18+) via own TeX Live bundle | Done (v0.6.0) — self-hosted TeX Live 2026 bundle | [#1][issue-1] |
 | Tectonic v2 workspace mode (`Tectonic.toml`) | Considered | — |
 | Live-preview render perf for long docs (viewport-gated canvas paint, off-screen swap, canvas reuse) | Punted | [#50][issue-50] |
 
@@ -30,6 +30,7 @@ This page is a friendlier summary of what's planned.
 | Reproducibility of PDF output across platforms (font handling) | Speculative |
 
 [issue-1]: https://github.com/nicklambourne/rules_latex/issues/1
+[issue-10]: https://github.com/nicklambourne/rules_latex/issues/10
 [issue-50]: https://github.com/nicklambourne/rules_latex/issues/50
 
 ## Performance follow-ups

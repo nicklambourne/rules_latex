@@ -82,7 +82,7 @@ latex_document(
     srcs = ["cv.tex"],
     deps = [":preamble"],
     # biber = True              # for biblatex documents
-    # ctan_packages = ["..."]   # for packages not in the 2022 bundle
+    # ctan_packages = ["..."]   # for packages not in the bundle
     # reproducible = True       # byte-identical PDF across builds
     # synctex = True            # PDF clicks copy <file>:<line> to clipboard
 )
@@ -197,14 +197,13 @@ latex_document(
 )
 ```
 
-A vendored biber binary (pinned to 2.17 to match the bundle's biblatex
-3.17) is staged onto PATH at compile time. For modern citation styles
-(`biblatex-apa`, `biblatex-chicago`, `biblatex-ieee`, …) that need
-biblatex 3.18+, set `tectonic.toolchain(modern_biblatex = True)` in
-`MODULE.bazel` — that fetches biblatex 3.21 + biber 2.21 alongside the
-toolchain. On Linux arm64 — where upstream ships no prebuilt biber —
-set `biber_strategy = "system"` to fall back to a distro-installed
-binary. See the
+A vendored biber binary (2.21, matching the bundle's biblatex 3.21) is
+staged onto PATH at compile time — including on Linux arm64, which is
+now covered by a prebuilt binary. Modern citation styles
+(`biblatex-apa`, `biblatex-chicago`, `biblatex-ieee`, …) work out of
+the box. If you're on an unsupported platform, set
+`biber_strategy = "system"` to fall back to a distro-installed binary.
+See the
 [bibliography guide](https://nicklambourne.github.io/rules_latex/getting-started/bibliography/).
 
 ### CTAN packages outside the bundle
@@ -214,30 +213,29 @@ latex_document(
     name = "thesis",
     main = "thesis.tex",
     srcs = ["thesis.tex", "references.bib"],
-    ctan_packages = ["biblatex-apa"],   # not in the 2022 bundle
+    ctan_packages = ["biblatex-apa"],   # extension style, not in the bundle
     biber = True,
 )
 ```
 
-Tectonic's bundle is frozen at TeX Live 2022 and ships only the five
-core biblatex citation styles. The `ctan_packages` attribute fetches
-modern packages — APA / Chicago / IEEE citation styles, recent
-`tcolorbox` releases, niche contrib packages — directly from
-`mirrors.ctan.org` in TDS format and folds them into the implicit
-cache pipeline. No extra targets, no manual vendoring, no waiting
-for an upstream bundle refresh.
+`rules_latex` ships a self-hosted TeX Live 2026 bundle, so the core
+distribution and the standard biblatex styles are current. The
+`ctan_packages` attribute fetches anything outside it — niche contrib
+packages, bleeding-edge releases — directly from `mirrors.ctan.org` in
+TDS format and folds them into the implicit cache pipeline. No extra
+targets, no manual vendoring.
 
-Modern biblatex extension styles (`biblatex-apa` 9.x etc.) need the
-toolchain-level `modern_biblatex = True` opt-in too, because the bundle's
-pinned biblatex 3.17 / biber 2.17 are older than the style files
-require. See the
+Because the bundle ships biblatex 3.21 + biber 2.21, modern extension
+styles (`biblatex-apa` 9.x, `biblatex-chicago`, `biblatex-ieee`, …)
+work without any toolchain opt-in — just add the style package to
+`ctan_packages`. See the
 [bibliography guide](https://nicklambourne.github.io/rules_latex/getting-started/bibliography/#modern-citation-styles)
-for the full coupling discussion.
+for the version-coupling discussion.
 
 For most documents you don't need this attribute: the bundle covers
 ~95% of real-world LaTeX. When a fetched package transitively
-requires another post-2022 package, the populate-cache step surfaces
-a targeted hint naming the missing file and which of your existing
+requires another package outside the bundle, the populate-cache step
+surfaces a targeted hint naming the missing file and which of your existing
 `ctan_packages` referenced it — so the next iteration is one
 attribute edit away. See the [CTAN packages user
 guide](https://nicklambourne.github.io/rules_latex/getting-started/ctan-packages/)
@@ -272,21 +270,21 @@ caches the online prime through Bazel's action cache.
 | Platform        | tectonic | biber             | bundle |
 |-----------------|---------|-------------------|--------|
 | Linux x86_64    | ✅ musl  | ✅ glibc            | ✅      |
-| Linux aarch64   | ✅ musl  | ⚠️ system only     | ✅      |
+| Linux aarch64   | ✅ musl  | ✅ prebuilt         | ✅      |
 | macOS x86_64    | ✅       | ✅ universal binary | ✅      |
 | macOS aarch64   | ✅       | ✅ universal binary | ✅      |
 | Windows x86_64  | ✅ MSVC  | ✅                  | ✅      |
 
-The Linux arm64 biber gap is documented in the
-[bibliography guide](https://nicklambourne.github.io/rules_latex/getting-started/bibliography/#linux-arm64-workaround);
-workarounds available today.
+biber 2.21 is prebuilt for every supported platform, including Linux
+arm64. `biber_strategy = "system"` remains as an escape hatch for
+unsupported platforms.
 
 ## Compatibility
 
 - **Bazel**: 8.0+ (Bzlmod-only). CI tests against 8.0.0, 8.7.0, and 9.1.0 on every push and PR.
 - **Tectonic**: 0.16.9 (pinned)
-- **biber / biblatex**: 2.17 / 3.17 by default; 2.21 / 3.21 with `tectonic.toolchain(modern_biblatex = True)` (paired by control-file format)
-- **TeX Live**: 2022 (frozen — see the [roadmap](https://nicklambourne.github.io/rules_latex/about/roadmap/))
+- **biber / biblatex**: 2.21 / 3.21 (paired by control-file format)
+- **TeX Live**: 2026 (self-hosted bundle — see the [roadmap](https://nicklambourne.github.io/rules_latex/about/roadmap/))
 
 ## Documentation
 
