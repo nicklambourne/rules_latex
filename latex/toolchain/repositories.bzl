@@ -32,7 +32,7 @@ exports_files(["{exe}"])
 
 latex_toolchain(
     name = "toolchain",
-    tectonic = ":{exe}",{bundle_kw}{biber_kw}{biblatex_overlay_kw}
+    tectonic = ":{exe}",{bundle_kw}{biber_kw}
 )
 """
 
@@ -61,14 +61,10 @@ def _tectonic_repository_impl(rctx):
     biber_kw = (
         '\n    biber = "@{}//:biber_executable",'.format(rctx.attr.biber_repo) if rctx.attr.biber_repo else ""
     )
-    biblatex_overlay_kw = (
-        '\n    biblatex_overlay = "@{}//:overlay_files",'.format(rctx.attr.biblatex_overlay_repo) if rctx.attr.biblatex_overlay_repo else ""
-    )
     rctx.file("BUILD.bazel", _TECTONIC_BUILD_FILE.format(
         exe = exe,
         bundle_kw = bundle_kw,
         biber_kw = biber_kw,
-        biblatex_overlay_kw = biblatex_overlay_kw,
     ))
 
 tectonic_repository = repository_rule(
@@ -88,13 +84,6 @@ tectonic_repository = repository_rule(
                   "target should be wired into the generated " +
                   "latex_toolchain. Empty when no biber binary is " +
                   "available for this platform.",
-            default = "",
-        ),
-        "biblatex_overlay_repo": attr.string(
-            doc = "Optional name of a biblatex_repository whose " +
-                  "`:overlay_files` filegroup should be wired into the " +
-                  "generated latex_toolchain as `biblatex_overlay`. " +
-                  "Empty unless the workspace opted into modern_biblatex.",
             default = "",
         ),
     },

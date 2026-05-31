@@ -1,13 +1,10 @@
 """A paper using a CTAN bibliography style not in the Tectonic bundle.
 
-Demonstrates `ctan_packages = ["biblatex-apa"]` to pull a modern APA
-citation style (post-2022) and compose it with `biber = True`. Real
-modern biblatex extension styles depend on biblatex 3.18+ / biber
-2.18+, which is *newer than the bundle ships* (3.17 / 2.17). The
-example workspace opts into the modern-biblatex toolchain overlay
-via `tectonic.toolchain(modern_biblatex = True)` in
-`examples/MODULE.bazel`, which fetches biblatex 3.21 + biber 2.21
-and overlays them so this works. See DESIGN.md §5 item #12 and
+Demonstrates `ctan_packages = ["biblatex-apa"]` to pull the APA
+citation style and compose it with `biber = True`. Modern biblatex
+extension styles depend on biblatex 3.18+ / biber 2.18+; the
+self-hosted TeX Live 2026 bundle ships biblatex 3.21 + biber 2.21, so
+this works with no toolchain opt-in. See DESIGN.md §4.10 and
 docs/site/getting-started/ctan-packages.md "Modern biblatex".
 
 Workspaces *without* the opt-in stick with the bundle's pinned

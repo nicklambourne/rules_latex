@@ -16,22 +16,15 @@ LatexToolchainInfo = provider(
                   "(default) operation.",
         "biber": "File|None: a biber executable for bibliography processing, " +
                  "or None if biber isn't available for this platform.",
-        "biblatex_overlay": "depset[File]|None: when set (modern_biblatex " +
-                            "opt-in), the files of a newer biblatex " +
-                            "package that rules pass to tectonic via " +
-                            "`-Z search-path` flags. None when the " +
-                            "default bundle-resident biblatex is used.",
     },
 )
 
 def _latex_toolchain_impl(ctx):
-    overlay = depset(ctx.files.biblatex_overlay) if ctx.files.biblatex_overlay else None
     toolchain_info = platform_common.ToolchainInfo(
         latex_toolchain_info = LatexToolchainInfo(
             tectonic = ctx.file.tectonic,
             bundle = ctx.file.bundle,
             biber = ctx.file.biber,
-            biblatex_overlay = overlay,
         ),
     )
     return [toolchain_info]
@@ -57,22 +50,11 @@ latex_toolchain = rule(
             doc = "Optional biber executable. When set, latex_document " +
                   "actions invoked with `biber = True` make this binary " +
                   "available on PATH so tectonic can shell out to it for " +
-                  "bibliography processing. Absent on platforms without an " +
-                  "upstream biber build (currently linux/aarch64).",
+                  "bibliography processing. Vendored for every supported " +
+                  "platform (biber 2.21).",
             allow_single_file = True,
             executable = True,
             cfg = "exec",
-        ),
-        "biblatex_overlay": attr.label(
-            doc = "Optional filegroup containing a fetched biblatex " +
-                  "package (the modern_biblatex opt-in; see " +
-                  "DESIGN.md §5 item #12). When set, latex_document / " +
-                  "latex_test / latex_cache_snapshot actions stage these " +
-                  "files into runfiles and add their containing " +
-                  "directories to tectonic's `-Z search-path`, shadowing " +
-                  "the bundle's pinned biblatex 3.17. Must be paired " +
-                  "with a matching biber (2.21+).",
-            allow_files = True,
         ),
     },
 )
