@@ -6,6 +6,8 @@ that, expect breaking changes in any v0.x release.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-31
+
 ### Changed
 
 - **BREAKING: adopted a fresh TeX Live 2026 package bundle; retired the
