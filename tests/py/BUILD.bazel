@@ -150,6 +150,13 @@ sh_test(
     data = _BUILD_STATE_TEST_DATA + ["test_build_state_ws.py"],
 )
 
+sh_test(
+    name = "test_serve_fast",
+    srcs = ["run_pytest.sh"],
+    args = ["tests/py/test_serve_fast.py"],
+    data = _BUILD_STATE_TEST_DATA + ["test_serve_fast.py"],
+)
+
 test_suite(
     name = "py_tests",
     tests = [
@@ -166,6 +173,7 @@ test_suite(
         ":test_populate_cache_retry",
         ":test_post_build_hook",
         ":test_serve_cache",
+        ":test_serve_fast",
         ":test_staging",
         ":test_synctex_parser",
         ":test_watcher_debouncer",

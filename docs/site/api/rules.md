@@ -113,7 +113,8 @@ A reusable collection of LaTeX source files.
 <pre>
 load("@rules_latex//latex:defs.bzl", "latex_live")
 
-latex_live(<a href="#latex_live-name">name</a>, <a href="#latex_live-debounce_max_ms">debounce_max_ms</a>, <a href="#latex_live-debounce_ms">debounce_ms</a>, <a href="#latex_live-document">document</a>, <a href="#latex_live-open_on_start">open_on_start</a>, <a href="#latex_live-poll_interval_ms">poll_interval_ms</a>, <a href="#latex_live-port">port</a>)
+latex_live(<a href="#latex_live-name">name</a>, <a href="#latex_live-debounce_max_ms">debounce_max_ms</a>, <a href="#latex_live-debounce_ms">debounce_ms</a>, <a href="#latex_live-document">document</a>, <a href="#latex_live-open_on_start">open_on_start</a>, <a href="#latex_live-poll_interval_ms">poll_interval_ms</a>, <a href="#latex_live-port">port</a>,
+           <a href="#latex_live-serve_fast">serve_fast</a>)
 </pre>
 
 Browser-based live-preview server for a latex_document.
@@ -130,6 +131,7 @@ Browser-based live-preview server for a latex_document.
 | <a id="latex_live-open_on_start"></a>open_on_start |  If True, open the preview in the system default web browser once the server starts. The plain http URL is always printed regardless, so you can open it however you prefer.   | Boolean | optional |  `False`  |
 | <a id="latex_live-poll_interval_ms"></a>poll_interval_ms |  How often the watcher checks for source-file changes, in milliseconds. The watcher is a polling loop (no third-party `watchdog`/inotify dependency), so this is the amortised cost of one stat() per watched file per interval. 80 ms keeps perceived save-to-preview latency under 100 ms while staying cheap. Independent of `debounce_ms`: the poll interval is how fast we *notice* a change; the debounce window is how long we *wait* after a change before triggering a build.   | Integer | optional |  `80`  |
 | <a id="latex_live-port"></a>port |  TCP port to bind the preview server to (localhost-only).   | Integer | optional |  `8765`  |
+| <a id="latex_live-serve_fast"></a>serve_fast |  Opt-in latency optimisation (default False). When True, the watcher replays the compiled action's invocation directly via tectonic_compile.py on each content edit instead of shelling out to `bazel build`, skipping Bazel analysis + sandbox setup (~50% of warm-rebuild latency). The first build, and any fast build that hits a missing cached resource, still go through `bazel build`, so the canonical build path is never bypassed for anything but content recompiles. Requires the watched target to be a real latex_document. The compile runs un-sandboxed but stages only the document's declared inputs, so it stays consistent with `bazel build` / CI. See DESIGN.md Â§4.7.4.   | Boolean | optional |  `False`  |
 
 
 <a id="latex_pkg"></a>

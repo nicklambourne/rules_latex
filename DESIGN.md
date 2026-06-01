@@ -491,6 +491,57 @@ instead of from a CDN, so live preview works air-gapped and the PDF.js
 version is content-addressed at build time alongside the rest of the
 rule set.
 
+#### 4.7.4 `serve_fast`: direct recompile (opt-in)
+
+`latex_live(serve_fast = True)` is an opt-in latency optimisation (off
+by default). The warm-rebuild path normally shells out to `bazel
+build`; even with `--watchfs`, the resident server, and the persistent
+worker (§4.7.2), that still spends ~half the warm latency on Bazel's
+CLI + analysis + sandbox setup before the compile runs. `serve_fast`
+skips Bazel for content edits and runs the compile directly.
+
+**Mechanism.** Bazel writes a *params file* for every action —
+`bazel-bin/<pkg>/<doc>.pdf-0.params`, the exact newline-separated argv
+that drove `tectonic_compile.py` (`--tectonic`, `--main`, `--src` …,
+`--cache-*`/`--bundle-url`, `--output` …). Those args depend on the
+input *set* and the rule attrs, not on the source *bytes*, so they're
+stable across content edits. On each fired build the watcher reads that
+params file and invokes `tectonic_compile.py` with it directly, from
+the Bazel **execution root** (whose symlink forest already points at
+the live workspace sources). Two wrinkles: the params are passed as an
+explicit arg list (the tool only `@`-expands response files in worker
+mode, not for a plain CLI), and the action's `--output`/`--synctex`
+files — left read-only by Bazel — are made writable first so the
+replay can overwrite them in place (the server reads the PDF from
+exactly there; the next real `bazel build` re-materialises them).
+
+**Why it stays correct.** The replay is the *same* `tectonic_compile.py`
+invocation Bazel would run, so a successful fast build is byte-for-byte
+what `bazel build` produces for the current sources. It runs
+un-sandboxed, but `tectonic_compile.py` stages only the declared inputs
+into its own work directory and sets its own env (`LC_ALL`, etc.), so
+the declared-inputs hermeticity that keeps serve and CI consistent is
+preserved — a document that compiles under `serve_fast` but relies on
+an undeclared file fails the same way under `bazel build`.
+
+**The fallbacks.** The first build of a session is always a real `bazel
+build` (it materialises the params file and primes the serve cache).
+And a fast build that fails *in a way Bazel could fix* — a missing
+cached resource the serve cache can re-prime (§4.7.1) — falls back to
+`bazel build`; a fast build that fails on a genuine LaTeX error is
+reported as-is rather than recompiled, since Bazel would fail
+identically. Structural changes (new/removed sources, edited `BUILD`
+files) aren't in the watcher's mtime-poll set, so they never take the
+fast path.
+
+**Why opt-in.** It introduces a second compile path that runs outside
+Bazel's sandbox and writes into `bazel-out` behind Bazel's back (an
+extension of the serve-cache override's acknowledged non-hermeticity,
+§4.7.1). For a small, cache-backed document the saving is meaningful
+(~50% of warm latency); for a biber-cited document the compile itself
+dominates, so it helps less. Default-off keeps the canonical `bazel
+build` path the one everyone gets unless they ask for the trade.
+
 ### 4.8 SyncTeX
 
 When `latex_document(synctex = True)` is set, tectonic is invoked with

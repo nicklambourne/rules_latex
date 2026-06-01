@@ -124,6 +124,14 @@ PRIME_SRCS_RAW = """\
 PRIME_PKG_FILES_RAW = """\
 {{PRIME_PKG_FILES}}"""
 
+# serve_fast (opt-in): replay the compiled action directly instead of
+# shelling out to `bazel build` on each content edit. SERVE_FAST gates
+# the fast path; COMPILE_TOOL_RUNFILE is the runfiles-relative path to
+# tools/tectonic_compile.py. See run_fast_build / rebuild below and
+# DESIGN.md §4.7.4.
+SERVE_FAST = bool("{{SERVE_FAST}}")
+COMPILE_TOOL_RUNFILE = "{{COMPILE_TOOL_RUNFILE}}"
+
 # Browser-side URLs for the same files. Centralised so the HTML
 # template is just a format string.
 PDFJS_LIB = "/_pdfjs/pdf.mjs"
@@ -1002,6 +1010,173 @@ def _combine_output(stdout: str, stderr: str) -> str:
     return ("\n\n".join(parts) + "\n") if parts else ""
 
 
+# -----------------------------------------------------------------------------
+# serve_fast: replay the compiled action directly (skip `bazel build`)
+# -----------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FastBuildContext:
+    """Everything the fast rebuild path needs, resolved once at startup.
+
+    * ``execroot`` — Bazel's execution root (``bazel info
+      execution_root``). The compile action's params file references
+      every input by an execroot-relative path, and the execroot's
+      symlink forest points at the *live* workspace sources, so running
+      the compile from here picks up edits without re-running Bazel.
+    * ``compile_tool`` — absolute path to tools/tectonic_compile.py in
+      the runfiles tree (its sibling staging.py is also a runfile).
+    """
+
+    execroot: Path
+    compile_tool: Path
+
+
+def _params_path(workspace: Path) -> Path:
+    """Path to the TectonicCompile action's params file.
+
+    Bazel writes one params file per action output, named
+    ``<output_basename>-0.params`` next to the output. For the compile
+    action that's ``bazel-bin/<pkg>/<doc>.pdf-0.params``. Its contents
+    are the exact, newline-separated argv that drove
+    tectonic_compile.py (``--tectonic``, ``--main``, ``--src`` …,
+    ``--cache-*``/``--bundle-url``, ``--output`` …) — stable across
+    content edits, since the args depend on the input *set*, not its
+    bytes.
+    """
+    return workspace / "bazel-bin" / (PDF_RELPATH + "-0.params")
+
+
+def _build_fast_context(workspace: Path, runfiles: Path) -> "FastBuildContext | None":
+    """Resolve the fast-build context, or None if serve_fast is off or
+    unavailable (e.g. `bazel info execution_root` fails)."""
+    if not SERVE_FAST or not COMPILE_TOOL_RUNFILE:
+        return None
+    try:
+        proc = subprocess.run(
+            ["bazel", "info", "execution_root"],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        sys.stderr.write(
+            f"latex_live: serve_fast disabled (couldn't resolve execroot: {e})\n"
+        )
+        return None
+    execroot = Path(proc.stdout.strip())
+    compile_tool = (runfiles / COMPILE_TOOL_RUNFILE).resolve()
+    if not execroot.is_dir() or not compile_tool.is_file():
+        sys.stderr.write(
+            "latex_live: serve_fast disabled (execroot or compile tool missing)\n"
+        )
+        return None
+    print("latex_live: serve_fast enabled (direct recompile on content edits)",
+          flush=True)
+    return FastBuildContext(execroot=execroot, compile_tool=compile_tool)
+
+
+def run_fast_build(
+    workspace: Path,
+    fast_ctx: FastBuildContext,
+) -> "tuple[bool, float, str, str] | None":
+    """Recompile by replaying the params file directly, bypassing Bazel.
+
+    Returns the same (success, elapsed, message, combined_output) tuple
+    as ``run_bazel_build``, or None when the fast path can't run yet
+    (no params file — i.e. no prior `bazel build` this session). The
+    caller treats None and failures as "fall back to bazel".
+
+    Correctness: this runs the identical tectonic_compile.py invocation
+    Bazel would, reading the same params file, so a successful fast
+    build is byte-for-byte what `bazel build` produces for the current
+    sources. It runs un-sandboxed but tectonic_compile.py stages only
+    the declared inputs into its own work dir, preserving the
+    declared-inputs hermeticity that keeps serve and CI consistent.
+    """
+    params = _params_path(workspace)
+    if not params.is_file():
+        return None
+    try:
+        # The params file is the action's argv, one token per line. We
+        # pass it to tectonic_compile.py *directly* (rather than as an
+        # `@response-file`) because the tool only expands `@`-files when
+        # args are handed in explicitly in worker mode, not for a plain
+        # CLI invocation. Reading it ourselves keeps the fast path
+        # independent of that detail.
+        arglist = [
+            ln for ln in params.read_text(encoding="utf-8").splitlines() if ln
+        ]
+    except OSError:
+        return None
+    if not arglist:
+        return None
+    # Bazel leaves its declared outputs read-only. Make the compile's
+    # --output / --synctex-output writable so the replay can overwrite
+    # them in place (the server reads the PDF from exactly there). The
+    # next real `bazel build` re-materialises them. Their values in the
+    # params are execroot-relative.
+    for i, tok in enumerate(arglist):
+        if tok in ("--output", "--synctex-output") and i + 1 < len(arglist):
+            out = fast_ctx.execroot / arglist[i + 1]
+            try:
+                if out.exists():
+                    out.chmod(0o644)
+            except OSError:
+                pass
+    start = time.monotonic()
+    cmd = [sys.executable, str(fast_ctx.compile_tool)] + arglist
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=fast_ctx.execroot,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as e:
+        return (False, time.monotonic() - start, f"fast rebuild error: {e}", str(e))
+    elapsed = time.monotonic() - start
+    combined = _combine_output(result.stdout, result.stderr)
+    if result.returncode == 0:
+        return (True, elapsed, f"built in {elapsed:.2f}s (fast)", combined)
+    return (False, elapsed, f"fast rebuild failed ({elapsed:.2f}s)", combined)
+
+
+def rebuild(
+    workspace: Path,
+    cache_ctx: "ServeCacheContext | None" = None,
+    fast_ctx: "FastBuildContext | None" = None,
+) -> tuple[bool, float, str, str]:
+    """One rebuild: the fast path when eligible, else `bazel build`.
+
+    The fast path is skipped for the first build of the session (no
+    params file yet) and whenever it fails in a way `bazel build` could
+    fix — a missing cached resource the serve-cache can re-prime. A fast
+    build that fails for any other reason (a genuine LaTeX error) is
+    reported as-is rather than recompiled under Bazel, since the error
+    would be identical and the double-compile only adds latency.
+    """
+    if fast_ctx is not None:
+        res = run_fast_build(workspace, fast_ctx)
+        if res is not None:
+            success, _elapsed, _msg, output = res
+            if success:
+                return res
+            # Fall back to `bazel build` only if re-priming might help.
+            if cache_ctx is not None and cache_ctx.module.looks_like_missing_resource(
+                output.encode("utf-8", errors="replace"),
+            ):
+                print(
+                    "latex_live: fast rebuild hit a missing resource; "
+                    "falling back to `bazel build` to re-prime...",
+                    flush=True,
+                )
+                return run_bazel_build(workspace, cache_ctx)
+            return res
+    return run_bazel_build(workspace, cache_ctx)
+
+
 @dataclass
 class _DebouncerState:
     """Mutable FSM state used by the watcher loop. See
@@ -1073,6 +1248,7 @@ def watcher_loop(
     state: BuildState,
     cache_ctx: "ServeCacheContext | None" = None,
     pdf_chunks_ctx: "PdfChunksContext | None" = None,
+    fast_ctx: "FastBuildContext | None" = None,
 ) -> None:
     """Background thread: detect source changes, debounce them, run
     `bazel build`.
@@ -1197,7 +1373,7 @@ def watcher_loop(
                 flush=True,
             )
 
-        success, elapsed, msg, output = run_bazel_build(workspace, cache_ctx)
+        success, elapsed, msg, output = rebuild(workspace, cache_ctx, fast_ctx)
         print(f"  {msg}", flush=True)
         state.record_build(success, elapsed, msg)
         log_id = state.set_log(output)
@@ -2536,6 +2712,9 @@ def main() -> int:
     # on the first run while priming.
     cache_ctx = _build_cache_context(workspace, runfiles)
 
+    # Resolve the serve_fast context (None unless serve_fast = True).
+    fast_ctx = _build_fast_context(workspace, runfiles)
+
     # Load the PDF chunker for content-addressed PDF transfer (see
     # tools/pdf_chunks.py). On any failure to load we fall back to
     # whole-PDF transport silently — chunking is purely an
@@ -2615,7 +2794,7 @@ def main() -> int:
 
     watcher = threading.Thread(
         target=watcher_loop,
-        args=(workspace, state, cache_ctx, pdf_chunks_ctx),
+        args=(workspace, state, cache_ctx, pdf_chunks_ctx, fast_ctx),
         daemon=True,
         name="latex-serve-watcher",
     )

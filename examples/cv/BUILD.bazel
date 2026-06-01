@@ -42,6 +42,15 @@ latex_live(
     port = 8767,
 )
 
+# Same preview, but with the opt-in serve_fast recompile path (skips
+# `bazel build` on content edits). Default-off everywhere else.
+latex_live(
+    name = "cv_live_fast",
+    document = ":cv",
+    port = 8768,
+    serve_fast = True,
+)
+
 # Developer command: refresh the cache snapshot. Run with:
 #     bazel run //cv:cv_cache_snapshot
 # (requires network access; only needs to be re-run when packages

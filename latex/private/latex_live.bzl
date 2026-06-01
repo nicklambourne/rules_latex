@@ -197,6 +197,32 @@ def _latex_live_impl(ctx):
                 serve_cache_runfiles.append(doc_info.biber)
             prime_use_system_biber = "1" if doc_info.use_system_biber else ""
 
+    # serve_fast (opt-in, default False): when set, the watcher replays
+    # the TectonicCompile action's params file directly via
+    # tectonic_compile.py on each content edit, instead of shelling out
+    # to `bazel build`. That skips Bazel analysis + sandbox setup (~50%
+    # of warm-rebuild latency). It needs the compile tool + staging lib
+    # as runfiles, and requires a real latex_document (LatexDocumentInfo)
+    # so we can stage hermetically. The watcher always falls back to
+    # `bazel build` for the first build and for any fast build that
+    # fails a missing-resource check. See DESIGN.md §4.7.4.
+    serve_fast_flag = ""
+    compile_tool_path = ""
+    serve_fast_runfiles = []
+    if ctx.attr.serve_fast:
+        if LatexDocumentInfo not in ctx.attr.document:
+            fail(
+                ("latex_live target {} sets serve_fast = True, but its " +
+                 "document {} does not provide LatexDocumentInfo. " +
+                 "serve_fast only works with a real latex_document.")
+                    .format(ctx.label, ctx.attr.document.label),
+            )
+        fast_doc_info = ctx.attr.document[LatexDocumentInfo]
+        compile_tool = ctx.file._compile_tool
+        serve_fast_flag = "1"
+        compile_tool_path = compile_tool.short_path
+        serve_fast_runfiles = [compile_tool, fast_doc_info.staging_lib]
+
     server_script = ctx.actions.declare_file(ctx.label.name + ".py")
     ctx.actions.expand_template(
         template = ctx.file._server_template,
@@ -228,6 +254,8 @@ def _latex_live_impl(ctx):
             "{{PRIME_SRCS}}": "\n".join(prime_srcs_lines),
             "{{PRIME_PKG_FILES}}": "\n".join(prime_pkg_files_lines),
             "{{SERVE_WEB_ASSETS}}": serve_web_assets_manifest,
+            "{{SERVE_FAST}}": serve_fast_flag,
+            "{{COMPILE_TOOL_RUNFILE}}": compile_tool_path,
         },
     )
 
@@ -256,7 +284,7 @@ exec "$PYTHON" "$RUNFILES/{server}" "$BUILD_WORKSPACE_DIRECTORY" "$RUNFILES" "$@
                 pdf_chunks_lib,
                 ws_server_lib,
                 logo,
-            ] + serve_web_assets + serve_cache_runfiles
+            ] + serve_web_assets + serve_cache_runfiles + serve_fast_runfiles
         ),
     )
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
@@ -318,8 +346,28 @@ latex_live = rule(
                   "happen now'.",
             default = 1500,
         ),
+        "serve_fast": attr.bool(
+            doc = "Opt-in latency optimisation (default False). When True, " +
+                  "the watcher replays the compiled action's invocation " +
+                  "directly via tectonic_compile.py on each content edit " +
+                  "instead of shelling out to `bazel build`, skipping " +
+                  "Bazel analysis + sandbox setup (~50% of warm-rebuild " +
+                  "latency). The first build, and any fast build that hits " +
+                  "a missing cached resource, still go through `bazel " +
+                  "build`, so the canonical build path is never bypassed " +
+                  "for anything but content recompiles. Requires the " +
+                  "watched target to be a real latex_document. The compile " +
+                  "runs un-sandboxed but stages only the document's " +
+                  "declared inputs, so it stays consistent with `bazel " +
+                  "build` / CI. See DESIGN.md §4.7.4.",
+            default = False,
+        ),
         "_server_template": attr.label(
             default = "//latex/private:serve_web.py.tpl",
+            allow_single_file = True,
+        ),
+        "_compile_tool": attr.label(
+            default = "//tools:tectonic_compile.py",
             allow_single_file = True,
         ),
         "_pdfjs_lib": attr.label(
