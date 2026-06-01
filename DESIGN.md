@@ -726,10 +726,16 @@ two most-visible symptoms:
   biblatex 3.21.
 
 The cost is ongoing maintenance — we now own a bundle that has to track
-TeX Live upstream once or twice a year (refresh procedure: rebuild the
-`.ttb`, upload to R2, bump `DEFAULT_BUNDLE` + `BIBER_VERSION`, and
-regenerate `bundle_manifest.txt` via `tools/extract_bundle_manifest.py`
-from the new `.ttb.index.gz`).
+TeX Live upstream once or twice a year. The build recipe is the
+maintainer-only `.github/workflows/bundle-build.yml` workflow
+(`workflow_dispatch`-triggered; it authors a spec from the archived
+`tectonic-texlive-bundles` builder, fetches + pins a TeX Live source
+release, and packs the `.ttb`). That workflow is `export-ignore`d in
+`.gitattributes`, so it is tracked in master for reproducibility but does
+*not* ship in the release tarball. Refresh procedure: bump `TL_YEAR` /
+`TL_DATE` and run the workflow; upload the artifact to R2; bump
+`DEFAULT_BUNDLE` + `BIBER_VERSION`; and regenerate `bundle_manifest.txt`
+via `tools/extract_bundle_manifest.py` from the new `.ttb.index.gz`.
 
 Re-evaluate if:
 
@@ -852,13 +858,14 @@ These are deliberately out of scope for v0.1 but worth flagging.
 4. **Bundle updates.** The pinned bundle is now a self-hosted
    `texlive2026.ttb` (TeX Live 2026), since upstream stopped cutting
    tlextras releases and archived `tectonic-texlive-bundles` in October
-   2024 (§4.10). We own the refresh cadence: rebuild the `.ttb` from a
-   newer TeX Live source, upload to R2, bump `DEFAULT_BUNDLE`
-   (`bundles.bzl`) + `BIBER_VERSION` (`biber_versions.bzl`), and
-   regenerate `bundle_manifest.txt` from the new `.ttb.index.gz`. If
-   Tectonic upstream resumes publishing bundles, reconsider tracking
-   theirs instead. Tracked in
-   [GitHub issue #6](https://github.com/nicklambourne/rules_latex/issues/6).
+   2024 (§4.10). We own the refresh cadence: re-run the maintainer-only
+   `.github/workflows/bundle-build.yml` (`export-ignore`d, so tracked in
+   master but not shipped) to rebuild the `.ttb`, upload it to R2, bump
+   `DEFAULT_BUNDLE` (`bundles.bzl`) + `BIBER_VERSION`
+   (`biber_versions.bzl`), and regenerate `bundle_manifest.txt` from the
+   new `.ttb.index.gz`. If Tectonic upstream resumes publishing bundles,
+   reconsider tracking theirs instead. (Tracking issue #6 closed once the
+   self-hosted bundle landed.)
 5. **Caching of intermediate aux files.** Tectonic is fast and Bazel caches
    the action output, so this is probably never worth doing — but worth
    benchmarking on multi-pass documents (e.g. with biblatex). Tracked in

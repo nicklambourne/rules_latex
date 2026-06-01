@@ -1,0 +1,8 @@
+# Paths excluded from the `git archive` release tarball (built by
+# .github/workflows/release_prep.sh). These stay tracked in master but do
+# NOT ship to consumers who fetch the ruleset via archive_override / BCR.
+
+# Maintainer-only bundle-refresh recipe: heavy, never auto-runs, and of no
+# use to consumers (they get the prebuilt bundle from R2). Tracked here so
+# the recipe is reproducible; see DESIGN.md §4.10.
+/.github/workflows/bundle-build.yml export-ignore
