@@ -8,6 +8,15 @@ that, expect breaking changes in any v0.x release.
 
 ### Added
 
+- **`latex_live(serve_fast = True)` — opt-in faster live rebuilds.** When
+  set, the watcher recompiles content edits by replaying the compiled
+  action directly via `tectonic_compile.py` instead of shelling out to
+  `bazel build`, skipping Bazel's CLI/analysis/sandbox overhead (~50% of
+  warm-rebuild latency). The first build and any fast build that hits a
+  missing cached resource still go through `bazel build`, and the replay
+  stages only the document's declared inputs, so it stays consistent
+  with `bazel build`/CI. Default `False`. See DESIGN.md §4.7.4.
+
 - **`shared_library` example.** A miniature monorepo showing how to
   share LaTeX infrastructure across packages: a house-style preamble
   and a bibliography (both `latex_library`) plus the shared logo
@@ -15,6 +24,16 @@ that, expect breaking changes in any v0.x release.
   memo) via `deps` and workspace-relative-path references. Demonstrates
   the cross-package main-rooted staging (DESIGN.md §4.11) and the
   "edit the style once, every document updates" payoff.
+
+### Changed
+
+- **`latex_live` now picks up newly-added source files on its own.** The
+  watcher polls the directories that contain the document's sources (not
+  just the source files themselves), so dropping a new `.tex` into a
+  `glob()`-matched directory triggers a rebuild and is included with no
+  manual touch or serve restart. Detection is filtered to source
+  extensions, so atomic temp+rename saves (vim/VS Code) still take the
+  fast in-place edit path.
 
 ## [0.6.0] - 2026-05-31
 

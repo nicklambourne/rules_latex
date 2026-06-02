@@ -491,6 +491,79 @@ instead of from a CDN, so live preview works air-gapped and the PDF.js
 version is content-addressed at build time alongside the rest of the
 rule set.
 
+#### 4.7.4 `serve_fast`: direct recompile (opt-in)
+
+`latex_live(serve_fast = True)` is an opt-in latency optimisation (off
+by default). The warm-rebuild path normally shells out to `bazel
+build`; even with `--watchfs`, the resident server, and the persistent
+worker (§4.7.2), that still spends ~half the warm latency on Bazel's
+CLI + analysis + sandbox setup before the compile runs. `serve_fast`
+skips Bazel for content edits and runs the compile directly.
+
+**Mechanism.** Bazel writes a *params file* for every action —
+`bazel-bin/<pkg>/<doc>.pdf-0.params`, the exact newline-separated argv
+that drove `tectonic_compile.py` (`--tectonic`, `--main`, `--src` …,
+`--cache-*`/`--bundle-url`, `--output` …). Those args depend on the
+input *set* and the rule attrs, not on the source *bytes*, so they're
+stable across content edits. On each fired build the watcher reads that
+params file and invokes `tectonic_compile.py` with it directly, from
+the Bazel **execution root** (whose symlink forest already points at
+the live workspace sources). Two wrinkles: the params are passed as an
+explicit arg list (the tool only `@`-expands response files in worker
+mode, not for a plain CLI), and the action's `--output`/`--synctex`
+files — left read-only by Bazel — are made writable first so the
+replay can overwrite them in place (the server reads the PDF from
+exactly there; the next real `bazel build` re-materialises them).
+
+**Why it stays correct.** The replay is the *same* `tectonic_compile.py`
+invocation Bazel would run, so a successful fast build is byte-for-byte
+what `bazel build` produces for the current sources. It runs
+un-sandboxed, but `tectonic_compile.py` stages only the declared inputs
+into its own work directory and sets its own env (`LC_ALL`, etc.), so
+the declared-inputs hermeticity that keeps serve and CI consistent is
+preserved — a document that compiles under `serve_fast` but relies on
+an undeclared file fails the same way under `bazel build`.
+
+**The fallbacks.** The first build of a session is always a real `bazel
+build` (it materialises the params file and primes the serve cache).
+After that, a fast build that fails *in a way Bazel could fix* falls
+back to `bazel build`; one that fails on a genuine LaTeX error
+(undefined control sequence, bad math) is reported as-is rather than
+recompiled, since Bazel would fail identically. The discriminator is a
+LaTeX **"File `x' not found"** error, which covers the two cases where
+the frozen replay args are stale: a missing cached package the serve
+cache can re-prime (§4.7.1), and — importantly — **a source the params'
+`--src` list doesn't contain yet.** The replay never re-evaluates
+`glob()`, so a newly-added file that a glob would now match isn't in
+those args; when the document references it, the fast build fails with
+"not found", and the fallback `bazel build` re-globs and includes it
+(the refreshed params then carry it for subsequent fast builds). So
+`serve_fast` matches plain `bazel build` for new globbed sources rather
+than getting stuck on them.
+
+**Detecting added/removed sources.** The watcher (fast *and* non-fast)
+polls two things: the watched source **files** (mtimes, for content
+edits) and the **directories** that contain them (for added/removed
+sources). The directory signal is the set of entry names whose suffix
+is a source extension — so an in-place edit, or an atomic temp+rename
+save (vim's `4913`/`~`, VS Code's `.tmp`), leaves it unchanged and
+keeps taking the fast path, while *adding a new `.tex` that a `glob()`
+would now match* changes it. A directory change forces a re-globbing
+`bazel build` (the frozen replay args can't reflect it), and after any
+real build the watcher refreshes its file/dir poll set from the build's
+params `--src` list, so newly-globbed sources become content-watched
+too. Net effect: dropping a new chapter into a globbed directory
+rebuilds and is picked up on its own, with no manual touch or serve
+restart — matching what you'd expect from a re-`bazel build`.
+
+**Why opt-in.** It introduces a second compile path that runs outside
+Bazel's sandbox and writes into `bazel-out` behind Bazel's back (an
+extension of the serve-cache override's acknowledged non-hermeticity,
+§4.7.1). For a small, cache-backed document the saving is meaningful
+(~50% of warm latency); for a biber-cited document the compile itself
+dominates, so it helps less. Default-off keeps the canonical `bazel
+build` path the one everyone gets unless they ask for the trade.
+
 ### 4.8 SyncTeX
 
 When `latex_document(synctex = True)` is set, tectonic is invoked with

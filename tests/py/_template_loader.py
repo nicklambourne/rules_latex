@@ -45,6 +45,7 @@ _TEMPLATE_PATH = (
 # latex_live.bzl would produce for a minimal latex_document
 # target with no cache configured.
 _PLACEHOLDERS = {
+    "{{COMPILE_TOOL_RUNFILE}}": "",
     "{{DEBOUNCE_MAX_MS}}": "1500",
     "{{DEBOUNCE_MS}}": "250",
     "{{DOCUMENT_LABEL}}": "//test:doc",
@@ -66,6 +67,7 @@ _PLACEHOLDERS = {
     "{{PRIME_TECTONIC_RUNFILE}}": "",
     "{{PRIME_USE_SYSTEM_BIBER}}": "",
     "{{SERVE_CACHE_RUNFILE}}": "",
+    "{{SERVE_FAST}}": "",
     "{{SERVE_WEB_ASSETS}}": "",
     "{{SYNCTEX_RELPATH}}": "test/doc.synctex.gz",
     "{{WATCHED_PATHS}}": "test/doc.tex",
