@@ -541,12 +541,20 @@ those args; when the document references it, the fast build fails with
 `serve_fast` matches plain `bazel build` for new globbed sources rather
 than getting stuck on them.
 
-One inherited caveat: like the non-fast watcher, the poll set is the
-document's resolved sources at launch, so *adding* a file is only
-noticed once you also touch an already-watched file (which fires the
-build that re-globs). A file added in complete isolation isn't seen
-until the next edit or a serve restart — this is a property of the
-mtime-poll watcher, not of `serve_fast`.
+**Detecting added/removed sources.** The watcher (fast *and* non-fast)
+polls two things: the watched source **files** (mtimes, for content
+edits) and the **directories** that contain them (for added/removed
+sources). The directory signal is the set of entry names whose suffix
+is a source extension — so an in-place edit, or an atomic temp+rename
+save (vim's `4913`/`~`, VS Code's `.tmp`), leaves it unchanged and
+keeps taking the fast path, while *adding a new `.tex` that a `glob()`
+would now match* changes it. A directory change forces a re-globbing
+`bazel build` (the frozen replay args can't reflect it), and after any
+real build the watcher refreshes its file/dir poll set from the build's
+params `--src` list, so newly-globbed sources become content-watched
+too. Net effect: dropping a new chapter into a globbed directory
+rebuilds and is picked up on its own, with no manual touch or serve
+restart — matching what you'd expect from a re-`bazel build`.
 
 **Why opt-in.** It introduces a second compile path that runs outside
 Bazel's sandbox and writes into `bazel-out` behind Bazel's back (an

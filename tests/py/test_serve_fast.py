@@ -16,6 +16,7 @@ must behave exactly like the old `bazel build`-only watcher.
 
 from __future__ import annotations
 
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -145,6 +146,62 @@ class FastFailureClassifierTest(unittest.TestCase):
         self.assertTrue(
             _M._fast_failure_needs_bazel("foo.sty not found in cache", _fake_cache_ctx(True))
         )
+
+
+class WatchSetTest(unittest.TestCase):
+    """The directory-listing watcher that picks up newly-added sources."""
+
+    def test_parse_param_srcs(self):
+        params = "--tectonic\nt\n--main\na.tex\n--src\na.tex\n--src\nb/c.tex\n--output\no\n"
+        self.assertEqual(_M._parse_param_srcs(params), ["a.tex", "b/c.tex"])
+
+    def test_derive_watch_set_skips_generated_and_missing(self):
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            (ws / "main.tex").write_text("x")
+            (ws / "parts").mkdir()
+            (ws / "parts" / "a.tex").write_text("x")
+            (ws / "refs.bib").write_text("x")
+            files, dirs, exts = _M._derive_watch_set(
+                ws,
+                ["main.tex", "parts/a.tex", "refs.bib",
+                 "bazel-out/k8/bin/gen.tex", "external/x/y.tex", "missing.tex"],
+            )
+            self.assertEqual(
+                files, {ws / "main.tex", ws / "parts/a.tex", ws / "refs.bib"}
+            )
+            self.assertEqual(dirs, {ws, ws / "parts"})
+            self.assertEqual(exts, frozenset({".tex", ".bib"}))
+
+    def test_dir_listing_ignores_atomic_save_scratch_files(self):
+        # The key property: a temp+rename save (vim/VS Code) drops scratch
+        # files whose suffix isn't a source ext, so the listing is stable
+        # and the edit keeps taking the fast path (not a structural build).
+        with tempfile.TemporaryDirectory() as d:
+            dd = Path(d)
+            (dd / "ch01.tex").write_text("x")
+            (dd / "ch02.tex").write_text("x")
+            base = _M._dir_source_listing(dd, frozenset({".tex"}))
+            self.assertEqual(base, frozenset({"ch01.tex", "ch02.tex"}))
+            # vim/VS Code scratch during an atomic save:
+            (dd / "4913").write_text("")          # vim writability probe
+            (dd / "ch01.tex~").write_text("x")    # vim backup
+            (dd / ".ch01.tex.swp").write_text("") # vim swap
+            (dd / "ch01.tex.tmp").write_text("x") # VS Code temp
+            self.assertEqual(
+                _M._dir_source_listing(dd, frozenset({".tex"})), base,
+                "scratch files must not change the source listing",
+            )
+
+    def test_dir_listing_detects_new_source(self):
+        with tempfile.TemporaryDirectory() as d:
+            dd = Path(d)
+            (dd / "ch01.tex").write_text("x")
+            before = _M._dir_source_listing(dd, frozenset({".tex"}))
+            (dd / "ch02.tex").write_text("x")   # a real new source
+            after = _M._dir_source_listing(dd, frozenset({".tex"}))
+            self.assertNotEqual(after, before)
+            self.assertIn("ch02.tex", after)
 
 
 if __name__ == "__main__":

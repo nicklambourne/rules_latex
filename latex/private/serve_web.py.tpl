@@ -1175,19 +1175,25 @@ def rebuild(
     workspace: Path,
     cache_ctx: "ServeCacheContext | None" = None,
     fast_ctx: "FastBuildContext | None" = None,
+    force_bazel: bool = False,
 ) -> tuple[bool, float, str, str]:
     """One rebuild: the fast path when eligible, else `bazel build`.
 
-    The fast path is skipped for the first build of the session (no
-    params file yet) and whenever it fails in a way `bazel build` could
-    fix — a missing source/package file, which means the frozen replay
-    args are stale and Bazel needs to re-glob / re-prime (see
+    ``force_bazel`` skips the fast path outright — used when the watcher
+    saw a *structural* change (a source file added to or removed from a
+    watched directory), which the frozen replay args can't reflect and
+    only a re-globbing `bazel build` can pick up.
+
+    Otherwise the fast path is skipped for the first build of the session
+    (no params file yet) and whenever it fails in a way `bazel build`
+    could fix — a missing source/package file, which means the frozen
+    replay args are stale and Bazel needs to re-glob / re-prime (see
     ``_fast_failure_needs_bazel``). A fast build that fails on a genuine
     LaTeX error is reported as-is rather than recompiled under Bazel,
     since the error would be identical and the double-compile only adds
     latency.
     """
-    if fast_ctx is not None:
+    if fast_ctx is not None and not force_bazel:
         res = run_fast_build(workspace, fast_ctx)
         if res is not None:
             success, _elapsed, _msg, output = res
@@ -1203,6 +1209,91 @@ def rebuild(
                 return run_bazel_build(workspace, cache_ctx)
             return res
     return run_bazel_build(workspace, cache_ctx)
+
+
+# -----------------------------------------------------------------------------
+# Watch set: sources to poll for content edits + directories to poll for
+# added/removed source files (so new glob()-matched files are noticed).
+# -----------------------------------------------------------------------------
+
+
+def _parse_param_srcs(params_text: str) -> list[str]:
+    """Extract the `--src` values from a TectonicCompile params file
+    (newline-separated argv: a `--src` line followed by its value)."""
+    lines = params_text.splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        if lines[i] == "--src" and i + 1 < len(lines):
+            out.append(lines[i + 1])
+            i += 2
+        else:
+            i += 1
+    return out
+
+
+def _derive_watch_set(
+    workspace: Path,
+    src_rels: list[str],
+) -> "tuple[set[Path], set[Path], frozenset[str]]":
+    """Resolve source paths to the set of existing workspace source
+    FILES, the DIRECTORIES that contain them, and the source extensions
+    seen. Generated/external/absolute paths are skipped — they aren't
+    user-editable, so there's nothing to watch."""
+    files: set[Path] = set()
+    dirs: set[Path] = set()
+    exts: set[str] = set()
+    for rel in src_rels:
+        if not rel or rel.startswith(("bazel-out/", "external/", "/")):
+            continue
+        p = workspace / rel
+        try:
+            if p.is_file():
+                files.add(p)
+                dirs.add(p.parent)
+                if p.suffix:
+                    exts.add(p.suffix)
+        except OSError:
+            pass
+    return files, dirs, frozenset(exts)
+
+
+def _initial_watch_set(
+    workspace: Path,
+) -> "tuple[set[Path], set[Path], frozenset[str]]":
+    """The watch set baked in at analysis time (WATCHED_PATHS_RAW)."""
+    rels = [r for r in WATCHED_PATHS_RAW.splitlines() if r.strip()]
+    return _derive_watch_set(workspace, rels)
+
+
+def _refresh_watch_set(
+    workspace: Path,
+) -> "tuple[set[Path], set[Path], frozenset[str]] | None":
+    """Re-derive the watch set from the latest build's params `--src`
+    list, which reflects the live glob() result. Returns None if the
+    params can't be read or list no workspace sources (keep current)."""
+    try:
+        text = _params_path(workspace).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    files, dirs, exts = _derive_watch_set(workspace, _parse_param_srcs(text))
+    if not files:
+        return None
+    return files, dirs, exts
+
+
+def _dir_source_listing(directory: Path, exts: "frozenset[str]") -> "frozenset[str]":
+    """The set of entry names in ``directory`` whose suffix is in
+    ``exts``. This is the *structural* signal: adding or removing a
+    source file changes it, while an in-place content edit — or an
+    atomic temp-write+rename save (vim/VS Code), whose scratch files
+    (``.swp``, ``4913``, ``cv.tex~``, ``.tmp``) don't carry a source
+    suffix — leaves it unchanged. So ordinary edits keep taking the fast
+    path; only genuinely added/removed sources force a re-glob."""
+    try:
+        return frozenset(e.name for e in directory.iterdir() if e.suffix in exts)
+    except OSError:
+        return frozenset()
 
 
 @dataclass
@@ -1319,39 +1410,58 @@ def watcher_loop(
     tick that sees a change immediately satisfies ``now >=
     idle_deadline``).
     """
-    watched_paths = [
-        workspace / rel
-        for rel in WATCHED_PATHS_RAW.splitlines()
-        if rel.strip()
-    ]
+    watched_files, watched_dirs, watched_exts = _initial_watch_set(workspace)
     poll_interval = POLL_INTERVAL_MS / 1000.0
     debounce_window = DEBOUNCE_MS / 1000.0
     debounce_max = DEBOUNCE_MAX_MS / 1000.0
 
     # Initial build so the first browser page-load has something to
-    # display.
+    # display. Always a real `bazel build`: it materialises the params
+    # file and primes the serve cache.
     success, elapsed, msg, output = run_bazel_build(workspace, cache_ctx)
     print(f"latex_live: initial build: {msg}", flush=True)
     state.record_build(success, elapsed, msg)
     log_id = state.set_log(output)
     state.broadcast_log_update(log_id, success)
     if success:
+        refreshed = _refresh_watch_set(workspace)
+        if refreshed:
+            watched_files, watched_dirs, watched_exts = refreshed
         _compute_manifest_post_build(state, workspace, pdf_chunks_ctx)
 
-    last_mtimes = snapshot_mtimes(watched_paths)
+    # Two-dimensional change detection:
+    #   * file mtimes  -> in-place content edits (fast-path eligible).
+    #   * dir listings -> a source file was added to / removed from a
+    #     watched directory (structural; only a re-globbing `bazel
+    #     build` can pick it up). The listing is filtered to source
+    #     extensions, so an atomic temp+rename save doesn't read as one.
+    last_file_mtimes = snapshot_mtimes(list(watched_files))
+    last_dir_listings = {
+        d: _dir_source_listing(d, watched_exts) for d in watched_dirs
+    }
     fsm = _DebouncerState()
 
     while True:
         time.sleep(poll_interval)
         now = time.monotonic()
 
-        # Detect changes since the last poll.
-        current = snapshot_mtimes(watched_paths)
-        fresh_changes = [
-            p for p, m in current.items()
-            if m != last_mtimes.get(p, 0.0)
+        cur_file_mtimes = snapshot_mtimes(list(watched_files))
+        content_changes = [
+            p for p, m in cur_file_mtimes.items()
+            if m != last_file_mtimes.get(p, 0.0)
         ]
-        last_mtimes = current
+        last_file_mtimes = cur_file_mtimes
+
+        cur_dir_listings = {
+            d: _dir_source_listing(d, watched_exts) for d in watched_dirs
+        }
+        structural_changes = [
+            d for d in watched_dirs
+            if cur_dir_listings.get(d) != last_dir_listings.get(d)
+        ]
+        last_dir_listings = cur_dir_listings
+
+        fresh_changes = content_changes + structural_changes
 
         was_idle = fsm.idle_deadline is None
         if fresh_changes and was_idle:
@@ -1379,13 +1489,17 @@ def watcher_loop(
         # changes and clear the FSM *before* the build so changes
         # that land during the build start a fresh debounce window
         # naturally on the next iteration. We do NOT re-snapshot
-        # mtimes here: the last_mtimes captured at the top of this
-        # iteration is what we want preserved across the build, so
-        # post-build polls see in-flight saves as fresh changes.
+        # here: the last_* captured at the top of this iteration are
+        # what we want preserved across the build, so post-build polls
+        # see in-flight saves as fresh changes.
         coalesced = list(fsm.pending_changes)
         fsm.idle_deadline = None
         fsm.deadline_max = None
         fsm.pending_changes.clear()
+
+        # A directory in the burst means a source was added/removed, so
+        # the frozen replay args are stale -> force a re-globbing build.
+        structural = any(p in watched_dirs for p in coalesced)
 
         if hit_hard_cap:
             print(
@@ -1401,12 +1515,27 @@ def watcher_loop(
                 flush=True,
             )
 
-        success, elapsed, msg, output = rebuild(workspace, cache_ctx, fast_ctx)
+        success, elapsed, msg, output = rebuild(
+            workspace, cache_ctx, fast_ctx, force_bazel=structural,
+        )
         print(f"  {msg}", flush=True)
         state.record_build(success, elapsed, msg)
         log_id = state.set_log(output)
         state.broadcast_log_update(log_id, success)
         if success:
+            # A real build may have re-globbed; refresh the watch set so
+            # newly-added sources are content-watched too. Seed their
+            # mtimes/listings without disturbing existing entries (which
+            # preserve in-flight-edit detection) so they don't re-fire.
+            refreshed = _refresh_watch_set(workspace)
+            if refreshed:
+                watched_files, watched_dirs, watched_exts = refreshed
+                for p, m in snapshot_mtimes(list(watched_files)).items():
+                    last_file_mtimes.setdefault(p, m)
+                for d in watched_dirs:
+                    last_dir_listings.setdefault(
+                        d, _dir_source_listing(d, watched_exts),
+                    )
             _compute_manifest_post_build(state, workspace, pdf_chunks_ctx)
         else:
             # Tell WS clients the build failed so they can show the

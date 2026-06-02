@@ -25,6 +25,16 @@ that, expect breaking changes in any v0.x release.
   the cross-package main-rooted staging (DESIGN.md §4.11) and the
   "edit the style once, every document updates" payoff.
 
+### Changed
+
+- **`latex_live` now picks up newly-added source files on its own.** The
+  watcher polls the directories that contain the document's sources (not
+  just the source files themselves), so dropping a new `.tex` into a
+  `glob()`-matched directory triggers a rebuild and is included with no
+  manual touch or serve restart. Detection is filtered to source
+  extensions, so atomic temp+rename saves (vim/VS Code) still take the
+  fast in-place edit path.
+
 ## [0.6.0] - 2026-05-31
 
 ### Changed
