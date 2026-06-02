@@ -101,7 +101,7 @@ class RebuildDispatchTest(unittest.TestCase):
         self.assertEqual(self.calls, ["fast", "bazel"])
 
     def test_fast_genuine_error_does_not_double_compile(self):
-        # A fast failure that is NOT a missing resource -> report it
+        # A fast failure that is NOT a missing file -> report it
         # directly; bazel would fail identically, so don't recompile.
         fail = (False, 0.5, "fast rebuild failed (0.50s)", "! Undefined control sequence")
         self._patch(fast_result=fail)
@@ -113,14 +113,38 @@ class RebuildDispatchTest(unittest.TestCase):
         self.assertEqual(self.calls, ["fast"])
         self.assertEqual(out, fail)
 
-    def test_fast_failure_without_cache_does_not_fall_back(self):
-        # No cache context (cache=/bundle doc): a missing resource can't
-        # be re-primed, so a fast failure is reported as-is.
-        fail = (False, 0.1, "fast rebuild failed", "File `x.sty' not found")
+    def test_new_source_file_falls_back_even_without_cache(self):
+        # A newly added glob-captured file (or a \input not in the frozen
+        # --src list) surfaces as "File `x' not found". Bazel re-globs,
+        # so we fall back even for a cache=/bundle doc (cache_ctx=None).
+        fail = (False, 0.1, "fast rebuild failed", "! LaTeX Error: File `new.tex' not found.")
         self._patch(fast_result=fail)
         out = _M.rebuild(Path("/ws"), cache_ctx=None, fast_ctx=object())
-        self.assertEqual(self.calls, ["fast"])
-        self.assertEqual(out, fail)
+        self.assertEqual(self.calls, ["fast", "bazel"])
+
+
+class FastFailureClassifierTest(unittest.TestCase):
+    def test_missing_input_file_needs_bazel(self):
+        self.assertTrue(
+            _M._fast_failure_needs_bazel("! LaTeX Error: File `sections/new.tex' not found.", None)
+        )
+
+    def test_missing_package_needs_bazel(self):
+        self.assertTrue(
+            _M._fast_failure_needs_bazel("File 'biblatex-apa.sty' not found", None)
+        )
+
+    def test_plain_latex_error_does_not(self):
+        self.assertFalse(
+            _M._fast_failure_needs_bazel("! Undefined control sequence.\nl.42 \\frobnicate", None)
+        )
+
+    def test_cache_missing_resource_needs_bazel(self):
+        # The serve-cache "not found in cache" signature still triggers a
+        # re-prime fallback when a cache context is present.
+        self.assertTrue(
+            _M._fast_failure_needs_bazel("foo.sty not found in cache", _fake_cache_ctx(True))
+        )
 
 
 if __name__ == "__main__":

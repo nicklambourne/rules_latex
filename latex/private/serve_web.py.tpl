@@ -1143,6 +1143,34 @@ def run_fast_build(
     return (False, elapsed, f"fast rebuild failed ({elapsed:.2f}s)", combined)
 
 
+# A fast replay uses the params file captured by the last `bazel build`,
+# whose `--src` list is frozen. If the document then references a file
+# that list doesn't contain — a newly added source that a glob() would
+# now match, or a `\usepackage`/`\input` of something not yet staged —
+# tectonic fails with a LaTeX "File `x' not found" error. `bazel build`
+# re-evaluates globs and re-primes the serve cache, so we fall back to it
+# for these. The pattern deliberately matches *only* missing-file errors:
+# a genuine LaTeX error (undefined control sequence, runaway argument,
+# bad math) is reported straight from the fast build, since `bazel build`
+# would fail identically and the re-compile would just add latency.
+_FILE_NOT_FOUND_RE = re.compile(r"File [`'\"][^\n'\"`]+['\"`] not found")
+
+
+def _fast_failure_needs_bazel(
+    output: str,
+    cache_ctx: "ServeCacheContext | None",
+) -> bool:
+    """True if a fast-build failure is one `bazel build` could resolve
+    (a changed source set / missing package), vs. a plain LaTeX error."""
+    if _FILE_NOT_FOUND_RE.search(output):
+        return True
+    if cache_ctx is not None and cache_ctx.module.looks_like_missing_resource(
+        output.encode("utf-8", errors="replace"),
+    ):
+        return True
+    return False
+
+
 def rebuild(
     workspace: Path,
     cache_ctx: "ServeCacheContext | None" = None,
@@ -1152,10 +1180,12 @@ def rebuild(
 
     The fast path is skipped for the first build of the session (no
     params file yet) and whenever it fails in a way `bazel build` could
-    fix — a missing cached resource the serve-cache can re-prime. A fast
-    build that fails for any other reason (a genuine LaTeX error) is
-    reported as-is rather than recompiled under Bazel, since the error
-    would be identical and the double-compile only adds latency.
+    fix — a missing source/package file, which means the frozen replay
+    args are stale and Bazel needs to re-glob / re-prime (see
+    ``_fast_failure_needs_bazel``). A fast build that fails on a genuine
+    LaTeX error is reported as-is rather than recompiled under Bazel,
+    since the error would be identical and the double-compile only adds
+    latency.
     """
     if fast_ctx is not None:
         res = run_fast_build(workspace, fast_ctx)
@@ -1163,13 +1193,11 @@ def rebuild(
             success, _elapsed, _msg, output = res
             if success:
                 return res
-            # Fall back to `bazel build` only if re-priming might help.
-            if cache_ctx is not None and cache_ctx.module.looks_like_missing_resource(
-                output.encode("utf-8", errors="replace"),
-            ):
+            if _fast_failure_needs_bazel(output, cache_ctx):
                 print(
-                    "latex_live: fast rebuild hit a missing resource; "
-                    "falling back to `bazel build` to re-prime...",
+                    "latex_live: fast rebuild couldn't resolve a file "
+                    "(new/renamed source or missing package); falling "
+                    "back to `bazel build`...",
                     flush=True,
                 )
                 return run_bazel_build(workspace, cache_ctx)

@@ -526,13 +526,27 @@ an undeclared file fails the same way under `bazel build`.
 
 **The fallbacks.** The first build of a session is always a real `bazel
 build` (it materialises the params file and primes the serve cache).
-And a fast build that fails *in a way Bazel could fix* — a missing
-cached resource the serve cache can re-prime (§4.7.1) — falls back to
-`bazel build`; a fast build that fails on a genuine LaTeX error is
-reported as-is rather than recompiled, since Bazel would fail
-identically. Structural changes (new/removed sources, edited `BUILD`
-files) aren't in the watcher's mtime-poll set, so they never take the
-fast path.
+After that, a fast build that fails *in a way Bazel could fix* falls
+back to `bazel build`; one that fails on a genuine LaTeX error
+(undefined control sequence, bad math) is reported as-is rather than
+recompiled, since Bazel would fail identically. The discriminator is a
+LaTeX **"File `x' not found"** error, which covers the two cases where
+the frozen replay args are stale: a missing cached package the serve
+cache can re-prime (§4.7.1), and — importantly — **a source the params'
+`--src` list doesn't contain yet.** The replay never re-evaluates
+`glob()`, so a newly-added file that a glob would now match isn't in
+those args; when the document references it, the fast build fails with
+"not found", and the fallback `bazel build` re-globs and includes it
+(the refreshed params then carry it for subsequent fast builds). So
+`serve_fast` matches plain `bazel build` for new globbed sources rather
+than getting stuck on them.
+
+One inherited caveat: like the non-fast watcher, the poll set is the
+document's resolved sources at launch, so *adding* a file is only
+noticed once you also touch an already-watched file (which fires the
+build that re-globs). A file added in complete isolation isn't seen
+until the next edit or a serve restart — this is a property of the
+mtime-poll watcher, not of `serve_fast`.
 
 **Why opt-in.** It introduces a second compile path that runs outside
 Bazel's sandbox and writes into `bazel-out` behind Bazel's back (an
