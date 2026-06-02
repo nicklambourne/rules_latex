@@ -6,6 +6,8 @@ that, expect breaking changes in any v0.x release.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-06-02
+
 ### Added
 
 - **`latex_live(serve_fast = True)` — opt-in faster live rebuilds.** When
