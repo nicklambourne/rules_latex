@@ -79,6 +79,11 @@ function _beginRenderGeneration() {
     dpr: window.devicePixelRatio || 1,
     committedMs: null,
     firstPaintMs: null,
+    firstTextMs: null,
+    textLayers: 0,
+    textLayerMs: 0,
+    searchIndexMs: null,
+    paintQueueMax: 0,
     longTaskCount: 0,
     longTaskTotalMs: 0,
     longTaskMaxMs: 0,
@@ -119,7 +124,13 @@ function _stopLiveRenderWork() {
     if (wrap._renderTask) {
       try { wrap._renderTask.cancel(); } catch { /* best-effort */ }
     }
+    if (wrap._textLayer) {
+      try { wrap._textLayer.cancel(); } catch { /* best-effort */ }
+    }
+    wrap._textLayer = null;
+    wrap._textPromise = null;
   }
+  _clearPaintQueue();
 }
 
 async function _destroyPdf(pdf) {
@@ -479,23 +490,13 @@ async function renderAllPages(pdf, manifestPages, generation) {
     }
     wrap.appendChild(canvas);
 
-    // Text layers stay eager in this lifecycle change. A later stacked
-    // change makes them progressive once search can coordinate hydration.
-    try {
-      const textLayerEl = document.createElement("div");
-      textLayerEl.className = "text-layer";
-      textLayerEl.style.setProperty("--scale-factor", String(viewport.scale));
-      wrap.appendChild(textLayerEl);
-      const textLayer = new pdfjsLib.TextLayer({
-        textContentSource: page.streamTextContent(),
-        container: textLayerEl,
-        viewport,
-      });
-      await textLayer.render();
-    } catch (err) {
-      console.warn(`text layer render failed for page ${i}:`, err);
-    }
-    if (!_renderGenerations.isCurrent(generation)) return false;
+    // Commit an empty overlay now; nearby pages hydrate it through the
+    // render observer, and search hydrates the remaining pages on demand.
+    const textLayerEl = document.createElement("div");
+    textLayerEl.className = "text-layer";
+    textLayerEl.style.setProperty("--scale-factor", String(viewport.scale));
+    wrap.appendChild(textLayerEl);
+    wrap.dataset.textRendered = "";
     nextNodes.push(wrap);
   }
 
@@ -519,6 +520,9 @@ async function renderAllPages(pdf, manifestPages, generation) {
       reusedPages: reusePlan.filter((action) => action === "reuse").length,
       scale,
       committedMs: performance.now() - _renderStats.current.startedAt,
+      textLayers: viewer.querySelectorAll(
+        '.page-wrap[data-text-rendered="1"]',
+      ).length,
     });
   }
   _updateCanvasStats(generation);
@@ -528,11 +532,75 @@ async function renderAllPages(pdf, manifestPages, generation) {
   const currentWrap = viewer.querySelector(
     `.page-wrap[data-page-number="${currentPageNum}"]`,
   );
-  if (currentWrap) paintPage(pdf, currentWrap, generation);
+  if (currentWrap) {
+    _hydrateTextLayer(pdf, currentWrap, generation);
+    _queuePaint(pdf, currentWrap, generation, -1);
+  }
   if (_searchQuery) _runSearch();
 
   refreshStatus();
   return true;
+}
+
+async function _hydrateTextLayer(pdf, wrap, generation) {
+  if (wrap.dataset.textRendered === "1") return true;
+  if (wrap._textPromise) return wrap._textPromise;
+
+  let promise;
+  promise = (async () => {
+    const startedAt = performance.now();
+    let textLayer = null;
+    try {
+      const pageNum = parseInt(wrap.dataset.pageNumber, 10);
+      const page = await pdf.getPage(pageNum);
+      if (!_isDisplayGeneration(generation)) return false;
+
+      const viewport = page.getViewport({ scale });
+      const canvas = wrap.querySelector("canvas");
+      canvasViewports.set(canvas, viewport);
+      const textLayerEl = wrap.querySelector(".text-layer");
+      textLayerEl.replaceChildren();
+      textLayerEl.style.setProperty("--scale-factor", String(viewport.scale));
+
+      textLayer = new pdfjsLib.TextLayer({
+        textContentSource: page.streamTextContent(),
+        container: textLayerEl,
+        viewport,
+      });
+      wrap._textLayer = textLayer;
+      await textLayer.render();
+      if (!_isDisplayGeneration(generation)) return false;
+
+      wrap.dataset.textRendered = "1";
+      const current = _renderStats.current;
+      if (current?.generation === generation) {
+        current.textLayers += 1;
+        current.textLayerMs += performance.now() - startedAt;
+        if (current.firstTextMs === null) {
+          current.firstTextMs = performance.now() - current.startedAt;
+        }
+      }
+      return true;
+    } catch (err) {
+      if (
+        _isDisplayGeneration(generation) &&
+        err?.name !== "AbortException" &&
+        err?.name !== "RenderingCancelledException"
+      ) {
+        console.warn(
+          "text layer render failed for page " +
+            wrap.dataset.pageNumber + ":",
+          err,
+        );
+      }
+      return false;
+    } finally {
+      if (wrap._textPromise === promise) wrap._textPromise = null;
+      if (wrap._textLayer === textLayer) wrap._textLayer = null;
+    }
+  })();
+  wrap._textPromise = promise;
+  return promise;
 }
 
 // Rasterize one page's canvas into its placeholder. Idempotent: a page
@@ -627,19 +695,74 @@ function paintPage(pdf, wrap, generation) {
 }
 
 let _renderObserver = null;
+const MAX_CONCURRENT_PAINTS = 2;
+let _paintQueue = [];
+let _activePaints = 0;
 
-// How long a page must stay in (or near) the viewport before we start its
-// raster. A fast fling-scroll moves pages through the observer's margin
-// quickly; deferring the paint until scrolling settles avoids starting
-// (then immediately cancelling) a render for every page flung past. The
-// eager current-page paint in renderAllPages bypasses this for instant
-// reload feedback.
+function _clearPaintQueue() {
+  for (const item of _paintQueue) item.wrap._paintQueued = false;
+  _paintQueue = [];
+}
+
+function _cancelQueuedPaint(wrap) {
+  if (!wrap._paintQueued) return;
+  wrap._paintQueued = false;
+  _paintQueue = _paintQueue.filter((item) => item.wrap !== wrap);
+}
+
+function _queuePaint(pdf, wrap, generation, priority = null) {
+  if (
+    !_isDisplayGeneration(generation) ||
+    wrap.dataset.rendered === "1" ||
+    wrap.dataset.rendering === "1" ||
+    wrap._paintQueued
+  ) {
+    return;
+  }
+  const pageNum = parseInt(wrap.dataset.pageNumber, 10);
+  wrap._paintQueued = true;
+  _paintQueue.push({
+    pdf,
+    wrap,
+    generation,
+    priority: priority ?? Math.abs(pageNum - currentPageNum),
+  });
+  _paintQueue.sort((a, b) => a.priority - b.priority);
+  _drainPaintQueue();
+}
+
+function _drainPaintQueue() {
+  while (_activePaints < MAX_CONCURRENT_PAINTS && _paintQueue.length) {
+    const item = _paintQueue.shift();
+    if (!item.wrap._paintQueued) continue;
+    item.wrap._paintQueued = false;
+    if (
+      !_isDisplayGeneration(item.generation) ||
+      item.wrap.dataset.rendered === "1"
+    ) {
+      continue;
+    }
+
+    _activePaints += 1;
+    const current = _renderStats.current;
+    if (current?.generation === item.generation) {
+      current.paintQueueMax = Math.max(
+        current.paintQueueMax,
+        _activePaints,
+      );
+    }
+    paintPage(item.pdf, item.wrap, item.generation).finally(() => {
+      _activePaints -= 1;
+      _drainPaintQueue();
+    });
+  }
+}
+
+// How long a page must stay in (or near) the viewport before we enqueue its
+// raster. The current page bypasses this delay but still uses the same
+// concurrency-limited queue.
 const RENDER_SETTLE_MS = 80;
 
-// Observe page-wraps and paint each as it nears the viewport, after a
-// short settle. A page that scrolls out before its paint timer fires has
-// the timer cleared; one that scrolls out mid-raster has its in-flight
-// RenderTask cancelled. Either way it repaints if scrolled to again.
 function _attachRenderObserver(pdf, generation) {
   if (_renderObserver) _renderObserver.disconnect();
   _renderObserver = new IntersectionObserver((entries) => {
@@ -648,15 +771,15 @@ function _attachRenderObserver(pdf, generation) {
       const wrap = entry.target;
       const action = renderObserverAction(entry);
       if (action === "paint") {
+        _hydrateTextLayer(pdf, wrap, generation);
         if (wrap.dataset.rendered !== "1" && !wrap._paintTimer) {
           wrap._paintTimer = setTimeout(() => {
             wrap._paintTimer = null;
-            if (_isDisplayGeneration(generation)) {
-              paintPage(pdf, wrap, generation);
-            }
+            _queuePaint(pdf, wrap, generation);
           }, RENDER_SETTLE_MS);
         }
       } else {
+        _cancelQueuedPaint(wrap);
         if (wrap._paintTimer) {
           clearTimeout(wrap._paintTimer);
           wrap._paintTimer = null;
@@ -1369,8 +1492,9 @@ sidebarToggleBtn.addEventListener("click", () => {
 // -----------------------------------------------------------------------
 //
 // Drives the find bar shown above the viewer (Ctrl+F to open). We
-// walk the per-page text layer spans and highlight whole spans whose
-// text contains the query case-insensitively. The "current" match
+// hydrate missing text layers with bounded concurrency, then walk their
+// spans and highlight whole spans whose text contains the query
+// case-insensitively. The "current" match
 // gets a stronger background and is scrolled into view. Substring-
 // level highlighting is a possible polish; whole-span is enough to
 // see context.
@@ -1391,6 +1515,7 @@ const searchToggleBtn = document.getElementById("search-toggle");
 let _searchQuery = "";
 let _searchMatches = [];  // [{ pageNum, span }]
 let _searchCurrent = -1;
+let _searchRun = 0;
 
 function _openSearch() {
   searchBar.hidden = false;
@@ -1399,6 +1524,7 @@ function _openSearch() {
 }
 
 function _closeSearch() {
+  _searchRun += 1;
   searchBar.hidden = true;
   _searchQuery = "";
   for (const m of _searchMatches) {
@@ -1443,30 +1569,95 @@ function _setSearchCurrent(idx) {
   _updateSearchCount();
 }
 
-function _runSearch() {
-  // Clear previous highlights, recompute matches against the
-  // current DOM. Called whenever the query changes or after the
-  // text layers are re-rendered (post-build).
+async function _hydrateAllTextLayers(pdf, generation, searchRun) {
+  const startedAt = performance.now();
+  const wraps = [...viewer.querySelectorAll(".page-wrap")];
+  wraps.sort((a, b) => {
+    const aPage = parseInt(a.dataset.pageNumber, 10);
+    const bPage = parseInt(b.dataset.pageNumber, 10);
+    return Math.abs(aPage - currentPageNum) -
+      Math.abs(bPage - currentPageNum);
+  });
+
+  let cursor = 0;
+  let completed = 0;
+  async function worker() {
+    while (cursor < wraps.length) {
+      if (
+        searchRun !== _searchRun ||
+        generation !== _displayGeneration
+      ) {
+        return;
+      }
+      const wrap = wraps[cursor];
+      cursor += 1;
+      await _hydrateTextLayer(pdf, wrap, generation);
+      if (
+        searchRun !== _searchRun ||
+        generation !== _displayGeneration
+      ) {
+        return;
+      }
+      completed += 1;
+      searchCountEl.textContent =
+        "indexing " + completed + "/" + wraps.length;
+    }
+  }
+
+  const workers = Math.min(2, wraps.length);
+  await Promise.all(Array.from({ length: workers }, () => worker()));
+  if (
+    searchRun !== _searchRun ||
+    generation !== _displayGeneration
+  ) {
+    return false;
+  }
+  const current = _renderStats.current;
+  if (current?.generation === generation) {
+    current.searchIndexMs = performance.now() - startedAt;
+  }
+  return true;
+}
+
+async function _runSearch() {
+  const searchRun = ++_searchRun;
+  // Clear previous highlights, then hydrate and search the current document.
   for (const m of _searchMatches) {
     m.span.classList.remove("find-match", "find-match-current");
   }
   _searchMatches = [];
   _searchCurrent = -1;
 
-  const q = _searchQuery.toLowerCase();
-  if (!q) {
+  const query = _searchQuery.toLowerCase();
+  if (!query) {
     _updateSearchCount();
     return;
   }
 
-  // Walk page-wraps in document order so match indices match
-  // visual order in the doc.
+  const pdf = currentDoc;
+  const generation = _displayGeneration;
+  const totalPages = viewer.querySelectorAll(".page-wrap").length;
+  searchCountEl.textContent = "indexing 0/" + totalPages;
+  searchInput.classList.remove("no-results");
+  searchPrevBtn.disabled = true;
+  searchNextBtn.disabled = true;
+
+  if (
+    !pdf ||
+    !await _hydrateAllTextLayers(pdf, generation, searchRun) ||
+    searchRun !== _searchRun ||
+    query !== _searchQuery.toLowerCase()
+  ) {
+    return;
+  }
+
+  // Walk page-wraps in document order so match indices match visual order.
   const wraps = viewer.querySelectorAll(".page-wrap");
   for (const wrap of wraps) {
     const pageNum = parseInt(wrap.dataset.pageNumber, 10);
     const spans = wrap.querySelectorAll(".text-layer > span");
     for (const span of spans) {
-      if (span.textContent.toLowerCase().includes(q)) {
+      if (span.textContent.toLowerCase().includes(query)) {
         span.classList.add("find-match");
         _searchMatches.push({ pageNum, span });
       }
@@ -1485,6 +1676,7 @@ function _runSearch() {
 // fast bursts.
 let _searchDebounce = null;
 searchInput.addEventListener("input", () => {
+  _searchRun += 1;
   _searchQuery = searchInput.value;
   if (_searchDebounce) clearTimeout(_searchDebounce);
   _searchDebounce = setTimeout(() => { _runSearch(); }, 80);

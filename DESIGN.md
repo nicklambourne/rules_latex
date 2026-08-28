@@ -1210,8 +1210,9 @@ These are deliberately out of scope for v0.1 but worth flagging.
     caveat — the biblatex 3.21 / biber 2.21 overlay reaches
     tectonic via `-Z search-path` as designed.
 
-13. **Live-preview page rendering performance.** **Partially
-    resolved.** `renderAllPages()` historically rendered *every*
+13. **Live-preview page rendering performance.** **Resolved with a
+    dedicated render worker deferred by measurement.**
+    `renderAllPages()` historically rendered *every*
     PDF page into its own canvas on each reload, regardless of
     whether the page was in the viewport. On a short doc (CV, hello
     example) that was invisible; on a 50-page thesis the user
@@ -1230,11 +1231,14 @@ These are deliberately out of scope for v0.1 but worth flagging.
       gets a dimensioned placeholder up front; an
       `IntersectionObserver` (`_attachRenderObserver`) rasterizes a
       page's canvas (`paintPage`) only as it nears the viewport,
-      and cancels the in-flight `RenderTask` if it scrolls away
-      before the raster starts. The visible page is painted
-      eagerly so the update lands immediately. Text layers stay
-      eager because Ctrl+F search (`_runSearch`) walks every page's
-      text layer. The bulk of the win for long docs.
+      and cancels the in-flight `RenderTask` if it scrolls away.
+      The visible page is queued at the highest priority, and at
+      most two page rasters run concurrently. Empty text overlays
+      commit with the page geometry; the same observer hydrates text
+      only for nearby pages. Ctrl+F search hydrates missing layers
+      with two concurrent tasks, reports indexing progress, then
+      searches the completed layers in document order. The bulk of
+      the win for long docs.
 
     - **Generation-safe atomic swap.** `renderAllPages` collects
       changed and reusable page nodes without moving the live DOM,
@@ -1272,11 +1276,12 @@ These are deliberately out of scope for v0.1 but worth flagging.
       until scrolling settles (`RENDER_SETTLE_MS`) so a fast fling
       doesn't start-then-cancel a render for every page flung past.
       `window.__serveWebRenderStats.current` now scopes commit,
-      first-paint, reuse, canvas-memory, eviction, and browser Long Task
-      metrics to the latest render generation, while the existing raster
-      aggregate remains available across the session.
+      first-paint, first-text, text-layer/search indexing, paint-queue,
+      reuse, canvas-memory, eviction, and browser Long Task metrics to
+      the latest render generation, while the existing raster aggregate
+      remains available across the session.
 
-    **Still open:**
+    **Deferred:**
 
     - **Web worker rendering (gated on measurement).** Move the
       canvas rasterisation off the main thread — a dedicated worker
@@ -1291,9 +1296,8 @@ These are deliberately out of scope for v0.1 but worth flagging.
       only if `__serveWebRenderStats` shows real single-page jank on
       representative documents.
 
-    Neither changes the network or correctness story. They're pure
-    latency/jank improvements that get more valuable as documents
-    get longer. Tracked in
+    These changes do not alter the network or correctness story. They
+    reduce latency and jank as documents get longer. Tracked in
     [GitHub issue #50](https://github.com/nicklambourne/rules_latex/issues/50).
 
 ## 6. Versioning
