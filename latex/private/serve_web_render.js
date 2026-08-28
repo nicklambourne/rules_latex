@@ -1,30 +1,49 @@
 // serve_web_render.js — lazy-paint orchestration for the live-preview
 // client, factored out of serve_web.js so the render state machine and
-// the observer decision can be unit-tested without a real DOM or PDF.js.
+// observer decision can be unit-tested without a real DOM or PDF.js.
 // The DOM / PDF.js specifics are injected by serve_web.js.
+
+// A monotonically increasing render generation. Every document load, reload,
+// or zoom starts a generation; async work checks its captured token before
+// committing so a slower, superseded render cannot replace newer output.
+export function newRenderGeneration() {
+  let current = 0;
+  return {
+    begin() {
+      current += 1;
+      return current;
+    },
+    isCurrent(generation) {
+      return generation === current;
+    },
+  };
+}
 
 // Rasterize one page into its `.page-wrap`, idempotently.
 //
 // `renderPage(wrap)` performs the actual PDF.js raster and resolves to a
 // RenderTask (`{ promise, cancel() }`); it's injected so this logic is
-// testable with fakes. A page already painted (`rendered`) or mid-paint
-// (`rendering`) is skipped, so an eager current-page paint and the
-// IntersectionObserver can't double-render. The in-flight task is stashed
-// on the wrap as `_renderTask` so the observer can cancel it if the page
-// scrolls out before its raster starts; a cancelled raster leaves the
-// page unpainted so it repaints when scrolled to again.
-export async function paintPage(wrap, renderPage) {
+// testable with fakes. `isCurrent()` guards the async gap before PDF.js
+// returns its RenderTask as well as task completion.
+export async function paintPage(
+  wrap,
+  renderPage,
+  isCurrent = () => true,
+) {
   if (wrap.dataset.rendered === "1" || wrap.dataset.rendering === "1") return;
   wrap.dataset.rendering = "1";
   try {
     const task = await renderPage(wrap);
+    if (!isCurrent()) {
+      try { task.cancel(); } catch { /* best-effort */ }
+      return;
+    }
     wrap._renderTask = task;
     await task.promise;
-    wrap.dataset.rendered = "1";
+    if (isCurrent()) wrap.dataset.rendered = "1";
   } catch (err) {
     // RenderingCancelledException is the expected outcome when a page
-    // scrolls out before its paint starts; anything else is a real
-    // failure worth surfacing.
+    // scrolls out or its render generation is superseded.
     if (!(err && err.name === "RenderingCancelledException")) {
       console.warn("page render failed:", err);
     }

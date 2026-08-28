@@ -1236,10 +1236,13 @@ These are deliberately out of scope for v0.1 but worth flagging.
       eager because Ctrl+F search (`_runSearch`) walks every page's
       text layer. The bulk of the win for long docs.
 
-    - **Off-screen swap.** Already in place: `renderAllPages`
-      builds the new wraps into a detached node and
-      `replaceChildren`s atomically, so the old render stays up
-      until the new layout is ready — no blank intermediate.
+    - **Generation-safe atomic swap.** `renderAllPages` collects
+      changed and reusable page nodes without moving the live DOM,
+      then commits them synchronously once every awaited layout step
+      has completed. A monotonically increasing generation prevents
+      slower document loads, zooms, text layers, outlines, and canvas
+      paints from overwriting newer output. Superseded PDF.js loading
+      tasks and documents are cancelled or destroyed after hand-off.
 
     - **Reuse unchanged pages across reloads (option B).** The
       manifest carries a per-page `{contentHash, width, height}`

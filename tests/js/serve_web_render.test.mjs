@@ -5,6 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  newRenderGeneration,
   paintPage,
   renderObserverAction,
   planPageReconciliation,
@@ -17,6 +18,64 @@ const PG = (hash, width = 612, height = 792) => ({ contentHash: hash, width, hei
 const fakeWrap = () => ({ dataset: {}, _renderTask: null });
 const resolvedTask = () => ({ promise: Promise.resolve(), cancel() {} });
 const rejectedTask = (err) => ({ promise: Promise.reject(err), cancel() {} });
+
+test("render generations invalidate every older token", () => {
+  const generations = newRenderGeneration();
+  const first = generations.begin();
+  assert.equal(generations.isCurrent(first), true);
+  const second = generations.begin();
+  assert.equal(generations.isCurrent(first), false);
+  assert.equal(generations.isCurrent(second), true);
+});
+
+test("a superseded generation cancels a task returned after async setup", async () => {
+  const generations = newRenderGeneration();
+  const generation = generations.begin();
+  const wrap = fakeWrap();
+  let releaseTask;
+  let cancelCalls = 0;
+  const taskReady = new Promise((resolve) => { releaseTask = resolve; });
+
+  const painting = paintPage(
+    wrap,
+    () => taskReady,
+    () => generations.isCurrent(generation),
+  );
+  generations.begin();
+  releaseTask({
+    promise: Promise.resolve(),
+    cancel() { cancelCalls += 1; },
+  });
+  await painting;
+
+  assert.equal(cancelCalls, 1);
+  assert.notEqual(wrap.dataset.rendered, "1");
+  assert.equal(wrap.dataset.rendering, "");
+});
+
+test("a superseded generation cannot mark a finished raster rendered", async () => {
+  const generations = newRenderGeneration();
+  const generation = generations.begin();
+  const wrap = fakeWrap();
+  let finishRaster;
+  const task = {
+    promise: new Promise((resolve) => { finishRaster = resolve; }),
+    cancel() {},
+  };
+
+  const painting = paintPage(
+    wrap,
+    () => task,
+    () => generations.isCurrent(generation),
+  );
+  await Promise.resolve();
+  generations.begin();
+  finishRaster();
+  await painting;
+
+  assert.notEqual(wrap.dataset.rendered, "1");
+  assert.equal(wrap.dataset.rendering, "");
+});
 
 test("paintPage rasterizes once and marks the wrap rendered", async () => {
   const wrap = fakeWrap();
