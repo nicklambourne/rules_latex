@@ -7,7 +7,10 @@
 // tests/js/ with `node --test`.
 
 import * as pdfjsLib from "/_pdfjs/pdf.mjs";
-import { pdfBoxToViewportRect } from "./serve_web_synctex.js";
+import {
+  clientPointToPdfPoint,
+  pdfBoxToViewportRect,
+} from "./serve_web_synctex.js";
 import {
   newRenderGeneration,
   paintPage as paintPageImpl,
@@ -15,6 +18,7 @@ import {
   planPageReconciliation,
   newRenderStats,
   recordRenderTiming,
+  recordLongTask,
 } from "./serve_web_render.js";
 import { planRangeSegments } from "./serve_web_chunks.js";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/_pdfjs/pdf.worker.mjs";
@@ -25,6 +29,21 @@ const SYNCTEX_ENABLED = window.__SERVE_CONFIG__.synctexEnabled;
 // `__serveWebRenderStats`; set `__SERVE_DEBUG__ = true` for per-page logs.
 const _renderStats = newRenderStats();
 window.__serveWebRenderStats = _renderStats;
+try {
+  if (
+    typeof PerformanceObserver !== "undefined" &&
+    PerformanceObserver.supportedEntryTypes?.includes("longtask")
+  ) {
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        recordLongTask(_renderStats, entry.duration);
+      }
+    });
+    observer.observe({ type: "longtask", buffered: true });
+  }
+} catch {
+  // Long Task API support is optional; the rest of the stats still work.
+}
 const viewer = document.getElementById("viewer");
 const statusEl = document.getElementById("status");
 const syncResultEl = document.getElementById("sync-result");
@@ -50,6 +69,23 @@ let _activeLoadingTask = null;
 
 function _beginRenderGeneration() {
   const generation = _renderGenerations.begin();
+  _renderStats.generations += 1;
+  _renderStats.current = {
+    generation,
+    startedAt: performance.now(),
+    pages: null,
+    reusedPages: null,
+    scale: null,
+    dpr: window.devicePixelRatio || 1,
+    committedMs: null,
+    firstPaintMs: null,
+    longTaskCount: 0,
+    longTaskTotalMs: 0,
+    longTaskMaxMs: 0,
+    canvasBytes: 0,
+    renderedCanvases: 0,
+    releasedCanvases: 0,
+  };
   if (_activeLoadingTask) {
     const staleTask = _activeLoadingTask;
     _activeLoadingTask = null;
@@ -402,7 +438,6 @@ async function renderAllPages(pdf, manifestPages, generation) {
   // synchronous commit below, so awaits cannot partially empty the viewer.
   const prevScroll = { top: viewer.scrollTop, left: viewer.scrollLeft };
   const nextNodes = [];
-  const dpr = window.devicePixelRatio || 1;
   const reusePlan = scale === _renderedScale
     ? planPageReconciliation(_renderedPages, manifestPages)
     : [];
@@ -431,10 +466,10 @@ async function renderAllPages(pdf, manifestPages, generation) {
     wrap.dataset.pageNumber = String(i);
 
     const canvas = document.createElement("canvas");
-    // Render at devicePixelRatio for crisp output on HiDPI displays;
-    // CSS pins the displayed size to the un-scaled viewport dimensions.
-    canvas.width = Math.floor(viewport.width * dpr);
-    canvas.height = Math.floor(viewport.height * dpr);
+    // CSS dimensions preserve layout. The intrinsic backing store stays at
+    // zero until this page enters the observer retention margin.
+    canvas.width = 0;
+    canvas.height = 0;
     canvas.style.width = `${viewport.width}px`;
     canvas.style.height = `${viewport.height}px`;
     canvas.dataset.pageNumber = String(i);
@@ -478,6 +513,15 @@ async function renderAllPages(pdf, manifestPages, generation) {
   _renderedPages = manifestPages;
   _renderedScale = scale;
   _setTotalPages(pdf.numPages);
+  if (_renderStats.current?.generation === generation) {
+    Object.assign(_renderStats.current, {
+      pages: pdf.numPages,
+      reusedPages: reusePlan.filter((action) => action === "reuse").length,
+      scale,
+      committedMs: performance.now() - _renderStats.current.startedAt,
+    });
+  }
+  _updateCanvasStats(generation);
 
   _attachPageObserver();
   _attachRenderObserver(pdf, generation);
@@ -496,6 +540,35 @@ async function renderAllPages(pdf, manifestPages, generation) {
 // paint and the observer can't double-render. The RenderTask is stashed
 // on the wrap so _renderObserver can cancel it if the page scrolls out
 // before its raster starts.
+function _updateCanvasStats(generation) {
+  const current = _renderStats.current;
+  if (!current || current.generation !== generation) return;
+  const canvases = [...viewer.querySelectorAll(".page-wrap canvas")];
+  current.canvasBytes = canvases.reduce(
+    (bytes, canvas) => bytes + canvas.width * canvas.height * 4,
+    0,
+  );
+  current.renderedCanvases = viewer.querySelectorAll(
+    '.page-wrap[data-rendered="1"]',
+  ).length;
+}
+
+function _releaseCanvas(wrap) {
+  const canvas = wrap.querySelector("canvas");
+  if (!canvas) return;
+  // Assigning either intrinsic dimension resets the context and releases its
+  // bitmap. Keep CSS width/height and the stored viewport for stable layout.
+  const hadBacking = canvas.width > 0 && canvas.height > 0;
+  canvas.width = 0;
+  canvas.height = 0;
+  wrap.dataset.rendered = "";
+  const current = _renderStats.current;
+  if (hadBacking && current?.generation === _displayGeneration) {
+    current.releasedCanvases += 1;
+  }
+  _updateCanvasStats(_displayGeneration);
+}
+
 function _cancelledRenderError() {
   const err = new Error("render generation superseded");
   err.name = "RenderingCancelledException";
@@ -517,6 +590,8 @@ function paintPage(pdf, wrap, generation) {
       }
       const viewport = page.getViewport({ scale });
       const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(viewport.width * dpr);
+      canvas.height = Math.floor(viewport.height * dpr);
       const ctx = canvas.getContext("2d");
       const transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
       const startedAt = performance.now();
@@ -535,7 +610,20 @@ function paintPage(pdf, wrap, generation) {
       return task;
     },
     () => _isDisplayGeneration(generation),
-  );
+  ).finally(() => {
+    if (wrap.dataset.rendered !== "1") {
+      _releaseCanvas(wrap);
+      return;
+    }
+    const current = _renderStats.current;
+    if (
+      current?.generation === generation &&
+      current.firstPaintMs === null
+    ) {
+      current.firstPaintMs = performance.now() - current.startedAt;
+    }
+    _updateCanvasStats(generation);
+  });
 }
 
 let _renderObserver = null;
@@ -575,6 +663,8 @@ function _attachRenderObserver(pdf, generation) {
         }
         if (action === "cancel") {
           try { wrap._renderTask.cancel(); } catch { /* best-effort */ }
+        } else if (action === "release") {
+          _releaseCanvas(wrap);
         }
       }
     }
@@ -657,16 +747,15 @@ async function onCanvasClick(event) {
   const canvas = event.currentTarget;
   const viewport = canvasViewports.get(canvas);
   if (!viewport) return;
-  // Convert client coordinates (page-relative pixels) to canvas
-  // coordinates (account for canvas dimensions vs. displayed size).
+  // Map through the CSS-pixel viewport rather than the optional HiDPI
+  // backing store, which may still be zero for an unpainted placeholder.
   const rect = canvas.getBoundingClientRect();
-  const cssX = event.clientX - rect.left;
-  const cssY = event.clientY - rect.top;
-  const cx = cssX * (canvas.width / rect.width);
-  const cy = cssY * (canvas.height / rect.height);
-  // PDF.js' viewport.convertToPdfPoint() maps canvas pixels back to
-  // PDF points relative to the page's bottom-left.
-  const [pdfX, pdfY] = viewport.convertToPdfPoint(cx, cy);
+  const [pdfX, pdfY] = clientPointToPdfPoint(
+    viewport,
+    rect,
+    event.clientX,
+    event.clientY,
+  );
   const pageNumber = parseInt(canvas.dataset.pageNumber, 10);
 
   syncResultEl.textContent = "looking up source location…";

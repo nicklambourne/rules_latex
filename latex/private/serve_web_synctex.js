@@ -21,3 +21,13 @@ export function pdfBoxToViewportRect(viewport, x, y, w, h) {
     height: Math.abs(vy2 - vy1),
   };
 }
+
+// Convert a browser client point on a CSS-sized canvas into PDF points.
+// Intrinsic canvas dimensions are deliberately irrelevant: lazy pages have
+// no backing store until painted, and HiDPI backing pixels use a different
+// coordinate scale from PDF.js's CSS-pixel viewport.
+export function clientPointToPdfPoint(viewport, rect, clientX, clientY) {
+  const viewportX = (clientX - rect.left) * (viewport.width / rect.width);
+  const viewportY = (clientY - rect.top) * (viewport.height / rect.height);
+  return viewport.convertToPdfPoint(viewportX, viewportY);
+}
