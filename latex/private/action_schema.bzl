@@ -28,4 +28,4 @@ DESIGN.md §5 item 10 for the historical context.
 # *set* of declared outputs (renames or new optional outputs).
 # Pure content-of-output changes (e.g. tectonic version bumps) do
 # NOT need a bump — Bazel's existing input-hashing catches those.
-RULES_LATEX_ACTION_SCHEMA = "v1"
+RULES_LATEX_ACTION_SCHEMA = "v2"
