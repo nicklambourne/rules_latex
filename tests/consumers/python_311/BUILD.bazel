@@ -1,0 +1,12 @@
+load("@rules_python//python:py_binary.bzl", "py_binary")
+
+py_binary(
+    name = "consumer_python",
+    srcs = ["runtime.py"],
+    config_settings = {
+        "@rules_python//python/config_settings:bootstrap_impl": "script",
+    },
+    legacy_create_init = 0,
+    main = "runtime.py",
+    python_version = "3.11",
+)

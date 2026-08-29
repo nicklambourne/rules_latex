@@ -51,7 +51,6 @@ them is essential; the live-preview warm rebuild is already
 | **Key the implicit-pipeline populate action on the `\usepackage` set, not full sources.** The serve-cache override already sidesteps this for serve mode; this would help `bazel build` outside serve mode for users who don't set `cache=`. | 30-90 s per edit (non-serve) | Architectural change; requires a Starlark-time scan of `.tex` files for `\usepackage` directives, then keying the populate action on that fingerprint. |
 | **Drop `pack_cache` compression from level 6 to level 1.** Snapshot grows ~1.5× but pack speed doubles. | 0.5-1 s per prime | Cold-path only; not worth the disk bloat for most users. |
 | **Async / "server-first" prime on serve startup.** Currently the HTTP server doesn't bind until the prime is complete (~60 s on cold checkout). Bind first, prime in a background thread, report progress via `/status`. | UX, not wall-clock | Worth doing as a polish pass; not strictly performance. |
-| **Collapse the three Python `sh_test`s into one `python3 -m unittest tests.py.test_*`.** Three Python startups → one per `bazel test`. | 200-300 ms per cold `bazel test` run | Cosmetic; tests are cached by Bazel anyway. |
 | **Switch `_serve_cache_override` from `string_flag` to `action_env`.** Eliminates the analysis-cache flush when alternating between `bazel build` and `bazel run :serve`. | 50-200 ms on serve↔build transitions | Marginally less hermetic; the existing flag-based wiring is also easier to reason about. |
 
 ## What's *not* planned

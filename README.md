@@ -25,7 +25,7 @@ latex_document(
 ```
 
 That's it. No package enumeration, no checked-in tarballs, no system
-LaTeX install. `bazel build //:cv` works on a fresh machine.
+LaTeX or Python install. `bazel build //:cv` works on a fresh machine.
 
 ## Why
 

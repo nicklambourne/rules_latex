@@ -81,6 +81,10 @@ def _latex_test_impl(ctx):
         biber_file = toolchain.biber
 
     pkg_files = _resolved_pkg_files(ctx)
+    compile_info = ctx.attr._compile_tool[DefaultInfo]
+    compile_tool = compile_info.files_to_run.executable
+    populate_info = ctx.attr._populate_tool[DefaultInfo]
+    populate_tool = populate_info.files_to_run.executable
 
     forbidden = list(_DEFAULT_FORBIDDEN_PATTERNS) if not ctx.attr.forbidden_patterns_replace else []
     forbidden.extend(ctx.attr.forbidden_patterns)
@@ -158,8 +162,6 @@ set -euo pipefail
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-
-PYTHON="${PYTHON:-python3}"
 """
 
     if cache_args == "__IMPLICIT__":
@@ -169,7 +171,7 @@ PYTHON="${PYTHON:-python3}"
 # it. Same logic as latex_document's implicit pipeline, but inlined
 # here because tests can't depend on a sibling latex_document's
 # intermediate cache output.
-"$PYTHON" "{populate_tool}" \\
+"{populate_tool}" \\
     --tectonic "{tectonic}" \\
     --main "{main}" \\
     --output "$WORK/cache.tar.gz" \\
@@ -181,7 +183,7 @@ PYTHON="${PYTHON:-python3}"
     {pkg_file_args}
 
 """.format(
-            populate_tool = ctx.file._populate_tool.short_path,
+            populate_tool = populate_tool.short_path,
             tectonic = tectonic.short_path,
             main = main.short_path,
             bundle_url_arg = bundle_url_arg,
@@ -196,7 +198,7 @@ PYTHON="${PYTHON:-python3}"
         implicit_prime = ""
 
     script = script_prefix + implicit_prime + """\
-"$PYTHON" "{tool}" \\
+"{tool}" \\
     --tectonic "{tectonic}" \\
     --main "{main}" \\
     --outfmt {outfmt} \\
@@ -219,7 +221,7 @@ status=0
 {required_checks}
 exit $status
 """.format(
-        tool = ctx.file._compile_tool.short_path,
+        tool = compile_tool.short_path,
         tectonic = tectonic.short_path,
         main = main.short_path,
         outfmt = ctx.attr.outfmt,
@@ -244,7 +246,7 @@ exit $status
     ctx.actions.write(test_script, script, is_executable = True)
 
     runfiles_files = (
-        [main, tectonic, ctx.file._compile_tool, ctx.file._populate_tool, ctx.file._staging_lib] +
+        [main, tectonic] +
         ([toolchain.bundle] if toolchain.bundle and not cache_snapshot else []) +
         ([cache_snapshot] if cache_snapshot else []) +
         ([biber_file] if biber_file else []) +
@@ -254,7 +256,7 @@ exit $status
     runfiles = ctx.runfiles(
         files = runfiles_files,
         transitive_files = all_srcs,
-    )
+    ).merge(compile_info.default_runfiles).merge(populate_info.default_runfiles)
     return [DefaultInfo(executable = test_script, runfiles = runfiles)]
 
 latex_test = rule(
@@ -337,16 +339,14 @@ latex_test = rule(
                   "or a specific shipout happened.",
         ),
         "_compile_tool": attr.label(
-            default = "//tools:tectonic_compile.py",
-            allow_single_file = True,
+            default = "//tools:tectonic_compile",
+            executable = True,
+            cfg = "target",
         ),
         "_populate_tool": attr.label(
-            default = "//tools:tectonic_populate_cache.py",
-            allow_single_file = True,
-        ),
-        "_staging_lib": attr.label(
-            default = "//tools:staging.py",
-            allow_single_file = True,
+            default = "//tools:tectonic_populate_cache",
+            executable = True,
+            cfg = "target",
         ),
         "_bundle_manifest": attr.label(
             default = "//latex/toolchain:bundle_manifest.txt",

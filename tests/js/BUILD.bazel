@@ -3,7 +3,7 @@
 Mirrors tests/py: an sh_test wraps node's built-in test runner
 (`node --test`) so we depend only on system node — no npm, no
 node_modules, no Bazel JS ruleset. Same stdlib-only philosophy as the
-Python tests run on the system python3. See DESIGN.md §5 #11.
+hermetic Python tests. See DESIGN.md §5 #11.
 
 The pure-logic modules under //latex/private (extracted from
 serve_web.py.tpl) are the unit-test surface; DOM/PDF.js-coupled code in

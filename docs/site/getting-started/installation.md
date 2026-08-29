@@ -30,6 +30,32 @@ seconds.
 - An internet connection on first build (for the package prime).
   Subsequent builds are fully offline.
 
+A system Python installation is not required. Bazel downloads the pinned
+Python 3.13 runtime used by rules_latex's private build and live-preview tools.
+
+## Using rules_python in the consuming module
+
+You can use a different Bazel-managed Python version for your own targets.
+Every rules_latex tool requests Python 3.13 explicitly, so a consumer target
+on Python 3.11 or 3.14 keeps that version and does not inherit rules_latex's
+choice. The cost is an additional platform-specific Python runtime download
+when the two versions differ.
+
+Bzlmod still selects one `rules_python` *module version* for the standard
+dependency graph. rules_latex declares 1.9.2 as its compatibility floor:
+
+- requesting an older `rules_python` version normally raises the selected
+  version to 1.9.2;
+- requesting a newer version raises the version used to analyse rules_latex's
+  Python targets as well.
+
+The repository tests both ends of this interaction with consumer fixtures:
+Bazel 8.0 + `rules_python` 1.9.2 + Python 3.11, and Bazel 9.1 +
+`rules_python` 2.3.2 + Python 3.14. The latter needs Bazel 9 because
+`rules_python` 2.3.2's MODULE file uses `flag_alias`; that restriction comes
+from the selected `rules_python` release. Consumers should still declare their
+own direct `bazel_dep` on `rules_python` when they load its rules.
+
 ## Verifying the install
 
 Create `cv.tex`:
