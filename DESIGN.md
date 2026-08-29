@@ -912,6 +912,51 @@ cross-package files end up at slightly verbose default paths
 (`study/llb/lib/references/refs.bib`); the `pkg_files` attribute
 mitigates that for the cases where it matters.
 
+### 4.12 Intermediate-aux caching experiment
+
+Issue #7 asked whether exposing Tectonic's intermediate files as Bazel
+action outputs could make citation-neutral edits materially faster. An
+unmerged full prototype split the existing compile into three actions using
+the private `--@rules_latex//latex:_experimental_split_biber` build flag:
+
+1. one TeX-only Tectonic pass produces a deterministic archive containing
+   `.aux`, `.bcf`, `.out`, `.run.xml`, and `.toc`;
+2. a Biber action consumes only the `.bcf` and declared `.bib` files and
+   produces `.bbl`; and
+3. a final Tectonic action consumes the archive and `.bbl`, then runs two TeX
+   passes and the PDF converter.
+
+The Biber action therefore remains cached when document text changes without
+changing the generated BCF. The final action uses Tectonic's fixed
+`--reruns 1` setting because its automatic mode always invokes Biber after the
+first final pass, even when the precomputed BBL is already present; that extra
+no-op invocation otherwise causes an unnecessary third final TeX pass.
+
+The benchmark used the thesis example, Tectonic 0.16.9, Biber 2.21, and an
+Apple Silicon Mac running macOS 26.4. Each citation-neutral result is the
+median of eight paired edits in alternating order. The tarball case includes
+the cache extraction done by normal hermetic builds; the directory case uses
+the pre-extracted cache used by the fast live-preview path.
+
+| Edit | Cache form | Baseline | Split prototype | Change |
+|---|---:|---:|---:|---:|
+| Citation-neutral | directory | 3.965 s | 3.141 s | -0.825 s (-20.8%) |
+| Citation-neutral | tarball | 4.183 s | 3.579 s | -0.604 s (-14.4%) |
+| Citation-changing | directory | 3.662 s | 5.870 s | +2.208 s (+60.3%) |
+| No source change | directory | 0.057 s | 0.051 s | noise |
+
+Biber executed in none of the 16 citation-neutral split builds and all three
+citation-changing split builds. With `reproducible = True`, the baseline and
+prototype PDFs were byte-identical both before and after a controlled citation
+change.
+
+The narrow hot path does improve, but only by 0.6--0.8 seconds on a build that
+already completes in about four seconds. Citation changes become substantially
+slower, no-op builds were already fully cached, and the prototype adds a fixed
+rerun policy plus a new cross-platform launcher problem. The measured benefit
+does not justify making this pipeline part of the public rule. Keep the
+ordinary single Tectonic action and use its existing action-output cache.
+
 ## 5. Open questions / future work
 
 These are deliberately out of scope for v0.1 but worth flagging.
@@ -939,9 +984,10 @@ These are deliberately out of scope for v0.1 but worth flagging.
    new `.ttb.index.gz`. If Tectonic upstream resumes publishing bundles,
    reconsider tracking theirs instead. (Tracking issue #6 closed once the
    self-hosted bundle landed.)
-5. **Caching of intermediate aux files.** Tectonic is fast and Bazel caches
-   the action output, so this is probably never worth doing — but worth
-   benchmarking on multi-pass documents (e.g. with biblatex). Tracked in
+5. **Caching of intermediate aux files.** Measured in §4.12. The prototype
+   saves 0.6--0.8 seconds on citation-neutral edits but makes citation changes
+   about 2.2 seconds slower and adds significant action and rerun complexity.
+   Do not ship the split pipeline. Tracked in
    [GitHub issue #7](https://github.com/nicklambourne/rules_latex/issues/7).
 6. **Forward-sync (editor → PDF) for SyncTeX.** **Shipped in v0.4.**
    `latex_live` exposes a `POST /sync/forward` endpoint that
