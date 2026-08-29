@@ -10,8 +10,9 @@ module(
 )
 
 # Standard dependencies.
-bazel_dep(name = "platforms", version = "0.0.10")
-bazel_dep(name = "bazel_skylib", version = "1.7.1")
+bazel_dep(name = "platforms", version = "0.0.11")
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
+bazel_dep(name = "rules_python", version = "1.9.2")
 
 # Stardoc generates the Markdown that backs the user guide at
 # https://nicklambourne.github.io/rules_latex/. Marked as a dev-only
@@ -19,6 +20,12 @@ bazel_dep(name = "bazel_skylib", version = "1.7.1")
 # our own //docs:* targets do.
 bazel_dep(name = "stardoc", version = "0.8.1", dev_dependency = True)
 bazel_dep(name = "rules_shell", version = "0.5.0", dev_dependency = True)
+
+# rules_latex's private build tools run on their own Python version instead
+# of inheriting the root module's default. Do not call python.defaults() here:
+# consumers may use a different Python version for their own targets.
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(python_version = "3.13")
 
 # Module extension that registers the tectonic toolchain repos.
 tectonic = use_extension("//latex/toolchain:extensions.bzl", "tectonic")

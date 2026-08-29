@@ -1,6 +1,9 @@
-# Developer-facing helpers run via `bazel run`.
+# Python implementation code and developer-facing helpers.
 #
 # Nothing under this package is part of the public rules_latex API.
+
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_library.bzl", "py_library")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -23,9 +26,9 @@ package(default_visibility = ["//visibility:public"])
 #     each rebuild. Stdlib-only, no third-party deps. See
 #     tests/py/test_ws_server.py for protocol coverage.
 #
-# Exposed as plain files rather than py_binary because we deliberately
-# don't take a `rules_python` dependency for stdlib-only tools — see
-# tracking issue #2 for the trade-off.
+# The source files remain exported because latex_live loads several modules
+# dynamically from its runfiles. Production actions use the executable
+# targets below once their rule plumbing is migrated.
 exports_files([
     "staging.py",
     "tectonic_populate_cache.py",
@@ -34,3 +37,55 @@ exports_files([
     "pdf_chunks.py",
     "ws_server.py",
 ])
+
+_PYTHON_VERSION = "3.13"
+
+# The script bootstrap launches the in-build runtime directly. The default
+# system_python bootstrap would still require python3 on PATH before it could
+# reach the hermetic interpreter.
+_HERMETIC_CONFIG = {
+    "@rules_python//python/config_settings:bootstrap_impl": "script",
+}
+
+py_library(
+    name = "staging",
+    srcs = ["staging.py"],
+)
+
+py_library(
+    name = "serve_cache",
+    srcs = ["serve_cache.py"],
+)
+
+py_library(
+    name = "pdf_chunks",
+    srcs = ["pdf_chunks.py"],
+)
+
+py_library(
+    name = "ws_server",
+    srcs = ["ws_server.py"],
+)
+
+py_binary(
+    name = "tectonic_compile",
+    srcs = ["tectonic_compile.py"],
+    config_settings = _HERMETIC_CONFIG,
+    python_version = _PYTHON_VERSION,
+    deps = [":staging"],
+)
+
+py_binary(
+    name = "tectonic_populate_cache",
+    srcs = ["tectonic_populate_cache.py"],
+    config_settings = _HERMETIC_CONFIG,
+    python_version = _PYTHON_VERSION,
+    deps = [":staging"],
+)
+
+py_binary(
+    name = "extract_bundle_manifest",
+    srcs = ["extract_bundle_manifest.py"],
+    config_settings = _HERMETIC_CONFIG,
+    python_version = _PYTHON_VERSION,
+)

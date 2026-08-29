@@ -1,20 +1,8 @@
-"""Python unittest suite for the rules_latex tooling.
+"""Hermetic Python unittest suite for the rules_latex tooling."""
 
-We use sh_test instead of py_test so we don't take a rules_python
-dependency for tests - the tests run on the system python3, same as
-the tooling itself does in production. This matches the philosophy
-elsewhere in this repo of keeping the tooling stdlib-only. See
-tracking issue #2 for the trade-off.
+load(":py_unittest.bzl", "py_unittest")
 
-Each sh_test is a one-liner that invokes `python3 -m unittest` on
-the corresponding test module. Tests do their own data file
-discovery via __file__-relative paths.
-"""
-
-load("@rules_shell//shell:sh_test.bzl", "sh_test")
-
-# Sources the test modules depend on at runtime, walked via
-# __file__-relative paths.
+# Sources the test modules load via __file__-relative paths.
 _TEST_DATA = [
     "//latex/private:serve_web.py.tpl",
     "//tools:pdf_chunks.py",
@@ -25,136 +13,106 @@ _TEST_DATA = [
     "//tools:ws_server.py",
 ]
 
-sh_test(
+py_unittest(
     name = "test_synctex_parser",
-    srcs = ["run_pytest.sh"],
-    args = ["tests/py/test_synctex_parser.py"],
-    data = _TEST_DATA + ["test_synctex_parser.py"],
+    data = _TEST_DATA,
 )
 
-sh_test(
+py_unittest(
     name = "test_open_browser",
-    srcs = ["run_pytest.sh"],
-    args = ["tests/py/test_open_browser.py"],
-    data = _TEST_DATA + ["test_open_browser.py"],
+    data = _TEST_DATA,
 )
 
-sh_test(
+py_unittest(
     name = "test_staging",
-    srcs = ["run_pytest.sh"],
-    args = ["tests/py/test_staging.py"],
-    data = _TEST_DATA + ["test_staging.py"],
+    data = _TEST_DATA,
 )
 
-sh_test(
+py_unittest(
     name = "test_serve_cache",
-    srcs = ["run_pytest.sh"],
-    args = ["tests/py/test_serve_cache.py"],
-    data = _TEST_DATA + ["test_serve_cache.py"],
+    data = _TEST_DATA,
 )
 
-sh_test(
+py_unittest(
     name = "test_watcher_debouncer",
-    srcs = ["run_pytest.sh"],
-    args = ["tests/py/test_watcher_debouncer.py"],
-    data = _TEST_DATA + ["test_watcher_debouncer.py"],
+    data = _TEST_DATA,
 )
 
-sh_test(
+py_unittest(
     name = "test_pdf_chunks",
-    srcs = ["run_pytest.sh"],
-    args = ["tests/py/test_pdf_chunks.py"],
-    data = _TEST_DATA + ["test_pdf_chunks.py"],
+    data = _TEST_DATA,
 )
 
-sh_test(
+py_unittest(
     name = "test_post_build_hook",
-    srcs = ["run_pytest.sh"],
-    args = ["tests/py/test_post_build_hook.py"],
-    data = _TEST_DATA + ["test_post_build_hook.py"],
+    data = _TEST_DATA,
 )
 
-sh_test(
+py_unittest(
     name = "test_http_head",
-    srcs = ["run_pytest.sh"],
-    args = ["tests/py/test_http_head.py"],
-    data = _TEST_DATA + ["test_http_head.py"],
+    data = _TEST_DATA,
 )
 
-sh_test(
+py_unittest(
     name = "test_populate_cache_hints",
-    srcs = ["run_pytest.sh"],
-    args = ["tests/py/test_populate_cache_hints.py"],
-    data = _TEST_DATA + ["test_populate_cache_hints.py"],
+    data = _TEST_DATA,
 )
 
-sh_test(
+py_unittest(
     name = "test_populate_cache_e2e",
-    srcs = ["run_pytest.sh"],
-    args = ["tests/py/test_populate_cache_e2e.py"],
-    data = _TEST_DATA + ["test_populate_cache_e2e.py"],
+    data = _TEST_DATA,
 )
 
-sh_test(
+py_unittest(
     name = "test_populate_cache_retry",
-    srcs = ["run_pytest.sh"],
-    args = ["tests/py/test_populate_cache_retry.py"],
-    data = _TEST_DATA + ["test_populate_cache_retry.py"],
+    data = _TEST_DATA,
 )
 
-sh_test(
+py_unittest(
     name = "test_populate_cache_resolve",
-    srcs = ["run_pytest.sh"],
-    args = ["tests/py/test_populate_cache_resolve.py"],
-    data = _TEST_DATA + ["test_populate_cache_resolve.py"],
+    data = _TEST_DATA,
 )
 
-sh_test(
+py_unittest(
     name = "test_ws_server",
-    srcs = ["run_pytest.sh"],
-    args = ["tests/py/test_ws_server.py"],
-    data = _TEST_DATA + ["test_ws_server.py"],
+    data = _TEST_DATA,
 )
 
-# The four BuildState / live-preview server tests share the
-# `_template_loader.py` helper that substitutes serve_web.py.tpl
-# placeholders and importlib-loads the result. Each test needs
-# that helper as a runtime data dep alongside its own source.
-_BUILD_STATE_TEST_DATA = _TEST_DATA + ["_template_loader.py"]
+py_unittest(
+    name = "test_python_runtime",
+    data = [],
+)
 
-sh_test(
+# These live-preview server tests import the shared template loader as Python
+# source so rules_python places it on their import path.
+py_unittest(
     name = "test_combine_output",
-    srcs = ["run_pytest.sh"],
-    args = ["tests/py/test_combine_output.py"],
-    data = _BUILD_STATE_TEST_DATA + ["test_combine_output.py"],
+    data = _TEST_DATA,
+    extra_srcs = ["_template_loader.py"],
 )
 
-sh_test(
+py_unittest(
     name = "test_build_state_log",
-    srcs = ["run_pytest.sh"],
-    args = ["tests/py/test_build_state_log.py"],
-    data = _BUILD_STATE_TEST_DATA + ["test_build_state_log.py"],
+    data = _TEST_DATA,
+    extra_srcs = ["_template_loader.py"],
 )
 
-sh_test(
+py_unittest(
     name = "test_build_state_git",
-    srcs = ["run_pytest.sh"],
-    args = ["tests/py/test_build_state_git.py"],
-    data = _BUILD_STATE_TEST_DATA + ["test_build_state_git.py"],
+    data = _TEST_DATA,
+    extra_srcs = ["_template_loader.py"],
 )
 
-sh_test(
+py_unittest(
     name = "test_build_state_ws",
-    srcs = ["run_pytest.sh"],
-    args = ["tests/py/test_build_state_ws.py"],
-    data = _BUILD_STATE_TEST_DATA + ["test_build_state_ws.py"],
+    data = _TEST_DATA,
+    extra_srcs = ["_template_loader.py"],
 )
 
-sh_test(
+py_unittest(
     name = "test_serve_fast",
-    srcs = ["run_pytest.sh"],
-    args = ["tests/py/test_serve_fast.py"],
-    data = _BUILD_STATE_TEST_DATA + ["test_serve_fast.py"],
+    data = _TEST_DATA,
+    extra_srcs = ["_template_loader.py"],
 )
 
 test_suite(
@@ -172,6 +130,7 @@ test_suite(
         ":test_populate_cache_resolve",
         ":test_populate_cache_retry",
         ":test_post_build_hook",
+        ":test_python_runtime",
         ":test_serve_cache",
         ":test_serve_fast",
         ":test_staging",
