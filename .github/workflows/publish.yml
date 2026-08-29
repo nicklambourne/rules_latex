@@ -1,11 +1,10 @@
 name: Publish to BCR
 
 # Triggered both by:
-#   1. workflow_dispatch (manual UI trigger) — for ad-hoc retries
-#      after release publication issues.
-#   2. workflow_call from the Release workflow — fires once the
-#      attestations and release are published. This is the
-#      happy-path automation.
+#   1. workflow_dispatch (manual UI trigger) — the current release path and
+#      the retry path after publication issues.
+#   2. workflow_call from the Release workflow — wired for future automatic
+#      chaining, but currently gated off in release.yml.
 #
 # See https://github.com/bazel-contrib/publish-to-bcr for the design
 # of this reusable workflow.

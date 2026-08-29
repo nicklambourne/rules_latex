@@ -3,7 +3,7 @@
 `rules_latex` is a Bazel module. Add it to your `MODULE.bazel`:
 
 ```python
-bazel_dep(name = "rules_latex", version = "0.3.1")
+bazel_dep(name = "rules_latex", version = "0.6.1")
 
 tectonic = use_extension("@rules_latex//latex/toolchain:extensions.bzl", "tectonic")
 tectonic.toolchain()
@@ -87,18 +87,18 @@ bazel build //:cv
 
 You should end up with `bazel-bin/cv.pdf`.
 
-## Optional: opt into the full upstream bundle
+## Optional: opt into the full pinned bundle
 
 By default, `rules_latex` uses its implicit cache pipeline (a one-time
 online prime per document, then offline forever). If you'd prefer the
-full ~3 GB upstream bundle approach — useful for monorepos with many
+full ~1.78 GiB self-hosted bundle approach — useful for monorepos with many
 documents that share most of the same packages — add:
 
 ```python
 tectonic.bundle()
 ```
 
-after `tectonic.toolchain()` in your `MODULE.bazel`. The 3 GB bundle
+after `tectonic.toolchain()` in your `MODULE.bazel`. The 1.78 GiB bundle
 is fetched once and used for every compile, skipping the per-document
 prime.
 

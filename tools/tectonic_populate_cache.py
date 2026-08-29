@@ -181,7 +181,7 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="CTAN package name to download and include in the cache snapshot. "
         "May be repeated. Packages are downloaded in TDS format from "
-        "mirrors.ctan.org and made available to tectonic via TEXMFHOME."
+        "mirrors.ctan.org and made available through Tectonic search paths."
     )
     parser.add_argument(
         "--bundle-manifest",

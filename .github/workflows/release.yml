@@ -67,24 +67,12 @@ jobs:
       # snippet etc.) for module consumers.
       generate_release_notes: true
 
-  # Auto-publish to the Bazel Central Registry once the release
-  # itself is up. The BCR_PUBLISH_TOKEN secret needs to be configured
-  # under repo settings (Classic PAT with repo + workflow scopes).
-  # If the secret is missing, the publish job will fail loudly; that
-  # failure doesn't break the release that already went out, just
-  # the BCR submission step.
-  #
-  # ----- TEMPORARILY DISABLED -----
-  # The first-time BCR onboarding PR for rules_latex
-  # (bazelbuild/bazel-central-registry#8911 → superseded by the
-  # next manual submission) is still under review. Until that PR
-  # lands, we don't want every release to spam BCR with new-version
-  # PRs that won't get reviewed alongside the in-flight onboarding.
-  #
-  # When the first PR merges, flip `if: false` to remove the gate
-  # (or delete the conditional entirely). The publish.yml workflow
-  # is unaffected by this gate — it remains invocable via
-  # workflow_dispatch for manual / one-off triggers.
+  # Automatic BCR chaining is intentionally disabled. v0.6.1 completed the
+  # registry onboarding, and maintainers currently dispatch publish.yml after
+  # checking the GitHub Release and its attestations. Remove the gate when the
+  # project is ready to make that final step automatic. The manual workflow is
+  # unaffected and can also retry a failed submission without replacing the
+  # GitHub Release.
   publish-to-bcr:
     if: false
     needs: release

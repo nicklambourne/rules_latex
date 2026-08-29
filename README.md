@@ -5,6 +5,7 @@
 # rules_latex
 
 [![CI](https://github.com/nicklambourne/rules_latex/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/nicklambourne/rules_latex/actions/workflows/ci.yml)
+[![Docs](https://img.shields.io/badge/Docs-8A2BE2.svg)](https://nicklambourne.github.io/rules_latex/)
 [![Latest release](https://img.shields.io/github/v/release/nicklambourne/rules_latex?label=release&sort=semver&filter=v*)](https://github.com/nicklambourne/rules_latex/releases)
 [![License](https://img.shields.io/github/license/nicklambourne/rules_latex)](./LICENSE)
 [![Bazel 8–9](https://img.shields.io/badge/bazel-8.0%20%E2%80%93%209.1-43A047)](./.bazelversion)
@@ -53,7 +54,7 @@ architectural rationale.
 In your `MODULE.bazel`:
 
 ```python
-bazel_dep(name = "rules_latex", version = "0.5.0")
+bazel_dep(name = "rules_latex", version = "0.6.1")
 
 tectonic = use_extension("@rules_latex//latex/toolchain:extensions.bzl", "tectonic")
 tectonic.toolchain()
@@ -117,7 +118,7 @@ bibliography shared across multiple documents) — and the full
 | [`latex_pkg`](./latex/private/latex_pkg.bzl) | Group non-LaTeX resources (images, fonts, `.bib` files) that documents may need. |
 | [`latex_test`](./latex/private/latex_test.bzl) | Compile a document under `bazel test` and assert on patterns in the tectonic log file (e.g. fail on `LaTeX Error:`). |
 | [`latex_cache_snapshot`](./latex/private/latex_cache_snapshot.bzl) | `bazel run`-able command that captures a small, per-document offline cache snapshot for hermetic builds. |
-| [`latex_live`](./latex/private/latex_live.bzl) | `bazel run`-able live-preview loop: watches the document's sources, rebuilds via `bazel build` on every save, and serves the result as a localhost HTTP page rendered with PDF.js — Overleaf-style in-browser preview with auto-refresh, search, outline sidebar, and a build-log drawer. |
+| [`latex_live`](./latex/private/latex_live.bzl) | `bazel run`-able live-preview loop: watches the document's sources, rebuilds through Bazel by default (with an opt-in content-only fast path), and serves the result as a localhost HTTP page rendered with PDF.js — Overleaf-style in-browser preview with auto-refresh, search, outline sidebar, and a build-log drawer. |
 
 All six are loaded from `@rules_latex//latex:defs.bzl`.
 
@@ -144,6 +145,11 @@ bazel run //:cv_live   # http://127.0.0.1:8765/
   can't upgrade. Scroll position, zoom level, and current page
   are preserved across reloads, so a 90-page thesis doesn't snap
   back to page 1 on every save.
+- **Bounded long-document rendering** — only pages near the viewport
+  retain canvas memory, unchanged pages are reused across reloads, and
+  raster, text-layer, and search work run through bounded queues. A
+  dedicated OffscreenCanvas worker was prototyped but did not improve the
+  measured bottleneck enough to justify its extra PDF.js lifecycle.
 - **Page navigation, zoom, fit modes, fullscreen, download** — a
   proper PDF-viewer chrome with keyboard shortcuts (PageUp/Down,
   Home/End, +/-/0, w/p, f, g, t, Ctrl+F, …).
@@ -292,8 +298,8 @@ unsupported platforms.
 
 ## Documentation
 
-- [User guide](https://nicklambourne.github.io/rules_latex/) — generated from Stardoc, with the Material theme
-- [`DESIGN.md`](./DESIGN.md) — architectural rationale, the v0.x → v1.0 roadmap, and open questions
+- [User guide](https://nicklambourne.github.io/rules_latex/) — Material for MkDocs guide with a generated Stardoc API reference
+- [`DESIGN.md`](./DESIGN.md) — architectural rationale, measured experiments, and future-work decisions
 - [`CHANGELOG.md`](./CHANGELOG.md)
 - [`examples/`](./examples/) — runnable examples (hello, letter, CV, paper, ctan_paper, thesis, beamer, and a shared-library monorepo)
 

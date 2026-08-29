@@ -47,8 +47,8 @@ The realistic use cases:
   `pgfplots` releases — as long as the new version doesn't depend
   on engine or core-package features the bundle lacks.
 
-For limitations (biblatex extension styles in particular), see the
-[Limitations](#limitations) section below.
+For a worked modern-citation example, see
+[Modern biblatex extension styles](#modern-biblatex-extension-styles).
 
 ## When you *don't* need this
 

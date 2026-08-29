@@ -1,69 +1,68 @@
-# Roadmap
+# Roadmap and decisions
 
-The full open-questions discussion lives in
-[`DESIGN.md` §5](https://github.com/nicklambourne/rules_latex/blob/master/DESIGN.md).
-This page is a friendlier summary of what's planned.
+The current GitHub issue backlog is closed. Work on `rules_latex` is now
+demand-driven: new features should start with a concrete document or workflow
+that the existing rules cannot support. The detailed decision record lives in
+[`DESIGN.md` §5](https://github.com/nicklambourne/rules_latex/blob/master/DESIGN.md#5-decisions-and-future-work).
 
-## Near-term (v0.3)
-
-| Feature | Status | Issue |
-|---------|--------|-------|
-| Linux arm64 biber | Done (v0.6.0) — prebuilt biber 2.21 from CTAN | [#10][issue-10] |
-| SyncTeX forward-sync (editor → PDF jump) | Planned | — |
-| `latex_lint` rule (wraps chktex / lacheck) | Considered | — |
-| BCR publication automation | In progress | — |
-
-## Medium-term (v0.4–v1.0)
+## Delivered
 
 | Feature | Status | Issue |
-|---------|--------|-------|
-| Modern biblatex (3.18+) via own TeX Live bundle | Done (v0.6.0) — self-hosted TeX Live 2026 bundle | [#1][issue-1] |
-| Tectonic v2 workspace mode (`Tectonic.toml`) | Considered | — |
-| Live-preview render perf for long docs (viewport-gated canvas paint, off-screen swap, canvas reuse) | Punted | [#50][issue-50] |
+|---|---|---|
+| SyncTeX forward lookup (source → PDF) | Shipped in v0.4.2 | [#8][issue-8] |
+| Automatic transitive CTAN package resolution | Shipped in v0.4.2 | — |
+| Self-hosted TeX Live 2026 bundle with biblatex 3.21 | Shipped in v0.6.0 | [#1][issue-1] |
+| Vendored biber 2.21 on Linux arm64 | Shipped in v0.6.0 | [#10][issue-10] |
+| Fast-path live rebuilds (`serve_fast`) | Shipped in v0.6.1 | — |
+| Bazel Central Registry publication | v0.6.1 is published; later releases use the repository's manually dispatched publish workflow | — |
+| Long-document live-preview performance | Completed on `master` after v0.6.1 | [#50][issue-50] |
+| Hermetic private Python 3.13 toolchain | Completed on `master` after v0.6.1 | [#2][issue-2] |
 
-## Long-term
+## Measured or considered, then declined
 
-| Feature | Status |
-|---------|--------|
-| `rules_latex`-shipped TeX Live distribution | Multi-day project; only justified once we have a concrete user need |
-| `biber`/`bibtex`/`makeindex` toolchain attrs for swapping backends | Speculative |
-| Reproducibility of PDF output across platforms (font handling) | Speculative |
+| Proposal | Decision | Issue |
+|---|---|---|
+| Tectonic workspace mode (`Tectonic.toml`) | Not planned: its single-document configuration model does not replace Bazel's declared inputs, outputs, bundles, or toolchains | [#3][issue-3] |
+| Swappable `bibtex` / `makeindex` executable attributes | Not planned without a concrete unsupported document; Tectonic's integrated tools cover current users | [#4][issue-4] |
+| `latex_lint` wrapping chktex or lacheck | Not planned: another cross-platform toolchain and configuration surface is not justified by current demand | [#5][issue-5] |
+| Reusing intermediate TeX state between builds | Measured but declined: no-change builds improved by 0.6–0.8 s, while citation-changing rebuilds regressed by about 2.2 s and the state created correctness risks | [#7][issue-7] |
+| Dedicated OffscreenCanvas worker | Measured during the long-document work and deferred: main-thread raster cost was not the dominant bottleneck after viewport gating, bounded queues, and page reuse | [#50][issue-50] |
+
+## Possible future work
+
+The live-preview warm path is already fast, but these ideas remain available if
+real workloads expose the corresponding bottleneck.
+
+| Lever | Potential benefit | Why it remains deferred |
+|---|---|---|
+| **Multiplex persistent workers.** Let one Python worker handle parallel document builds. | 100–400 ms when building several documents concurrently | Requires a re-entrancy audit; single-document builds gain nothing. |
+| **Share the persistent serve cache across documents.** | Avoid a 30–90 s first prime for each additional document using the same packages | Needs a multi-document cache ownership and invalidation design. |
+| **Share cache state between normal builds and live preview.** | Avoid a 30–90 s prime when switching modes in a fresh workspace | Reading from `bazel-bin` is configuration-dependent; the reverse direction needs a declared-input design. |
+| **Ship a common-package cache prelude.** | Reduce typical first prime from 30–90 s to extraction plus a few downloads | Adds a large maintained artefact; current first-prime reports do not justify it. |
+| **Key implicit cache population on package directives rather than full sources.** | Avoid re-priming after ordinary prose edits outside live preview | Requires reliable source scanning and changes the action-key model. |
+| **Lower cache snapshot compression.** | Save roughly 0.5–1 s while creating a snapshot | Increases stored snapshot size for a cold-path-only gain. |
+| **Bind the preview server before a cold prime finishes.** | Show progress immediately instead of waiting for the first build | Improves startup feedback, not total build time. |
+| **Use an action environment variable for the live cache override.** | Save roughly 50–200 ms when alternating between build and live-preview commands | The current build-setting wiring is more explicit and hermetic. |
+
+## Deliberately outside the scope
+
+- **Replacing Tectonic with a directly managed TeX Live engine stack.** The
+  project now ships a pinned Tectonic-compatible TeX Live bundle, but Tectonic
+  remains the engine and package resolver. Replacing it would discard the
+  single-binary, content-addressed model on which the rules are built.
+- **Wrapping pdfTeX, XeTeX, or LuaTeX directly.** Multiple engines would
+  multiply the toolchain and test surface; Tectonic's XeTeX-derived engine
+  covers current use cases.
+- **Virtualising the bundle per document.** Per-document cache snapshots are
+  supported, but the underlying package bundle remains a shared toolchain
+  artefact.
 
 [issue-1]: https://github.com/nicklambourne/rules_latex/issues/1
+[issue-2]: https://github.com/nicklambourne/rules_latex/issues/2
+[issue-3]: https://github.com/nicklambourne/rules_latex/issues/3
+[issue-4]: https://github.com/nicklambourne/rules_latex/issues/4
+[issue-5]: https://github.com/nicklambourne/rules_latex/issues/5
+[issue-7]: https://github.com/nicklambourne/rules_latex/issues/7
+[issue-8]: https://github.com/nicklambourne/rules_latex/issues/8
 [issue-10]: https://github.com/nicklambourne/rules_latex/issues/10
 [issue-50]: https://github.com/nicklambourne/rules_latex/issues/50
-
-## Performance follow-ups
-
-The bulk of the build-time optimisation work landed in v0.3.2.
-For the curious / future-self, here are the remaining levers that
-were *considered* and *deferred*, with rough magnitudes. None of
-them is essential; the live-preview warm rebuild is already
-~2-3 s with the current set of optimisations.
-
-| Lever | Win | Why deferred |
-|-------|-----|--------------|
-| **`serve_fast = True` opt-in.** Bypass `bazel build` entirely for serve-mode rebuilds when only `.tex` source files changed; invoke `tectonic_compile.py` directly via the worker channel. Falls back to `bazel build` when structural files change. | 150-400 ms per warm rebuild (~50% of remaining latency) | Sandbox/CI parity loss: a fast-path rebuild that diverges from `bazel build` produces "works in serve, fails in CI" surprises. Want this opt-in with prominent docs, not the default. |
-| **Multiplex persistent workers.** Today's worker is single-request-at-a-time; `supports-multiplex-workers` lets one Python process handle N parallel requests. | 100-400 ms when building multiple documents in parallel | Requires re-entrancy audit of `tectonic_compile.py` (currently safe but not guaranteed; `os.environ` and `sys.stderr` redirection would need scope tightening). |
-| **Share the persistent serve cache across documents in the same workspace.** Two docs that pull the same 50 packages each pay a separate ~60 s prime today. Refactor `derive_cache_layout` so multiple documents share a `TECTONIC_CACHE_DIR` and tar per-doc subsets. | 30-90 s once per extra document, on first prime | Single-doc workspaces gain nothing; refactor of `tools/serve_cache.py` for the multi-doc case. |
-| **Look-aside between `bazel build`'s implicit-cache action and `serve_cache.py`.** A user who already ran `bazel build //:doc` should not pay the prime cost when they then run `bazel run //:doc_serve` (and vice versa). | 30-90 s once per workspace, when both paths get used | Look-aside is safe (tectonic's content-addressing prevents stale reads), but the read-from-`bazel-bin` direction is brittle (bazel-bin contents are mode-dependent). |
-| **Ship a "common LaTeX prelude" prebuilt cache snapshot in the toolchain.** A small (~30 MB) curated cache covering the top ~50 packages — article, amsmath, hyperref, geometry, etc. Most first primes become "extract + a few online fetches" instead of "all online". | 30-90 s → ~5 s for typical first prime | ~500 LOC, maintenance burden, repo bloat. Only worth doing if first-prime cost becomes a top complaint. |
-| **Key the implicit-pipeline populate action on the `\usepackage` set, not full sources.** The serve-cache override already sidesteps this for serve mode; this would help `bazel build` outside serve mode for users who don't set `cache=`. | 30-90 s per edit (non-serve) | Architectural change; requires a Starlark-time scan of `.tex` files for `\usepackage` directives, then keying the populate action on that fingerprint. |
-| **Drop `pack_cache` compression from level 6 to level 1.** Snapshot grows ~1.5× but pack speed doubles. | 0.5-1 s per prime | Cold-path only; not worth the disk bloat for most users. |
-| **Async / "server-first" prime on serve startup.** Currently the HTTP server doesn't bind until the prime is complete (~60 s on cold checkout). Bind first, prime in a background thread, report progress via `/status`. | UX, not wall-clock | Worth doing as a polish pass; not strictly performance. |
-| **Switch `_serve_cache_override` from `string_flag` to `action_env`.** Eliminates the analysis-cache flush when alternating between `bazel build` and `bazel run :serve`. | 50-200 ms on serve↔build transitions | Marginally less hermetic; the existing flag-based wiring is also easier to reason about. |
-
-## What's *not* planned
-
-- **Dropping Tectonic for TeX Live.** This is mode (5) in
-  [DESIGN.md §4.10](https://github.com/nicklambourne/rules_latex/blob/master/DESIGN.md#410-biberbiblatex-version-coupling-and-the-upstream-bundle-staleness)
-  and would essentially require us to rewrite the toolchain layer.
-  We picked Tectonic for its single-binary content-addressed
-  story; throwing that away to fix package staleness would be
-  backwards.
-- **Wrapping pdfTeX / XeTeX / LuaTeX directly.** Multi-engine
-  support multiplies the toolchain surface area. Tectonic uses XeTeX
-  internally and that covers ~99% of real use cases.
-- **Per-document package isolation.** Tectonic resolves packages
-  from a single shared bundle; we don't try to virtualise that
-  further per document.

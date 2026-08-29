@@ -9,9 +9,9 @@ Three offline-mode strategies, in priority order:
 1. `cache = "<file>.tar.gz"` — extract a user-supplied cache snapshot
    into the tectonic cache before compile, run --only-cached. Fully
    offline, fully reproducible, snapshot is checked-in.
-2. Toolchain-level `tectonic.bundle()` — pass --bundle <pinned-3GB-tar>
+2. Toolchain-level `tectonic.bundle()` — pass --bundle <pinned-1.78-GiB-file>
    --only-cached. Fully offline, snapshot is fetched once via
-   download_and_extract.
+   a Bazel repository rule.
 3. **Implicit pipeline** (new in v0.2): when neither (1) nor (2) is set,
    the rule synthesises a PopulateCache action that runs tectonic ONCE
    in online mode and captures the resulting cache directory as a
@@ -43,8 +43,8 @@ resolve as the author would expect.
 
 * `biber = False` (default) — no bibliography processor available.
 * `biber = True` — use the rules_latex-vendored biber from the
-  toolchain. Fails at analysis time on platforms without an upstream
-  biber binary (currently linux/aarch64).
+  toolchain. The default toolchain provides biber on every supported
+  platform; custom or unsupported toolchains must provide their own.
 * `biber_strategy = "system"` — escape hatch: propagate $PATH into
   the action so a system-installed biber is found. Less hermetic;
   intended for air-gapped or unsupported-platform builds.
@@ -78,13 +78,10 @@ def _resolve_biber(ctx, toolchain):
     if toolchain.biber == None:
         fail(
             "latex_document(biber = True) on {}, but the resolved " +
-            "toolchain does not provide a biber binary. The most " +
-            "common cause is running on linux/aarch64, which has no " +
-            "upstream biber prebuilt. Workarounds: " +
-            "(a) cross-compile on x86_64; " +
-            "(b) install biber via your distro and set " +
-            "`biber_strategy = \"system\"` on this target; " +
-            "(c) wait for v0.3 which builds biber from source. " +
+            "toolchain does not provide a biber binary. Use a supported " +
+            "rules_latex toolchain, provide biber in a custom toolchain, " +
+            "or install biber on the host and set " +
+            "`biber_strategy = \"system\"` on this target. " +
             "See DESIGN.md §4.9.".format(ctx.label),
         )
     return (toolchain.biber, False)
@@ -582,7 +579,7 @@ latex_document = rule(
                   "When set, the action extracts the snapshot into the " +
                   "compile-time `TECTONIC_CACHE_DIR` and runs with " +
                   "`--only-cached`, giving a fully offline, hermetic build " +
-                  "without pulling the full ~3 GB tectonic bundle or " +
+                  "without pulling the full ~1.78 GiB tectonic bundle or " +
                   "running an online prime. Takes precedence over the " +
                   "toolchain-level `tectonic.bundle()` and over the " +
                   "implicit cache pipeline.",
@@ -612,8 +609,9 @@ latex_document = rule(
         "biber_strategy": attr.string(
             doc = "Which biber binary to use when `biber = True`. " +
                   "`\"toolchain\"` (default) uses the rules_latex-vendored " +
-                  "biber 2.17; fails at analysis time on platforms without " +
-                  "an upstream prebuilt (currently linux/aarch64). " +
+                  "biber 2.21, matched to the bundle's biblatex 3.21, on " +
+                  "every supported platform. A custom or unsupported " +
+                  "toolchain without biber fails at analysis time. " +
                   "`\"system\"` propagates $PATH so a system-installed " +
                   "biber is found; less hermetic, intended as an escape " +
                   "hatch.",

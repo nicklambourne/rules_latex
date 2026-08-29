@@ -75,8 +75,9 @@ def _latex_test_impl(ctx):
         if toolchain.biber == None:
             fail(
                 ("latex_test(biber = True) on {}, but the resolved " +
-                 "toolchain has no biber binary. See DESIGN.md §4.9 " +
-                 "for the linux/aarch64 workaround.").format(ctx.label),
+                 "toolchain has no biber binary. Use a supported " +
+                 "rules_latex toolchain or provide biber in a custom " +
+                 "toolchain. See DESIGN.md §4.9.").format(ctx.label),
             )
         biber_file = toolchain.biber
 
@@ -304,8 +305,9 @@ latex_test = rule(
         "biber_strategy": attr.string(
             doc = "Which biber binary to use when `biber = True`. " +
                   "`\"toolchain\"` (default) uses the rules_latex-vendored " +
-                  "biber; `\"system\"` uses whatever biber is on $PATH " +
-                  "when the test runs.",
+                  "biber. `\"system\"` is rejected because the test sandbox " +
+                  "scrubs PATH; it remains an accepted value only for API " +
+                  "parity with latex_document.",
             default = "toolchain",
             values = ["toolchain", "system"],
         ),

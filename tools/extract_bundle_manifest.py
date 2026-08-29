@@ -5,12 +5,13 @@ The CTAN auto-resolver in ``tectonic_populate_cache.py`` consults this
 manifest to decide whether a ``\\RequirePackage`` reference is already
 provided by the tectonic bundle. References resolvable from the bundle
 are *not* fetched from CTAN, which avoids the version-coupling
-disasters that come from shadowing bundle packages (e.g. biblatex 3.18+
-fetched on top of the bundle's biber 2.17 — see DESIGN.md §4.10).
+disasters that come from shadowing bundle packages (for example, a biblatex
+release newer than the bundle's 3.21 fetched over its paired biber 2.21 — see
+DESIGN.md §4.10).
 
 This tool is invoked manually by a maintainer (a) when first
 generating the manifest and (b) any time tectonic's pinned bundle
-version is bumped (see DESIGN.md §5 open question #4).
+version is bumped (see DESIGN.md §5 item #4).
 
 Two enumeration modes:
 
@@ -64,10 +65,9 @@ _DEFAULT_INDEX_URL = "https://rules-latex.ndl.au/texlive2026.ttb.index.gz"
 
 
 # Match ``.sty`` and ``.cls``. We deliberately do not include ``.def``
-# or ``.cfg`` files: tectonic's resolver uses kpathsea, but
-# ``\RequirePackage{X}`` / ``\usepackage{X}`` look up ``X.sty``
-# specifically. Documents that do ``\input{X.def}`` directly are rare
-# in practice and the scanner doesn't pick those up either.
+# or ``.cfg`` files: ``\RequirePackage{X}`` / ``\usepackage{X}`` look up
+# ``X.sty`` specifically. Documents that do ``\input{X.def}`` directly are
+# rare in practice and the scanner doesn't pick those up either.
 _PACKAGE_FILE_RE = re.compile(r"^(.+)\.(sty|cls)$")
 
 

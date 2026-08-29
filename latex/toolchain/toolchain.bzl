@@ -12,8 +12,8 @@ LatexToolchainInfo = provider(
     doc = "Resolved tectonic toolchain.",
     fields = {
         "tectonic": "File: the tectonic executable.",
-        "bundle": "File|None: an offline package bundle, or None for online " +
-                  "(default) operation.",
+        "bundle": "File|None: a fully downloaded offline package bundle, " +
+                  "or None for range-fetched/implicit-cache operation.",
         "biber": "File|None: a biber executable for bibliography processing, " +
                  "or None if biber isn't available for this platform.",
     },
@@ -41,10 +41,11 @@ latex_toolchain = rule(
             mandatory = True,
         ),
         "bundle": attr.label(
-            doc = "Optional offline package bundle (.tar). When set, the " +
-                  "toolchain runs tectonic with `--bundle` pointed at this " +
-                  "file, making compilation fully hermetic.",
-            allow_single_file = [".tar"],
+            doc = "Optional fully downloaded package bundle (.ttb or legacy " +
+                  ".tar). When set, the toolchain runs tectonic with " +
+                  "`--bundle` pointed at this file, making compilation fully " +
+                  "hermetic.",
+            allow_single_file = [".ttb", ".tar"],
         ),
         "biber": attr.label(
             doc = "Optional biber executable. When set, latex_document " +

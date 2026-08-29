@@ -28,7 +28,7 @@ This compiles `cv.tex` once in online mode, captures the resulting
 ~tens-of-MB tectonic cache, and writes `cv_cache.tar.gz` into the
 source tree. After committing the snapshot, `latex_document(cache =
 ":cv_cache.tar.gz")` builds the document fully offline using only the
-snapshot — no internet, no 3 GB full bundle.
+snapshot — no internet, no 1.78 GiB full bundle.
 
 The rule is *not* a normal build action because it inherently needs
 network access on first invocation and a writable source-tree
@@ -63,8 +63,9 @@ def _latex_cache_snapshot_impl(ctx):
         if toolchain.biber == None:
             fail(
                 "latex_cache_snapshot(biber = True) on {}, but the " +
-                "resolved toolchain has no biber binary. See DESIGN.md " +
-                "§4.9 for the linux/aarch64 workaround.".format(ctx.label),
+                "resolved toolchain has no biber binary. Use a supported " +
+                "rules_latex toolchain or provide biber in a custom " +
+                "toolchain. See DESIGN.md §4.9.".format(ctx.label),
             )
         biber_file = toolchain.biber
 

@@ -8,6 +8,7 @@ different combinations of attributes:
                                         TectonicCompile.
   * `synctex = True`                  → the synctex.gz output appears.
   * `biber = True`                    → biber binary in action inputs.
+  * `.ttb` toolchain bundle           → accepted as the current bundle format.
   * action-schema canary               → declared-output set + env wiring.
 
 These tests run at analysis time, not at action execution time, so
@@ -17,6 +18,7 @@ happen.
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
 load("//latex:defs.bzl", "latex_document")
+load("//latex/toolchain:toolchain.bzl", "latex_toolchain")
 
 # Mirror of `_EXPECTED_ACTION_SCHEMA` from
 # `//latex/private:action_schema.bzl`. Inlined rather than loaded
@@ -86,6 +88,24 @@ def _checked_in_cache_test_impl(ctx):
     return analysistest.end(env)
 
 checked_in_cache_test = analysistest.make(_checked_in_cache_test_impl)
+
+# -----------------------------------------------------------------------------
+# Test: latex_toolchain accepts the current .ttb bundle format
+# -----------------------------------------------------------------------------
+
+def _ttb_toolchain_bundle_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    toolchain_info = target[platform_common.ToolchainInfo].latex_toolchain_info
+    asserts.equals(
+        env,
+        "_fake_bundle.ttb",
+        toolchain_info.bundle.basename,
+        "expected the .ttb bundle to be retained in LatexToolchainInfo",
+    )
+    return analysistest.end(env)
+
+ttb_toolchain_bundle_test = analysistest.make(_ttb_toolchain_bundle_test_impl)
 
 # -----------------------------------------------------------------------------
 # Test: synctex = True -> declared output includes .synctex.gz
@@ -478,6 +498,26 @@ def latex_document_test_suite(name):
         cmd = "echo fake > $@",
     )
 
+    native.genrule(
+        name = "_fake_bundle",
+        outs = ["_fake_bundle.ttb"],
+        cmd = "echo fake > $@",
+    )
+
+    native.genrule(
+        name = "_fake_tectonic",
+        outs = ["_fake_tectonic.sh"],
+        cmd = "touch $@ && chmod +x $@",
+        executable = True,
+    )
+
+    latex_toolchain(
+        name = "_toolchain_with_ttb_bundle",
+        tectonic = ":_fake_tectonic",
+        bundle = ":_fake_bundle",
+        tags = ["manual"],
+    )
+
     # --- target_under_test instances ----------------------------------
 
     latex_document(
@@ -548,6 +588,10 @@ def latex_document_test_suite(name):
         name = "checked_in_cache_test",
         target_under_test = ":_doc_with_cache",
     )
+    ttb_toolchain_bundle_test(
+        name = "ttb_toolchain_bundle_test",
+        target_under_test = ":_toolchain_with_ttb_bundle",
+    )
     synctex_output_test(
         name = "synctex_output_test",
         target_under_test = ":_doc_synctex",
@@ -582,6 +626,7 @@ def latex_document_test_suite(name):
         tests = [
             ":implicit_pipeline_test",
             ":checked_in_cache_test",
+            ":ttb_toolchain_bundle_test",
             ":synctex_output_test",
             ":no_synctex_test",
             ":pkg_files_test",
