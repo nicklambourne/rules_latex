@@ -7,7 +7,7 @@ page is the canonical reference for both.
 
 When you compile a LaTeX document, Tectonic resolves
 `\usepackage{...}` directives from a **bundle** — a single tar
-archive containing a curated subset of TeX Live (~3 GB). On first
+archive containing a curated subset of TeX Live (~1.78 GiB). On first
 use of any given package, Tectonic copies its files from the bundle
 into a **per-user cache directory** so subsequent compiles can
 proceed offline.
@@ -106,10 +106,11 @@ whether the document declares
     ```
 
     `TectonicCompile` detects this structure, extracts each subtree,
-    sets `TECTONIC_CACHE_DIR` to `cache/` and `TEXMFHOME` to
-    `ctan_pkgs/`, then runs `tectonic --only-cached`. Tectonic's
-    kpathsea consults `TEXMFHOME` first, so CTAN-fetched packages
-    override anything in the bundle.
+    sets `TECTONIC_CACHE_DIR` to `cache/`, and passes one
+    `-Z search-path=<directory>` argument for every directory under
+    `ctan_pkgs/` that contains package files. Tectonic does not use
+    kpathsea or honour `TEXMFHOME`; the explicit search paths make the
+    CTAN overlay available ahead of bundle resolution.
 
 The compile-time format detection is purely structural (does the
 tarball have `cache/` and `ctan_pkgs/` at the root?), so legacy

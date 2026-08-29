@@ -2,9 +2,9 @@
 
 `latex_live` is the live-preview rule. It runs a small HTTP
 server on localhost, watches the document's transitive sources,
-rebuilds via `bazel build` on every save, and pushes the changed
-PDF chunks to the connected browser tab over WebSocket (with SSE
-as fallback). The PDF is rendered via PDF.js, with scroll
+rebuilds through Bazel (or the opt-in content-only fast path), and
+pushes changed PDF chunks to the connected browser tab over WebSocket
+(with SSE as fallback). The PDF is rendered via PDF.js, with scroll
 position, zoom level, and current page preserved across reloads
 so editing doesn't bounce you back to page 1.
 
@@ -26,18 +26,19 @@ Open the URL in your browser; edit the source; watch the PDF update.
 
 Design notes:
 
-* No third-party Python deps. The server uses http.server +
-  ThreadingHTTPServer + Server-Sent Events. SSE is enough for a one-way
-  "reload" signal and is dramatically simpler than WebSockets to
-  implement in stdlib.
+* No third-party Python runtime packages. The server runs under the pinned
+  Python 3.13 toolchain, uses a small stdlib RFC 6455 implementation for the
+  preferred WebSocket transport, and retains Server-Sent Events as a fallback.
 
 * PDF.js is vendored: the pinned pdfjs-dist tarball lives in
   `@rules_latex_pdfjs` (materialised by the `pdfjs` module extension)
   and is served at `/_pdfjs/pdf.mjs` and `/_pdfjs/pdf.worker.mjs` by
   the running server. No CDN dependency at preview time.
 
-* The rebuild path shells out to `bazel build`, so live mode and CI
-  use the same toolchain, sandbox, and cache. See `DESIGN.md` §4.7.
+* The default rebuild path shells out to `bazel build`, so live mode and CI
+  use the same toolchain, sandbox, and cache. `serve_fast = True` opts ordinary
+  content edits into a direct compile replay with Bazel fallback. See
+  `DESIGN.md` §4.7.
 
 * Implicit-pipeline serve acceleration. When the served document
   takes the implicit-cache pipeline (no `cache=`, no toolchain

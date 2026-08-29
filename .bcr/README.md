@@ -27,11 +27,13 @@ glues them together.
    - Generates SLSA build provenance attestations over both archives
      (`<filename>.intoto.jsonl`).
    - Publishes a GitHub Release.
-2. The Release workflow's `publish-to-bcr` job then chains into
-   [`.github/workflows/publish.yml`](../.github/workflows/publish.yml),
-   which invokes the reusable
+2. After the GitHub Release is available, a maintainer manually dispatches
+   [`.github/workflows/publish.yml`](../.github/workflows/publish.yml) with the
+   release tag. The Release workflow contains a disabled chaining hook for
+   re-enabling this step automatically later. The publish workflow invokes the
+   reusable
    [`bazel-contrib/publish-to-bcr`](https://github.com/bazel-contrib/publish-to-bcr)
-   workflow. That:
+   workflow, which:
    - Reads the templates in this directory.
    - Hydrates `source.json` and `MODULE.bazel` for the new version.
    - Pushes a branch to our fork of
@@ -41,22 +43,21 @@ glues them together.
      files (see
      [BCR discussion #2721](https://github.com/bazelbuild/bazel-central-registry/discussions/2721)).
 
-## One-time setup (release engineering)
+## Release-engineering configuration
 
-Before the first publish:
+The repository and registry fork are already configured, and v0.6.1 is
+[published in the BCR][bcr-module]. The working setup is:
 
-1. **Fork `bazelbuild/bazel-central-registry`** to the same account
-   that owns `rules_latex` (i.e. `nicklambourne`). The fork name in
+1. **Registry fork.** `bazelbuild/bazel-central-registry` is forked to the
+   account that owns `rules_latex` (i.e. `nicklambourne`). The fork name in
    `publish.yml` is `nicklambourne/bazel-central-registry`.
-2. **Create a personal access token** (classic, with `repo` and
-   `workflow` scopes). Store it as the repo secret `BCR_PUBLISH_TOKEN`
-   in `rules_latex`'s settings. See
+2. **Publish token.** The repo secret `BCR_PUBLISH_TOKEN` stores a personal
+   access token (classic, with `repo` and `workflow` scopes). See
    [the publish-to-bcr README][p2b-token] for token guidance.
 
-Until both are done, the `publish-to-bcr` job fails with an
-authentication error — but the release itself still ships, so the
-recovery is just to retry the publish workflow via
-`workflow_dispatch` after the secret is in place.
+If the fork or token changes, the publish job fails independently of the
+already-completed release. Repair the configuration and retry the publish
+workflow with `workflow_dispatch`; no replacement release is needed.
 
 ## Stardoc on the BCR
 
@@ -68,5 +69,6 @@ reference pages alongside the module metadata. See
 
 [p2b]: https://github.com/bazel-contrib/publish-to-bcr
 [p2b-token]: https://github.com/bazel-contrib/publish-to-bcr#3-create-a-personal-access-token
+[bcr-module]: https://registry.bazel.build/modules/rules_latex/
 [stardoc-doc]: https://github.com/bazelbuild/bazel-central-registry/blob/main/docs/stardoc.md
 [aspect-stardoc]: https://blog.aspect.build/stardocs-on-bcr

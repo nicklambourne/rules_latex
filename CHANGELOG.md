@@ -6,6 +6,37 @@ that, expect breaking changes in any v0.x release.
 
 ## [Unreleased]
 
+### Changed
+
+- **Hermetic Python execution.** Private build tools, generated live-preview
+  servers, and Python tests now run as `py_binary` / `py_test` targets under a
+  private pinned Python 3.13 toolchain from `rules_python`; they no longer
+  search for a system `python3`. Consumer fixtures verify coexistence with
+  consumer-owned Python 3.11 and 3.14 toolchains and with both the minimum
+  `rules_python` 1.9.2 module version and a newer compatible release.
+
+- **Long-document live preview uses bounded, generation-safe rendering.**
+  Reloads now retain unchanged page canvases, rasterise only pages near the
+  viewport, bound concurrent raster and text extraction work, progressively
+  populate text layers and search indexes, and discard stale work atomically
+  when a newer PDF arrives. Browser measurements showed that a dedicated
+  OffscreenCanvas worker would add substantial complexity without addressing
+  the remaining bottleneck, so that prototype was not retained.
+
+### Fixed
+
+- **Custom toolchains accept `.ttb` package bundles.** The public
+  `latex_toolchain(bundle = ...)` attribute now accepts the current Tectonic
+  bundle format as well as legacy `.tar` bundles, matching the self-hosted
+  TeX Live 2026 bundle used by the module extension.
+
+### Documentation
+
+- Recorded the intermediate-aux caching prototype and the decision not to ship
+  it: citation-neutral rebuilds improved by 0.6–0.8 seconds, but
+  citation-changing rebuilds regressed by about 2.2 seconds and the split
+  action pipeline added correctness and maintenance risk.
+
 ## [0.6.1] - 2026-06-02
 
 ### Added

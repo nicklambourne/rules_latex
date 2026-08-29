@@ -38,7 +38,7 @@ Defines a tectonic-based LaTeX toolchain.
 | :------------- | :------------- | :------------- | :------------- | :------------- |
 | <a id="latex_toolchain-name"></a>name |  A unique name for this target.   | <a href="https://bazel.build/concepts/labels#target-names">Name</a> | required |  |
 | <a id="latex_toolchain-biber"></a>biber |  Optional biber executable. When set, latex_document actions invoked with `biber = True` make this binary available on PATH so tectonic can shell out to it for bibliography processing. Vendored for every supported platform (biber 2.21).   | <a href="https://bazel.build/concepts/labels">Label</a> | optional |  `None`  |
-| <a id="latex_toolchain-bundle"></a>bundle |  Optional offline package bundle (.tar). When set, the toolchain runs tectonic with `--bundle` pointed at this file, making compilation fully hermetic.   | <a href="https://bazel.build/concepts/labels">Label</a> | optional |  `None`  |
+| <a id="latex_toolchain-bundle"></a>bundle |  Optional fully downloaded package bundle (.ttb or legacy .tar). When set, the toolchain runs tectonic with `--bundle` pointed at this file, making compilation fully hermetic.   | <a href="https://bazel.build/concepts/labels">Label</a> | optional |  `None`  |
 | <a id="latex_toolchain-tectonic"></a>tectonic |  The tectonic executable.   | <a href="https://bazel.build/concepts/labels">Label</a> | required |  |
 
 
@@ -59,7 +59,7 @@ Resolved tectonic toolchain.
 | Name  | Description |
 | :------------- | :------------- |
 | <a id="LatexToolchainInfo-tectonic"></a>tectonic |  File: the tectonic executable.    |
-| <a id="LatexToolchainInfo-bundle"></a>bundle |  File\|None: an offline package bundle, or None for online (default) operation.    |
+| <a id="LatexToolchainInfo-bundle"></a>bundle |  File\|None: a fully downloaded offline package bundle, or None for range-fetched/implicit-cache operation.    |
 | <a id="LatexToolchainInfo-biber"></a>biber |  File\|None: a biber executable for bibliography processing, or None if biber isn't available for this platform.    |
 
 

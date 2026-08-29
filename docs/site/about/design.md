@@ -27,18 +27,19 @@ specific goals motivated the design:
 
 [Tectonic](https://tectonic-typesetting.github.io/) is a modern
 TeX/LaTeX engine derived from XeTeX. The key property we care about:
-**it resolves `\usepackage` from an external bundle at compile
-time**. We don't need to ship a TeX Live distribution; we just need
-to ship Tectonic + a content-addressed pin of the bundle.
+**it resolves `\usepackage` from an external bundle at compile time**. The
+rules pin Tectonic, the matching biber binary, and a self-hosted TeX Live 2026
+bundle. Normal builds range-fetch only the package files they need; downloading
+the complete bundle remains opt-in.
 
 Compare:
 
 | | bazel_latex (TeX Live) | rules_latex (Tectonic) |
 |---|---|---|
-| Toolchain artefact | TeX Live distribution (many MB) | Single binary (~20 MB) |
+| Toolchain artefact | TeX Live distribution | Tectonic (~20 MB), biber, and a pinned bundle |
 | Package resolution | Per-package Bazel targets | Resolved at compile time |
 | First-build cost | TeX Live as needed | ~20 MB tectonic + ~10–100 MB cache |
-| Maintenance | Patches against rule internals | Single dependency: tectonic |
+| Maintenance | Patches against rule internals | Small set of pinned toolchain artefacts |
 
 ## Why the implicit cache pipeline?
 
@@ -135,4 +136,4 @@ current (biblatex 3.21, biber 2.21, tikz, …), so the package-staleness
 and biblatex/biber version-coupling problems are resolved at the root.
 The full rationale and the graded options considered are in
 [`DESIGN.md` §4.10](https://github.com/nicklambourne/rules_latex/blob/master/DESIGN.md#410-biberbiblatex-version-coupling-and-the-upstream-bundle-staleness);
-tracked in [issue #1](https://github.com/nicklambourne/rules_latex/issues/1).
+completed in [issue #1](https://github.com/nicklambourne/rules_latex/issues/1).

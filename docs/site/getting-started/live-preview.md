@@ -2,9 +2,10 @@
 
 `rules_latex` ships `latex_live` for the
 "edit-the-source-watch-the-PDF-update" workflow. It watches the
-document's transitive sources via `LatexInfo` and rebuilds via
-`bazel build` on every save, pushing the result to a localhost
-HTTP page rendered with PDF.js.
+document's transitive sources via `LatexInfo` and rebuilds through Bazel by
+default, pushing the result to a localhost HTTP page rendered with PDF.js. An
+opt-in fast path can replay content-only compiles directly when lower latency
+matters.
 
 !!! info "`latex_serve` was removed in v0.6.0"
     Earlier releases also exposed a `latex_serve` rule that
@@ -50,7 +51,8 @@ Open the URL in your browser. The page:
 
 - Renders the PDF with [PDF.js](https://mozilla.github.io/pdf.js/)
   (vendored, no CDN dependency).
-- Listens for "reload" events over Server-Sent Events.
+- Receives changed PDF chunks over WebSocket, with Server-Sent Events as a
+  transparent fallback.
 - Preserves scroll position across reloads.
 - When `synctex = True` is set on the document, clicking anywhere in
   the rendered PDF resolves to a source `file:line`, displays it in
@@ -73,8 +75,31 @@ First build is slower (the online prime takes ~30 s) but happens
 exactly once per content-hash of the inputs — Bazel's action cache
 handles the rest.
 
-For larger documents (multi-chapter thesis, paper with figures), the
-TeX compile itself dominates and rebuilds run in 2–5 s.
+For larger documents (multi-chapter thesis, paper with figures), the TeX
+compile itself usually dominates and rebuilds run in 2–5 s. The browser keeps
+canvas memory bounded to pages near the viewport, reuses unchanged pages, and
+limits concurrent raster, text-layer, and search-index work, so reload cost
+does not grow linearly with every page in the document.
+
+### Opt-in fast content rebuilds
+
+Set `serve_fast = True` on `latex_live` to skip Bazel's command startup,
+analysis, and sandbox setup for ordinary edits to already-declared content:
+
+```python
+latex_live(
+    name = "cv_live",
+    document = ":cv",
+    serve_fast = True,
+)
+```
+
+The first build still uses `bazel build`. The watcher also falls back to Bazel
+when inputs change structurally or the direct compile reports a missing cached
+resource. The direct path runs outside Bazel's sandbox, but it stages only the
+document's declared inputs and replays the same pinned compile tool. Keep the
+default `False` when exact command-path parity with CI matters more than the
+roughly 150–400 ms warm-rebuild saving.
 
 ## What gets watched?
 
@@ -114,8 +139,8 @@ Successful response:
 {"ok": true, "page": 3, "x": 121.5, "y": 614.2, "w": 156.7, "h": 11.0}
 ```
 
-The HTTP response is for the caller's logging; the actual UX (scroll
-+ flash) happens in the browser tab via an SSE event.
+The HTTP response is for the caller's logging; the actual UX (scroll + flash)
+happens in the browser tab over the active WebSocket or SSE transport.
 
 ### Editor integrations
 
@@ -170,14 +195,16 @@ what most editors and users expect for a "jump-to" action.
 `latex_live` synthesises a small launcher script that:
 
 1. Polls the watched paths every 250 ms via `os.stat`.
-2. Shells out to `bazel build <document_label>` on change.
+2. Runs `bazel build <document_label>` on change, unless `serve_fast = True`
+   can safely replay an ordinary content compile.
 3. Keeps a tiny HTTP server alive and pushes updates to
    connected browser tabs over WebSocket (see below) with an
    SSE fallback.
 
-The same `bazel build` invocation as a normal build, which means
-**live-mode behaviour is identical to CI** — no "works locally,
-fails in CI" drift. See
+With the default `serve_fast = False`, this is the same `bazel build`
+invocation as a normal build, so live mode follows the CI path exactly. The
+opt-in fast path retains Bazel fallback for the first build, structural
+changes, and missing resources. See
 [DESIGN.md §4.7](https://github.com/nicklambourne/rules_latex/blob/master/DESIGN.md#47-live-preview)
 for the rationale.
 

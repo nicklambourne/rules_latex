@@ -1,6 +1,6 @@
 # Hermetic builds
 
-`rules_latex` supports four offline-mode strategies. The rule chooses
+`rules_latex` supports three offline-mode strategies. The rule chooses
 automatically based on what you've configured, in priority order:
 
 ## 1. Per-document checked-in cache snapshot
@@ -41,14 +41,14 @@ Re-run the snapshot only when you add new `\usepackage` lines.
 ## 2. Full bundle
 
 **When to use:** monorepos with many documents sharing most packages;
-when you'd rather pay a one-time 3 GB fetch than per-document primes.
+when you'd rather pay a one-time 1.78 GiB fetch than per-document primes.
 
 ```python
 # MODULE.bazel
 tectonic.bundle()
 ```
 
-`tectonic_bundle_repository` http-fetches the pinned 2.88 GB bundle.
+`tectonic_bundle_repository` http-fetches the pinned 1.78 GiB bundle.
 Every `latex_document` runs `tectonic --bundle <path> --only-cached`.
 
 ## 3. Implicit cache pipeline (default)
@@ -87,7 +87,7 @@ tuple**. Subsequent builds:
 CI runs share warm caches via the remote cache, so a typical CI run
 spends near-zero time on the prime.
 
-## 4. Pure online (legacy)
+## Historical note: pure online mode
 
 Not currently exposed. The implicit pipeline (3) is strictly better
 unless you have a niche reason to want to skip the action-cache
@@ -124,7 +124,7 @@ the CTAN packages, and the compile action then runs fully offline.
 
 ## Hermeticity claims
 
-In all four modes:
+In all three supported modes:
 
 - The Tectonic binary, biber binary, and (when used) bundle are
   content-addressed by SHA-256 and fetched via Bazel repository

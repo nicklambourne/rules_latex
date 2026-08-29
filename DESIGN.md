@@ -1,7 +1,7 @@
 # rules_latex — Design
 
-This document captures the goals, non-goals, key design decisions, and
-known open questions for `rules_latex`. It is meant to be read alongside the
+This document captures the goals, non-goals, key design decisions, and future
+work for `rules_latex`. It is meant to be read alongside the
 [README](./README.md), which focuses on user-facing behaviour.
 
 ## 1. Goals
@@ -114,11 +114,11 @@ Tectonic to refuse any network access.
 
 ### 4.4 Network policy
 
-By default, Tectonic fetches its package bundle on first run from
-`relay.fullyjustified.net`. This is convenient but non-hermetic and a single
-point of failure.
+Tectonic's upstream default fetches its package bundle on first run from
+`relay.fullyjustified.net`. `rules_latex` instead pins and names its self-hosted
+bundle explicitly, avoiding that mutable third-party default.
 
-`rules_latex` supports four modes, in priority order:
+`rules_latex` supports three modes, in priority order:
 
 1. **Per-document checked-in cache snapshot.** A `latex_cache_snapshot`
    target is run once with `bazel run` to compile the document in
@@ -173,7 +173,7 @@ point of failure.
    identical sources hit both action caches and complete in under a
    second. **Users don't write any cache target or check anything in
    for this to work.**
-4. **Fully online (legacy).** Setting
+**Historical note: fully online mode.** Setting
    `tectonic_args = ["--no-cache-download-only"]` (or similar) on a
    `latex_document` would suppress (3) and let tectonic fetch
    packages itself per-action. Not currently exposed because we have
@@ -185,7 +185,7 @@ in. All three offline modes produce identical PDFs from identical
 sources.
 
 See [`latex/private/latex_document.bzl`](./latex/private/latex_document.bzl)
-and [`tools/make_cache_snapshot.py`](./tools/make_cache_snapshot.py).
+and [`tools/tectonic_populate_cache.py`](./tools/tectonic_populate_cache.py).
 
 #### Self-hosting the bundle (e.g. Cloudflare R2)
 
@@ -585,9 +585,9 @@ document's `synctex` `OutputGroupInfo` and offers two affordances:
   the "jump" real (server invokes the editor's CLI; or render the
   result as a `vscode://file/...:line` URL-scheme link) both fail
   silently for too many editor + setup combinations to ship as a
-  default. v0.6.1 walked the framing back: reverse-sync is a
+  default. v0.6.0 walked the framing back: reverse-sync is a
   *source-location lookup*, with clipboard as the handoff, and
-  the user paste it into whatever opens files for them. Forward-
+  the user pastes it into whatever opens files for them. Forward-
   sync (below) is the half of SyncTeX where the jump *is* real,
   because the editor is the one driving it.
 
@@ -879,14 +879,12 @@ about the file layout.
 
 #### Why a Python wrapper
 
-The staging logic plus Tectonic's invocation plus output-file
-copy-back ends up being a few hundred lines, and embedding it in a
-shell snippet inside Starlark is a recipe for portability bugs (the
-old code had macOS / Linux divergences in argument quoting). We
-already shell out to `python3` for the cache-snapshot tool; the
-incremental cost of also driving the compile through a Python tool
-is one tool's worth of code that we mostly inherit from the existing
-snapshot script.
+The staging logic plus Tectonic's invocation plus output-file copy-back ends
+up being a few hundred lines, and embedding it in a shell snippet inside
+Starlark is a recipe for portability bugs (the old code had macOS / Linux
+divergences in argument quoting). A shared Python implementation keeps the
+compile and cache-snapshot paths consistent without depending on shell
+features or a system Python installation.
 
 The Python tools (`tools/tectonic_populate_cache.py`,
 `tools/tectonic_compile.py`) share `tools/staging.py`. They are stdlib-only
@@ -955,21 +953,29 @@ rerun policy plus a new cross-platform launcher problem. The measured benefit
 does not justify making this pipeline part of the public rule. Keep the
 ordinary single Tectonic action and use its existing action-output cache.
 
-## 5. Open questions / future work
+## 5. Decisions and future work
 
-These are deliberately out of scope for v0.1 but worth flagging.
+This section records both resolved design questions and ideas that remain
+available if concrete user demand justifies them.
 
-1. **Tectonic v2 workspace mode.** Tectonic v2 introduced a project format
-   with `Tectonic.toml`. Worth supporting eventually, but the simpler
-   `-X compile <main.tex>` invocation is enough for v0.1. Tracked in
+1. **Tectonic v2 workspace mode. Not planned.** The rules already use
+   Tectonic's v2 `-X compile` CLI. `Tectonic.toml` assumes one document and
+   configures document-level bundles, extra search paths, and output formats;
+   it does not replace Bazel's declared inputs, outputs, toolchains, or
+   per-target attributes. Reconsider only if a concrete compatibility need
+   cannot be represented by `latex_document`. Tracked in
    [GitHub issue #3](https://github.com/nicklambourne/rules_latex/issues/3).
-2. **`bibtex` / `makeindex` toolchain attrs.** Tectonic vendors these
-   internally, but advanced workflows may want to swap them. Add as
-   optional fields on `latex_toolchain` later if there's demand. Biber
-   is already done (§4.9). Tracked in
+2. **`bibtex` / `makeindex` toolchain attrs. Not planned.** Tectonic's
+   integrated implementations cover current users. Adding platform-specific
+   binaries and public toolchain fields without a failing real-world document
+   would create maintenance surface without a demonstrated benefit. Biber is
+   external and therefore remains a separate case (§4.9). Tracked in
    [GitHub issue #4](https://github.com/nicklambourne/rules_latex/issues/4).
-3. **`latex_lint`.** Wraps `chktex` / `lacheck`. Could ship as an optional
-   toolchain. Tracked in
+3. **`latex_lint`. Not planned.** Wrapping `chktex` or `lacheck` would add
+   another cross-platform binary toolchain plus user-facing configuration,
+   while their value and signal-to-noise ratio depend heavily on the document.
+   Consumers can run their preferred linter in a separate Bazel target.
+   Tracked in
    [GitHub issue #5](https://github.com/nicklambourne/rules_latex/issues/5).
 4. **Bundle updates.** The pinned bundle is now a self-hosted
    `texlive2026.ttb` (TeX Live 2026), since upstream stopped cutting
@@ -991,15 +997,14 @@ These are deliberately out of scope for v0.1 but worth flagging.
    `latex_live` exposes a `POST /sync/forward` endpoint that
    maps `(file, line)` → first matching SyncTeX box → broadcasts a
    `{"type": "jump", "page": N, "x": X, "y": Y, "w": W, "h": H}`
-   event over the existing SSE channel. The browser scrolls the
+   event over the active WebSocket and SSE transports. The browser scrolls the
    page into view and flashes a yellow highlight overlay at the
    box for ~1.5s. Implementation followed the design sketch
    above; no new comms primitives needed. See
    [docs/site/getting-started/live-preview.md](https://github.com/nicklambourne/rules_latex/blob/master/docs/site/getting-started/live-preview.md#synctex-forward-sync)
    for editor-integration examples (Neovim / VS Code / Emacs).
    Tracked in
-   [GitHub issue #8](https://github.com/nicklambourne/rules_latex/issues/8)
-   — to close when the issue is updated.
+   [GitHub issue #8](https://github.com/nicklambourne/rules_latex/issues/8).
 7. **WebSocket push transport for live-reload. SHIPPED.**
    Originally deferred (the section below is the original
    rationale, preserved for context). What changed: even with
@@ -1009,9 +1014,9 @@ These are deliberately out of scope for v0.1 but worth flagging.
    push the manifest plus the missing chunk bytes in a single
    duplex burst, saving both round-trips on the hot path. We
    hand-rolled the RFC 6455 slice we needed in
-   [`tools/ws_server.py`](tools/ws_server.py) (~430 LOC incl.
-   docstrings, stdlib-only — see issue #2) to avoid the
-   third-party-dep cost; the implementation skips
+   [`tools/ws_server.py`](tools/ws_server.py) (~430 LOC including
+   docstrings, running under the pinned Python 3.13 toolchain) to avoid a
+   third-party runtime package; the implementation skips
    `permessage-deflate` (chunks are already FlateDecode'd) and
    subprotocols. SSE remains at `/events` as a transparent
    fallback for clients that can't upgrade (proxies that don't
@@ -1019,8 +1024,7 @@ These are deliberately out of scope for v0.1 but worth flagging.
    etc.). User-facing docs:
    [docs/site/getting-started/live-preview.md#websocket-push-transport](docs/site/getting-started/live-preview.md#websocket-push-transport).
    Tracked in
-   [GitHub issue #9](https://github.com/nicklambourne/rules_latex/issues/9)
-   — to close when the issue is updated.
+   [GitHub issue #9](https://github.com/nicklambourne/rules_latex/issues/9).
 
    *Original (now-superseded) deferral rationale, kept for the
    audit trail:* `latex_live` originally used Server-Sent
@@ -1073,15 +1077,14 @@ These are deliberately out of scope for v0.1 but worth flagging.
     both the minimum and a newer `rules_python` module version. Tracked in
     [GitHub issue #2](https://github.com/nicklambourne/rules_latex/issues/2).
 
-12. **Automatic transitive CTAN dep resolution.** As of v0.4
-    (`ctan_packages`), users list each post-2022 CTAN package
-    explicitly. When a package transitively requires *another*
-    post-2022 package the populate step fails with a targeted
-    hint; the user adds the missing name and rebuilds. Iterate.
+12. **Automatic transitive CTAN dep resolution. Shipped in v0.4.2.** Before
+    the resolver, users had to list every package absent from the then-current
+    bundle explicitly. If a fetched package required another missing package,
+    the populate step failed with a targeted hint and the user iterated.
 
-    For most documents this terminates in zero or one round-trips —
-    the 2022 bundle covers ~95% of TeX Live, so a fetched package's
-    deps almost always resolve from the bundle. But for some
+    For most documents this terminates in zero or one round-trips because the
+    pinned bundle covers most of TeX Live, so a fetched package's deps almost
+    always resolve from the bundle. But for some
     package families (active biblatex citation styles, recent
     `tcolorbox` releases, multi-package contribs) the closure
     chains 2-3 levels deep, and the iterative "rebuild, read hint,
@@ -1163,12 +1166,11 @@ These are deliberately out of scope for v0.1 but worth flagging.
     actual source of files for those compiles. The `-Z search-path`
     plumbing fixes that.
 
-    Manifest source: generated from TeX Live 2022's `tlpdb` once
-    (one-shot Python tool), committed at
-    `latex/toolchain/bundle_manifest.txt`. Refresh procedure when
-    the bundle bumps (open question #4): re-run the generator
-    against the new TL release, commit. The file is a sorted list
-    of package names and `.sty`/`.cls` basenames (~80 KB).
+    The committed `latex/toolchain/bundle_manifest.txt` is generated from the
+    self-hosted TeX Live 2026 bundle's `.ttb.index.gz` with
+    `tools/extract_bundle_manifest.py`. Whenever `DEFAULT_BUNDLE` changes,
+    regenerate and commit the manifest with the new index. The file is a
+    sorted list of package names and `.sty`/`.cls` basenames (~80 KB).
 
     **Why not strategy D (iterative compile-fail-fetch).**
     Serialised compiles. A 3-level chain pays 3 × 30-90s = up to
@@ -1214,10 +1216,10 @@ These are deliberately out of scope for v0.1 but worth flagging.
     HEAD-probe filtering, the proactive dep summary, the
     `RULES_LATEX_CTAN_MIRROR` env override, retry+backoff, and the
     CI fixture server all live in `tools/tectonic_populate_cache.py`
-    + `tools/tectonic_compile.py` + the rule plumbing. The modern
-    biblatex/biber opt-in (item #8 above) closed the last open
-    caveat — the biblatex 3.21 / biber 2.21 overlay reaches
-    tectonic via `-Z search-path` as designed.
+    + `tools/tectonic_compile.py` + the rule plumbing. The TeX Live 2026
+    bundle (item #8 above) closed the old biblatex compatibility caveat;
+    `-Z search-path` remains the mechanism for packages explicitly fetched
+    through `ctan_packages`.
 
 13. **Live-preview page rendering performance.** **Resolved with a
     dedicated render worker deferred by measurement.**
@@ -1292,18 +1294,17 @@ These are deliberately out of scope for v0.1 but worth flagging.
 
     **Deferred:**
 
-    - **Web worker rendering (gated on measurement).** Move the
-      canvas rasterisation off the main thread — a dedicated worker
-      running PDF.js against `OffscreenCanvas`es transferred from the
-      main thread. Avoids main-thread jank during a heavy paint but
-      doesn't reduce total work, and carries real cost: a second
-      PDF.js instance, a message protocol, per-page canvas transfer,
-      and fallback paths for browsers without OffscreenCanvas
-      transfer. It's also the piece most in need of a browser-test
-      harness (§5 #11) — invisible to `node --test`. With lazy paint +
-      page reuse + the mitigations above already shipped, pursue this
-      only if `__serveWebRenderStats` shows real single-page jank on
-      representative documents.
+    - **Dedicated OffscreenCanvas worker (measured and not retained).** A
+      full prototype moved rasterisation to a second PDF.js instance in a web
+      worker and transferred `OffscreenCanvas` results back to the page. After
+      the shipped lifecycle and memory changes, the representative 50-page
+      fixture retained only two canvas backings (about 35 MB at 2× DPR, down
+      from 50 / about 872 MB), and the render and Long Task metrics did not
+      show persistent single-page raster jank. The worker did not reduce total
+      raster work and added a second PDF.js lifecycle, a message protocol,
+      canvas transfer, and browser fallback paths. That trade did not justify
+      keeping it; reconsider only if a real document produces new evidence in
+      `window.__serveWebRenderStats`.
 
     These changes do not alter the network or correctness story. They
     reduce latency and jank as documents get longer. Tracked in
@@ -1323,11 +1324,16 @@ API freely; expect every rule to potentially change shape.
   - Computes its sha256 and a BCR-formatted `integrity = "sha256-…"` hash.
   - Publishes a GitHub Release with the archive and BCR submission
     snippet in the release notes.
-- The Bazel Central Registry PR is opened manually (one-time per
-  release) using the snippet from the release notes.
+- After the GitHub Release exists, manually dispatch
+  `.github/workflows/publish.yml` with the release tag. The reusable
+  `bazel-contrib/publish-to-bcr` workflow reads `.bcr/`, pushes the generated
+  module files to the configured registry fork, and opens the BCR PR. The
+  release workflow contains a disabled chaining hook that can be re-enabled
+  after the automated path has proved reliable.
 
 The post-tag bits below are still manual:
 
 - Drafting `CHANGELOG.md` entries before tagging.
-- Opening the BCR PR against
+- Dispatching and monitoring the publish-to-BCR workflow and its generated PR
+  against
   [`bazelbuild/bazel-central-registry`](https://github.com/bazelbuild/bazel-central-registry).

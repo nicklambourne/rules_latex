@@ -51,8 +51,8 @@ LaTeX install. `bazel build //:cv` works on a fresh machine.
 
     `bazel run //:cv_live` stands up a localhost HTTP server with
     PDF.js rendering. Edit `cv.tex`, see the PDF update within a
-    second. Click anywhere in the PDF to jump to the corresponding
-    source line via SyncTeX.
+    second. Click anywhere in the PDF to copy the corresponding source
+    location; editors can also send a source location to the preview.
 
     [:octicons-arrow-right-24: Live preview](getting-started/live-preview.md)
 
@@ -100,8 +100,8 @@ See the [Design rationale](about/design.md) for the full story.
 |---|---|
 | Core rules (`document`, `library`, `pkg`, `test`) | Stable since v0.1.0 |
 | Toolchain (`tectonic`, `bundle`, `biber`) | Stable since v0.2.0 |
-| Live preview (`serve_web`) | Stable since v0.2.0 (system-viewer `serve` removed in v0.6.0) |
-| SyncTeX reverse-sync | Stable since v0.2.0 |
+| Live preview (`latex_live`) | Stable since v0.2.0 (system-viewer `latex_serve` removed in v0.6.0) |
+| SyncTeX reverse lookup (PDF → copied source location) | Stable since v0.2.0 |
 | Implicit cache pipeline | Stable since v0.2.0 |
 | Self-hosted PDF.js | Stable since v0.2.0 |
 | `ctan_packages` (auto-resolved transitive closure) | Stable since v0.4.2 |
@@ -110,5 +110,11 @@ See the [Design rationale](about/design.md) for the full story.
 | WebSocket push transport for live preview | Stable since v0.5.0 |
 | In-doc search, outline sidebar, build-log drawer, theme toggle | Stable since v0.5.0 |
 | Linux arm64 biber | Vendored (prebuilt biber 2.21) since v0.6.0 |
+| Fast-path live rebuilds (`serve_fast`) | Stable since v0.6.1 |
+| Long-document preview performance | Stable on `master` ([#50][issue-50]) |
+| Hermetic private Python 3.13 toolchain | Stable on `master` |
+| Bazel Central Registry publication | [v0.6.1 available in the BCR][bcr-module] |
 
 [issue-10]: https://github.com/nicklambourne/rules_latex/issues/10
+[issue-50]: https://github.com/nicklambourne/rules_latex/issues/50
+[bcr-module]: https://registry.bazel.build/modules/rules_latex/
