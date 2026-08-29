@@ -123,12 +123,16 @@ jobs:
           # PDF.js endpoints are wired up correctly.
           bazel run //hello:hello_live > /tmp/web.log 2>&1 &
           PID=$!
-          # Give it a beat for the initial build to finish, then probe.
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-            if curl -sf http://127.0.0.1:8765/status > /dev/null; then
+          # Wait for the server to accept connections AND for the
+          # initial build to finish (build_count must be non-zero).
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8765/status \
+                | python3 -c \
+                  'import sys, json; sys.exit(0 if json.load(sys.stdin).get("build_count", 0) > 0 else 1)' \
+                2>/dev/null; then
               break
             fi
-            sleep 1
+            sleep 2
           done
 
           curl -sf http://127.0.0.1:8765/ | head -c 200 | grep -q "live preview"
