@@ -12,5 +12,6 @@ def py_unittest(name, data, extra_srcs = []):
         srcs = [name + ".py"] + extra_srcs,
         config_settings = _HERMETIC_CONFIG,
         data = data,
+        legacy_create_init = 0,
         python_version = "3.13",
     )

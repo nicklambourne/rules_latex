@@ -99,8 +99,7 @@ reload" channel:
 
 WS is hand-rolled on top of Python stdlib's `http.server`
 (`tools/ws_server.py`, ~430 LOC including docstrings). We
-specifically don't take a `websockets`-PyPI-package dependency
-because that would force adopting `rules_python` for what's a
+specifically don't take a `websockets` PyPI dependency for this
 small implementation surface. The hand-roll is the slice of
 RFC 6455 the push transport actually uses: handshake, frame
 parse/write, ping/pong, fragmentation, close. Things like

@@ -1,0 +1,12 @@
+module(name = "rules_latex_python_311_consumer")
+
+bazel_dep(name = "rules_latex", version = "0.6.1")
+bazel_dep(name = "rules_python", version = "1.9.2")
+
+local_path_override(
+    module_name = "rules_latex",
+    path = "../../..",
+)
+
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(python_version = "3.11")

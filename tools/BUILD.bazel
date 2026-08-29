@@ -71,6 +71,7 @@ py_binary(
     name = "tectonic_compile",
     srcs = ["tectonic_compile.py"],
     config_settings = _HERMETIC_CONFIG,
+    legacy_create_init = 0,
     python_version = _PYTHON_VERSION,
     deps = [":staging"],
 )
@@ -79,6 +80,7 @@ py_binary(
     name = "tectonic_populate_cache",
     srcs = ["tectonic_populate_cache.py"],
     config_settings = _HERMETIC_CONFIG,
+    legacy_create_init = 0,
     python_version = _PYTHON_VERSION,
     deps = [":staging"],
 )
@@ -87,5 +89,14 @@ py_binary(
     name = "extract_bundle_manifest",
     srcs = ["extract_bundle_manifest.py"],
     config_settings = _HERMETIC_CONFIG,
+    legacy_create_init = 0,
+    python_version = _PYTHON_VERSION,
+)
+
+py_binary(
+    name = "python_runner",
+    srcs = ["python_runner.py"],
+    config_settings = _HERMETIC_CONFIG,
+    legacy_create_init = 0,
     python_version = _PYTHON_VERSION,
 )

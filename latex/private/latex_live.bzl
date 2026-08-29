@@ -96,6 +96,8 @@ def _latex_live_impl(ctx):
     pdf_chunks_lib = ctx.file._pdf_chunks_lib
     ws_server_lib = ctx.file._ws_server_lib
     logo = ctx.file._logo
+    python_runner_info = ctx.attr._python_runner[DefaultInfo]
+    python_runner = python_runner_info.files_to_run.executable
 
     # Live-preview client assets (serve_web.js / serve_web.css and the
     # pure-logic modules they import). Extracted from serve_web.py.tpl so
@@ -270,9 +272,11 @@ if [[ -z "${{BUILD_WORKSPACE_DIRECTORY:-}}" ]]; then
 fi
 
 RUNFILES="$(pwd)"
-PYTHON="${{PYTHON:-python3}}"
-exec "$PYTHON" "$RUNFILES/{server}" "$BUILD_WORKSPACE_DIRECTORY" "$RUNFILES" "$@"
-""".format(server = server_script.short_path)
+exec "$RUNFILES/{runner}" "$RUNFILES/{server}" "$BUILD_WORKSPACE_DIRECTORY" "$RUNFILES" "$@"
+""".format(
+        runner = python_runner.short_path,
+        server = server_script.short_path,
+    )
     ctx.actions.write(launcher, launcher_content, is_executable = True)
 
     runfiles = ctx.runfiles(
@@ -286,7 +290,7 @@ exec "$PYTHON" "$RUNFILES/{server}" "$BUILD_WORKSPACE_DIRECTORY" "$RUNFILES" "$@
                 logo,
             ] + serve_web_assets + serve_cache_runfiles + serve_fast_runfiles
         ),
-    )
+    ).merge(python_runner_info.default_runfiles)
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
 
 latex_live = rule(
@@ -365,6 +369,11 @@ latex_live = rule(
         "_server_template": attr.label(
             default = "//latex/private:serve_web.py.tpl",
             allow_single_file = True,
+        ),
+        "_python_runner": attr.label(
+            default = "//tools:python_runner",
+            executable = True,
+            cfg = "target",
         ),
         "_compile_tool": attr.label(
             default = "//tools:tectonic_compile.py",

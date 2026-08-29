@@ -68,6 +68,8 @@ def _latex_cache_snapshot_impl(ctx):
             )
         biber_file = toolchain.biber
 
+    tool_info = ctx.attr._tool[DefaultInfo]
+    tool = tool_info.files_to_run.executable
     launcher = ctx.actions.declare_file(ctx.label.name + ".sh")
 
     src_args = " \\\n        ".join([
@@ -110,9 +112,7 @@ fi
 # Bazel sets cwd to the runfiles root for `bazel run`. All file paths
 # below are short_path values, which are relative to that root, so
 # they resolve correctly without any chdir.
-PYTHON="${{PYTHON:-python3}}"
-
-exec "$PYTHON" "{tool}" \\
+exec "{tool}" \\
     --tectonic "{tectonic}" \\
     --main "{main}" \\
     {src_args} \\
@@ -126,7 +126,7 @@ exec "$PYTHON" "{tool}" \\
 """.format(
         pkg = ctx.label.package,
         name = ctx.label.name,
-        tool = ctx.file._tool.short_path,
+        tool = tool.short_path,
         tectonic = tectonic.short_path,
         main = main.short_path,
         src_args = src_args,
@@ -143,12 +143,12 @@ exec "$PYTHON" "{tool}" \\
     )
     ctx.actions.write(launcher, script, is_executable = True)
 
-    runfiles_files = [tectonic, ctx.file._tool, ctx.file._staging_lib] + all_srcs
+    runfiles_files = [tectonic] + all_srcs
     if biber_file:
         runfiles_files.append(biber_file)
     if ctx.attr.ctan_packages:
         runfiles_files.append(ctx.file._bundle_manifest)
-    runfiles = ctx.runfiles(files = runfiles_files)
+    runfiles = ctx.runfiles(files = runfiles_files).merge(tool_info.default_runfiles)
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
 
 def _resolved_pkg_files(ctx):
@@ -221,12 +221,9 @@ latex_cache_snapshot = rule(
             allow_files = True,
         ),
         "_tool": attr.label(
-            default = "//tools:tectonic_populate_cache.py",
-            allow_single_file = True,
-        ),
-        "_staging_lib": attr.label(
-            default = "//tools:staging.py",
-            allow_single_file = True,
+            default = "//tools:tectonic_populate_cache",
+            executable = True,
+            cfg = "target",
         ),
         "_bundle_manifest": attr.label(
             default = "//latex/toolchain:bundle_manifest.txt",

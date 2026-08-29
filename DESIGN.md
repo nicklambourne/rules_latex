@@ -320,8 +320,9 @@ inotify/FSEvents for change detection rather than re-stating every file)
 and the always-resident Bazel server. For a small document built against
 a checked-in cache snapshot, the steady-state rebuild latency in the
 example workspace is in the 200–400 ms range — well within "feels live".
-The watcher itself is pure-stdlib Python so consumers don't need
-`rules_python` or `watchdog`.
+The watcher itself is pure-stdlib Python, executed with rules_latex's pinned
+Python 3.13 toolchain. Consumers inherit the `rules_python` module dependency
+but do not need to configure Python for rules_latex or install `watchdog`.
 
 #### 4.7.1 Serve-time persistent cache (implicit-pipeline only)
 
@@ -393,16 +394,15 @@ A handful of further hot-path optimisations apply to *every*
   Saves ~5-50 ms per `stage_sources` call.
 
 * **Direct `ctx.actions.run`**. The `TectonicCompile` and
-  `TectonicPopulateCache` actions invoke `/usr/bin/env python3`
-  directly rather than going through `/bin/sh -c "exec python3 ..."`.
-  The shell wrapper is retained only for the
-  `biber_strategy = "system"` escape hatch, which needs in-process
-  `PATH` propagation. Saves ~5-15 ms per action.
+  `TectonicPopulateCache` actions invoke pinned `rules_python`
+  executables directly. The `biber_strategy = "system"` escape hatch
+  inherits the host `PATH` for biber lookup, but Python itself remains
+  hermetic. Saves ~5-15 ms per action.
 
 * **Persistent worker for `TectonicCompile`**. The compile action
   declares `supports-workers = "1"` and uses Bazel's JSON worker
   protocol (`requires-worker-protocol = "json"`). A single
-  `python3 tools/tectonic_compile.py --persistent_worker` process
+  pinned `tools/tectonic_compile` process
   is kept alive across actions; each compile is dispatched as a
   `WorkRequest` over stdin. Eliminates the ~80-150 ms CPython
   cold-start cost on every warm rebuild after the first.
@@ -410,9 +410,8 @@ A handful of further hot-path optimisations apply to *every*
   The worker is opt-in per-action — Bazel falls back to the
   fresh-process path under
   `--strategy=TectonicCompile=local,sandboxed`. We chose JSON over
-  protobuf for the worker protocol to keep the stdlib-only
-  invariant; protobuf would require a `rules_python` dep that this
-  rule set deliberately avoids.
+  protobuf for the worker protocol to keep the runtime dependency set
+  stdlib-only; protobuf would add a third-party Python package.
 
   One subtle interaction: tectonic's progress notes (e.g.
   `note: Running TeX ...`) are written to stdout by default. In
@@ -890,11 +889,10 @@ is one tool's worth of code that we mostly inherit from the existing
 snapshot script.
 
 The Python tools (`tools/tectonic_populate_cache.py`,
-`tools/tectonic_compile.py`) share `tools/staging.py`. None of them
-take a `rules_python` dependency; they're invoked via
-`python3 <tool>` from a shell wrapper, matching the
-"stdlib-only Python as a system utility" pattern used elsewhere in
-the repo (see tracking issue #2).
+`tools/tectonic_compile.py`) share `tools/staging.py`. They are stdlib-only
+`py_binary` targets pinned to Python 3.13 through `rules_python`. The explicit
+target version prevents a consumer's Python default from changing build-tool
+behaviour; the script bootstrap also avoids a preliminary system-Python lookup.
 
 #### Trade-off vs `bazel_latex`
 
@@ -1028,7 +1026,7 @@ These are deliberately out of scope for v0.1 but worth flagging.
    audit trail:* `latex_live` originally used Server-Sent
    Events only. The cost of WebSockets was non-trivial (~100-200
    LOC of security-relevant Python for RFC 6455 framing, or a
-   third-party dep + `rules_python`) and the only duplex feature
+   third-party Python package) and the only duplex feature
    on the early roadmap (SyncTeX forward-sync) was solvable with
    a `POST /sync/forward` endpoint over the existing SSE channel.
    The threshold for moving was "we'd actually save round-trips
@@ -1067,48 +1065,13 @@ These are deliberately out of scope for v0.1 but worth flagging.
     and fails on drift, prompting the developer to bump the
     constant alongside the output-set change. Tracked in
     [GitHub issue #11](https://github.com/nicklambourne/rules_latex/issues/11).
-11. **Python toolchain hermeticity (sh_test vs rules_python).**
-    Tests use system `python3` via `sh_test` rather than `py_test`
-    + `rules_python`, matching how the runtime tooling is invoked.
-    Honest trade-off documented in
-    [GitHub issue #2](https://github.com/nicklambourne/rules_latex/issues/2)
-    along with the triggers that would justify revisiting.
-
-    **Triggers accumulating in favour of revisiting:**
-
-    - *Frontend (JS / CSS) coverage gap.* **Being addressed.** The
-      UI overhaul series (UI PRs 1–7) shipped ~1500 lines of
-      browser-side code with no automated tests, because the JS
-      lived inline in `serve_web.py.tpl` (nothing importable) and a
-      harness seemed to require either a Bazel-managed Node toolchain
-      (`rules_nodejs`) or Playwright-via-Python (`rules_python`).
-      Resolved without either: the client JS/CSS is now extracted
-      into ES modules under `latex/private/` (`serve_web.js`,
-      `serve_web_synctex.js`, `serve_web.css`), served at `/_assets/`
-      and inlined nowhere, and pure-logic modules are unit-tested
-      under `tests/js/` with node's built-in runner (`node --test`)
-      wrapped in an `sh_test` — exactly mirroring how the Python
-      tests run on the system `python3`, with no npm deps, no
-      `node_modules`, and no Bazel JS ruleset. Coverage so far: the
-      SyncTeX coordinate math, the lazy-paint render state machine +
-      observer decision (`serve_web_render.js`), and the
-      ChunkedTransport byte-range planner (`serve_web_chunks.js`). The
-      Python-side `BuildState` tests under
-      `tests/py/test_build_state_*.py` still cover the server
-      contract; DOM/PDF.js-coupled client code is exercised by the
-      live-preview smoke test in CI.
-
-    - *`OffscreenCanvas` rendering* (issue #50) would push the
-      JS surface area further — render workers, message-passing
-      protocols, fallback paths. Hard to ship without browser
-      tests without burning a lot of debugging time on UI bugs
-      that a `expect(canvas).toRenderPage(3)` check would have
-      caught.
-
-    None of these have flipped the decision yet (the
-    stdlib-only convention is still load-bearing for the
-    "single-binary, content-addressed serve script" story in
-    §4.7), but each one is recorded so the threshold is visible.
+11. **Python toolchain hermeticity.** **Shipped after v0.6.1.** Private tools,
+    generated live-preview servers, and Python tests run with a pinned Python
+    3.13 toolchain from `rules_python`; no action or launcher searches for a
+    system `python3`. The scripts remain stdlib-only. Consumer fixtures verify
+    coexistence with consumer-owned Python 3.11 and 3.14 toolchains and with
+    both the minimum and a newer `rules_python` module version. Tracked in
+    [GitHub issue #2](https://github.com/nicklambourne/rules_latex/issues/2).
 
 12. **Automatic transitive CTAN dep resolution.** As of v0.4
     (`ctan_packages`), users list each post-2022 CTAN package
