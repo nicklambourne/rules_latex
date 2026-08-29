@@ -9,6 +9,7 @@
 import * as pdfjsLib from "/_pdfjs/pdf.mjs";
 import { pdfBoxToViewportRect } from "./serve_web_synctex.js";
 import {
+  newRenderGeneration,
   paintPage as paintPageImpl,
   renderObserverAction,
   planPageReconciliation,
@@ -39,6 +40,62 @@ const downloadLink = document.getElementById("download-pdf");
 let currentDoc = null;
 let currentPageNum = 1;
 let scale = 1.5;
+
+// Document loads, live reloads, and zooms can overlap. Only the newest
+// generation may commit a page tree; the currently displayed generation
+// remains usable until that commit happens.
+const _renderGenerations = newRenderGeneration();
+let _displayGeneration = 0;
+let _activeLoadingTask = null;
+
+function _beginRenderGeneration() {
+  const generation = _renderGenerations.begin();
+  if (_activeLoadingTask) {
+    const staleTask = _activeLoadingTask;
+    _activeLoadingTask = null;
+    try {
+      Promise.resolve(staleTask.destroy()).catch(() => {});
+    } catch {
+      // A loading task may already have torn down synchronously.
+    }
+  }
+  return generation;
+}
+
+function _isDisplayGeneration(generation) {
+  return generation === _displayGeneration;
+}
+
+function _stopLiveRenderWork() {
+  if (_renderObserver) {
+    _renderObserver.disconnect();
+    _renderObserver = null;
+  }
+  if (_pageObserver) {
+    _pageObserver.disconnect();
+    _pageObserver = null;
+  }
+  for (const wrap of viewer.querySelectorAll(".page-wrap")) {
+    if (wrap._paintTimer) {
+      clearTimeout(wrap._paintTimer);
+      wrap._paintTimer = null;
+    }
+    if (wrap._renderTask) {
+      try { wrap._renderTask.cancel(); } catch { /* best-effort */ }
+    }
+  }
+}
+
+async function _destroyPdf(pdf) {
+  if (!pdf || pdf === currentDoc) return;
+  try {
+    await pdf.destroy();
+  } catch {
+    // Cleanup is best-effort. A superseded PDF must never fail the
+    // generation that replaced it.
+  }
+}
+
 // Zoom mode: "manual" (user picked a fixed scale via +/-/0),
 // "fit-width" (track viewer.clientWidth), or "fit-page" (fit
 // both dimensions). The fit modes auto-recompute on window
@@ -219,48 +276,115 @@ async function fetchManifest() {
 }
 
 async function renderDocument() {
+  const generation = _beginRenderGeneration();
   setStatus("building", "rendering…");
+  let pdf = null;
+  let loadingTask = null;
   try {
     const manifest = await fetchManifest();
-    let pdf;
+    if (!_renderGenerations.isCurrent(generation)) return;
+
     if (manifest && manifest.ranges && manifest.ranges.length > 0) {
-      // Chunked path: serve byte ranges from the content-
-      // addressed cache (with HTTP-Range fallback for
-      // skeleton bytes).
+      // Chunked path: serve byte ranges from the content-addressed cache
+      // (with HTTP-Range fallback for skeleton bytes).
       const transport = new ChunkedTransport(manifest);
-      const loadingTask = pdfjsLib.getDocument({ range: transport });
+      loadingTask = pdfjsLib.getDocument({ range: transport });
+      _activeLoadingTask = loadingTask;
       pdf = await loadingTask.promise;
       // Kick off prefetch in the background; don't await.
       prefetchChunks(manifest).catch(() => {});
     } else {
-      // Fallback: pull the whole PDF in one request. Used for
-      // documents the chunker couldn't parse, and for first-load
-      // before any manifest exists. Cache-busts via the query
-      // string so the browser fetches fresh bytes.
+      // Fallback: pull the whole PDF in one request. Cache-bust so the
+      // browser fetches fresh bytes.
       const bust = Date.now();
-      const loadingTask = pdfjsLib.getDocument(`/pdf?t=${bust}`);
+      loadingTask = pdfjsLib.getDocument(`/pdf?t=${bust}`);
+      _activeLoadingTask = loadingTask;
       pdf = await loadingTask.promise;
     }
-    currentDoc = pdf;
-    _manifestPages = manifest && manifest.pages ? manifest.pages : null;
-    _setTotalPages(pdf.numPages);
-    // Outline rendering is independent of the per-page render
-    // path; kick it off in the background so the canvas paint
-    // doesn't wait on getOutline / getDestination round-trips.
-    _renderOutline(pdf).catch((err) =>
-      console.warn("outline render failed:", err));
-    // If we're in a fit mode, recompute scale against the new
-    // document's first page before rendering — otherwise the
-    // page-count change may shift the layout out from under us.
-    if (scaleMode !== "manual") {
-      await _applyFitMode();
-    } else {
-      await renderAllPages(pdf);
+    if (_activeLoadingTask === loadingTask) _activeLoadingTask = null;
+    if (!_renderGenerations.isCurrent(generation)) {
+      await _destroyPdf(pdf);
+      return;
     }
+    await _renderLoadedDocument(
+      pdf,
+      manifest && manifest.pages ? manifest.pages : null,
+      generation,
+      true,
+    );
   } catch (err) {
+    if (_activeLoadingTask === loadingTask) _activeLoadingTask = null;
+    if (!_renderGenerations.isCurrent(generation)) {
+      await _destroyPdf(pdf);
+      return;
+    }
     setStatus("fail", `render error: ${err.message || err}`);
     console.error(err);
   }
+}
+
+async function _renderLoadedDocument(
+  pdf,
+  manifestPages,
+  generation,
+  renderOutline,
+) {
+  if (!_renderGenerations.isCurrent(generation)) {
+    await _destroyPdf(pdf);
+    return false;
+  }
+
+  currentPageNum = Math.max(1, Math.min(pdf.numPages, currentPageNum));
+  if (scaleMode !== "manual") {
+    const page = await pdf.getPage(currentPageNum);
+    if (!_renderGenerations.isCurrent(generation)) {
+      await _destroyPdf(pdf);
+      return false;
+    }
+    const base = page.getViewport({ scale: 1 });
+    const padding = 32;
+    const scrollbar = 14;
+    const availW = Math.max(100, viewer.clientWidth - padding - scrollbar);
+    if (scaleMode === "fit-width") {
+      scale = availW / base.width;
+    } else {
+      const availH = Math.max(100, viewer.clientHeight - padding);
+      scale = Math.min(availW / base.width, availH / base.height);
+    }
+    scale = Math.max(0.25, Math.min(4.0, scale));
+    _updateZoomUI();
+  }
+
+  const previousDoc = currentDoc;
+  const committed = await renderAllPages(pdf, manifestPages, generation);
+  if (!committed) {
+    await _destroyPdf(pdf);
+    return false;
+  }
+  if (previousDoc && previousDoc !== pdf) {
+    try {
+      await previousDoc.destroy();
+    } catch {
+      // The new document is already committed; stale cleanup is best-effort.
+    }
+  }
+  if (renderOutline) {
+    _renderOutline(pdf).catch((err) => {
+      if (currentDoc === pdf) console.warn("outline render failed:", err);
+    });
+  }
+  return true;
+}
+
+function _rerenderCurrentDocument() {
+  if (!currentDoc) return Promise.resolve(false);
+  const generation = _beginRenderGeneration();
+  return _renderLoadedDocument(
+    currentDoc,
+    _manifestPages,
+    generation,
+    false,
+  );
 }
 
 // Per-page reconciliation state (option B): reuse a page's already-built
@@ -272,44 +396,34 @@ let _manifestPages = null;
 let _renderedPages = null;
 let _renderedScale = null;
 
-async function renderAllPages(pdf) {
-  // Lazy paint: every page gets a dimensioned placeholder (a sized
-  // canvas + an eagerly-rendered text layer) up front, but the canvas
-  // pixels are rasterized on demand by _renderObserver as pages near
-  // the viewport — so a reload repaints only what's visible instead of
-  // every page. Text layers stay eager because Ctrl+F search
-  // (_runSearch) walks every page's text layer. See DESIGN.md §5 #13.
-  //
-  // Reload reuse (option B): when a page's content hash + geometry are
-  // unchanged since the last render (and the zoom hasn't changed), move
-  // the existing wrap over instead of rebuilding it — keeping its painted
-  // canvas and text layer rather than re-rasterizing.
+async function renderAllPages(pdf, manifestPages, generation) {
+  // Build changed page nodes while the previous document remains mounted.
+  // Reused nodes are collected by reference but are not moved until the
+  // synchronous commit below, so awaits cannot partially empty the viewer.
   const prevScroll = { top: viewer.scrollTop, left: viewer.scrollLeft };
-  const fresh = document.createElement("div");
+  const nextNodes = [];
   const dpr = window.devicePixelRatio || 1;
   const reusePlan = scale === _renderedScale
-    ? planPageReconciliation(_renderedPages, _manifestPages)
+    ? planPageReconciliation(_renderedPages, manifestPages)
     : [];
   const oldWraps = new Map();
   if (reusePlan.length) {
-    for (const w of viewer.querySelectorAll(".page-wrap")) {
-      oldWraps.set(parseInt(w.dataset.pageNumber, 10), w);
+    for (const wrap of viewer.querySelectorAll(".page-wrap")) {
+      oldWraps.set(parseInt(wrap.dataset.pageNumber, 10), wrap);
     }
   }
+
   for (let i = 1; i <= pdf.numPages; i++) {
+    if (!_renderGenerations.isCurrent(generation)) return false;
     if (reusePlan[i - 1] === "reuse" && oldWraps.has(i)) {
-      // Unchanged content at the same zoom: keep the existing wrap and
-      // whatever canvas / text-layer state it already has.
-      fresh.appendChild(oldWraps.get(i));
+      nextNodes.push(oldWraps.get(i));
       continue;
     }
+
     const page = await pdf.getPage(i);
+    if (!_renderGenerations.isCurrent(generation)) return false;
     const viewport = page.getViewport({ scale });
 
-    // Each page lives inside a .page-wrap that holds the canvas
-    // and the text-layer overlay. Wrap is sized to the viewport's
-    // CSS pixels so the text layer's absolutely-positioned spans
-    // sit exactly on top of canvas glyphs.
     const wrap = document.createElement("div");
     wrap.className = "page-wrap";
     wrap.style.width = `${viewport.width}px`;
@@ -324,56 +438,57 @@ async function renderAllPages(pdf) {
     canvas.style.width = `${viewport.width}px`;
     canvas.style.height = `${viewport.height}px`;
     canvas.dataset.pageNumber = String(i);
-    // Record the viewport at layout time (not paint time) so synctex
-    // reverse-click and forward-sync resolve coordinates even before
-    // the page's canvas has been rasterized.
     canvasViewports.set(canvas, viewport);
     if (SYNCTEX_ENABLED) {
       canvas.addEventListener("click", onCanvasClick);
     }
     wrap.appendChild(canvas);
 
-    // Text layer: enables native selection + drives Ctrl+F search.
-    // Failures here don't break the canvas — chunking-style
-    // graceful degradation.
+    // Text layers stay eager in this lifecycle change. A later stacked
+    // change makes them progressive once search can coordinate hydration.
     try {
       const textLayerEl = document.createElement("div");
       textLayerEl.className = "text-layer";
       textLayerEl.style.setProperty("--scale-factor", String(viewport.scale));
       wrap.appendChild(textLayerEl);
-      const tl = new pdfjsLib.TextLayer({
+      const textLayer = new pdfjsLib.TextLayer({
         textContentSource: page.streamTextContent(),
         container: textLayerEl,
         viewport,
       });
-      await tl.render();
+      await textLayer.render();
     } catch (err) {
       console.warn(`text layer render failed for page ${i}:`, err);
     }
-
-    fresh.appendChild(wrap);
+    if (!_renderGenerations.isCurrent(generation)) return false;
+    nextNodes.push(wrap);
   }
-  viewer.replaceChildren(fresh);
+
+  if (!_renderGenerations.isCurrent(generation)) return false;
+
+  // No awaits between stopping the old work and replacing its nodes. Moving
+  // reused nodes and installing changed nodes therefore happens in one task.
+  _stopLiveRenderWork();
+  _displayGeneration = generation;
+  viewer.replaceChildren(...nextNodes);
   viewer.scrollTo(prevScroll);
-  // Re-attach IntersectionObserver to the new page wraps so the
-  // page counter tracks scroll position.
+
+  currentDoc = pdf;
+  _manifestPages = manifestPages;
+  _renderedPages = manifestPages;
+  _renderedScale = scale;
+  _setTotalPages(pdf.numPages);
+
   _attachPageObserver();
-  // Attach the render observer, then paint the current page eagerly so
-  // the visible update lands immediately; the observer fills in the
-  // rest as they scroll into view.
-  _attachRenderObserver(pdf);
+  _attachRenderObserver(pdf, generation);
   const currentWrap = viewer.querySelector(
     `.page-wrap[data-page-number="${currentPageNum}"]`,
   );
-  if (currentWrap) paintPage(pdf, currentWrap);
-  // Re-run any active search against the freshly-rendered text
-  // layers. If no search is active this is a no-op.
+  if (currentWrap) paintPage(pdf, currentWrap, generation);
   if (_searchQuery) _runSearch();
-  // Record what this DOM was built from so the next reload can reconcile
-  // against it (and so a later zoom invalidates reuse via the scale).
-  _renderedPages = _manifestPages;
-  _renderedScale = scale;
-  await refreshStatus();
+
+  refreshStatus();
+  return true;
 }
 
 // Rasterize one page's canvas into its placeholder. Idempotent: a page
@@ -381,34 +496,46 @@ async function renderAllPages(pdf) {
 // paint and the observer can't double-render. The RenderTask is stashed
 // on the wrap so _renderObserver can cancel it if the page scrolls out
 // before its raster starts.
-function paintPage(pdf, wrap) {
-  // Delegate the idempotent state machine to serve_web_render.js; supply
-  // the PDF.js-specific raster as an injected, async renderPage closure
-  // (getPage is async, so the RenderTask isn't available synchronously).
-  return paintPageImpl(wrap, async (w) => {
-    const i = parseInt(w.dataset.pageNumber, 10);
-    const canvas = w.querySelector("canvas");
-    const page = await pdf.getPage(i);
-    const viewport = page.getViewport({ scale });
-    const dpr = window.devicePixelRatio || 1;
-    const ctx = canvas.getContext("2d");
-    const transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
-    const t0 = performance.now();
-    const task = page.render({ canvasContext: ctx, viewport, transform });
-    // Record raster duration on success (ignore cancels/failures) so the
-    // maintainer can measure real jank before weighing option 2.
-    task.promise.then(
-      () => {
-        const ms = performance.now() - t0;
-        recordRenderTiming(_renderStats, i, ms);
-        if (window.__SERVE_DEBUG__) {
-          console.debug(`page ${i} rasterized in ${ms.toFixed(1)}ms`);
-        }
-      },
-      () => {},
-    );
-    return task;
-  });
+function _cancelledRenderError() {
+  const err = new Error("render generation superseded");
+  err.name = "RenderingCancelledException";
+  return err;
+}
+
+function paintPage(pdf, wrap, generation) {
+  return paintPageImpl(
+    wrap,
+    async (currentWrap) => {
+      if (!_isDisplayGeneration(generation)) {
+        throw _cancelledRenderError();
+      }
+      const pageNum = parseInt(currentWrap.dataset.pageNumber, 10);
+      const canvas = currentWrap.querySelector("canvas");
+      const page = await pdf.getPage(pageNum);
+      if (!_isDisplayGeneration(generation)) {
+        throw _cancelledRenderError();
+      }
+      const viewport = page.getViewport({ scale });
+      const dpr = window.devicePixelRatio || 1;
+      const ctx = canvas.getContext("2d");
+      const transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
+      const startedAt = performance.now();
+      const task = page.render({ canvasContext: ctx, viewport, transform });
+      task.promise.then(
+        () => {
+          if (!_isDisplayGeneration(generation)) return;
+          const ms = performance.now() - startedAt;
+          recordRenderTiming(_renderStats, pageNum, ms);
+          if (window.__SERVE_DEBUG__) {
+            console.debug(`page ${pageNum} rasterized in ${ms.toFixed(1)}ms`);
+          }
+        },
+        () => {},
+      );
+      return task;
+    },
+    () => _isDisplayGeneration(generation),
+  );
 }
 
 let _renderObserver = null;
@@ -425,9 +552,10 @@ const RENDER_SETTLE_MS = 80;
 // short settle. A page that scrolls out before its paint timer fires has
 // the timer cleared; one that scrolls out mid-raster has its in-flight
 // RenderTask cancelled. Either way it repaints if scrolled to again.
-function _attachRenderObserver(pdf) {
+function _attachRenderObserver(pdf, generation) {
   if (_renderObserver) _renderObserver.disconnect();
   _renderObserver = new IntersectionObserver((entries) => {
+    if (!_isDisplayGeneration(generation)) return;
     for (const entry of entries) {
       const wrap = entry.target;
       const action = renderObserverAction(entry);
@@ -435,7 +563,9 @@ function _attachRenderObserver(pdf) {
         if (wrap.dataset.rendered !== "1" && !wrap._paintTimer) {
           wrap._paintTimer = setTimeout(() => {
             wrap._paintTimer = null;
-            paintPage(pdf, wrap);
+            if (_isDisplayGeneration(generation)) {
+              paintPage(pdf, wrap, generation);
+            }
           }, RENDER_SETTLE_MS);
         }
       } else {
@@ -444,7 +574,7 @@ function _attachRenderObserver(pdf) {
           wrap._paintTimer = null;
         }
         if (action === "cancel") {
-          try { wrap._renderTask.cancel(); } catch (e) { /* ignore */ }
+          try { wrap._renderTask.cancel(); } catch { /* best-effort */ }
         }
       }
     }
@@ -715,15 +845,33 @@ async function _flushWsRender() {
   _wsPendingManifest = null;
   _wsPendingHashes = new Set();
   if (!manifest) return;
+
+  const generation = _beginRenderGeneration();
   setStatus("building", "rendering…");
+  let loadingTask = null;
+  let pdf = null;
   try {
     const transport = new ChunkedTransport(manifest);
-    const loadingTask = pdfjsLib.getDocument({ range: transport });
-    const pdf = await loadingTask.promise;
-    currentDoc = pdf;
-    _manifestPages = manifest.pages || null;
-    await renderAllPages(pdf);
+    loadingTask = pdfjsLib.getDocument({ range: transport });
+    _activeLoadingTask = loadingTask;
+    pdf = await loadingTask.promise;
+    if (_activeLoadingTask === loadingTask) _activeLoadingTask = null;
+    if (!_renderGenerations.isCurrent(generation)) {
+      await _destroyPdf(pdf);
+      return;
+    }
+    await _renderLoadedDocument(
+      pdf,
+      manifest.pages || null,
+      generation,
+      true,
+    );
   } catch (err) {
+    if (_activeLoadingTask === loadingTask) _activeLoadingTask = null;
+    if (!_renderGenerations.isCurrent(generation)) {
+      await _destroyPdf(pdf);
+      return;
+    }
     setStatus("fail", `render error: ${err.message || err}`);
     console.error(err);
   }
@@ -1019,19 +1167,27 @@ const sidebarToggleBtn = document.getElementById("sidebar-toggle");
 let _outlineEntries = [];  // flat list of {pageNum, link} for current-section tracking
 
 async function _renderOutline(pdf) {
-  _outlineEntries = [];
-  tocEl.replaceChildren();
   let outline = null;
   try {
     outline = await pdf.getOutline();
   } catch (err) {
-    console.warn("getOutline failed:", err);
+    if (currentDoc === pdf) console.warn("getOutline failed:", err);
   }
+  if (currentDoc !== pdf) return;
   if (!outline || outline.length === 0) {
+    _outlineEntries = [];
+    tocEl.replaceChildren();
     sidebar.hidden = true;
     sidebarToggleBtn.hidden = true;
     return;
   }
+
+  const entries = [];
+  const list = await _buildOutlineList(pdf, outline, entries);
+  if (currentDoc !== pdf) return;
+
+  _outlineEntries = entries;
+  tocEl.replaceChildren(list);
   sidebarToggleBtn.hidden = false;
   // Auto-show sidebar on first render that produces an outline,
   // unless the user has explicitly hidden it (persisted state).
@@ -1042,38 +1198,33 @@ async function _renderOutline(pdf) {
     userPref = null;
   }
   sidebar.hidden = userPref === "hidden";
-  tocEl.appendChild(await _buildOutlineList(pdf, outline));
   _updateCurrentOutlineEntry();
 }
 
-async function _buildOutlineList(pdf, items) {
+async function _buildOutlineList(pdf, items, entries) {
   const ol = document.createElement("ol");
   for (const item of items) {
     const li = document.createElement("li");
     const a = document.createElement("a");
     a.textContent = item.title;
     a.href = "#";
-    // Resolve destination → page number lazily on click to avoid
-    // a flurry of getDestination calls at outline render time
-    // (~one round-trip to the worker each).
-    a.addEventListener("click", async (e) => {
-      e.preventDefault();
-      const n = await _resolveDestPage(pdf, item.dest);
-      if (n) jumpToPage(n);
+    a.addEventListener("click", async (event) => {
+      event.preventDefault();
+      const pageNum = await _resolveDestPage(pdf, item.dest);
+      if (pageNum && currentDoc === pdf) jumpToPage(pageNum);
     });
-    // Pre-resolve the page number in the background so the
-    // current-section highlight can track scroll position.
-    _resolveDestPage(pdf, item.dest).then((n) => {
-      if (n) {
-        a.dataset.pageNumber = String(n);
-        _outlineEntries.push({ pageNum: n, link: a });
-        _outlineEntries.sort((x, y) => x.pageNum - y.pageNum);
-        _updateCurrentOutlineEntry();
-      }
+    // Pre-resolve page numbers without delaying the detached outline tree.
+    _resolveDestPage(pdf, item.dest).then((pageNum) => {
+      if (!pageNum || currentDoc !== pdf) return;
+      a.dataset.pageNumber = String(pageNum);
+      entries.push({ pageNum, link: a });
+      entries.sort((x, y) => x.pageNum - y.pageNum);
+      if (_outlineEntries === entries) _updateCurrentOutlineEntry();
     }).catch(() => {});
     li.appendChild(a);
     if (item.items && item.items.length) {
-      li.appendChild(await _buildOutlineList(pdf, item.items));
+      li.appendChild(await _buildOutlineList(pdf, item.items, entries));
+      if (currentDoc !== pdf) return ol;
     }
     ol.appendChild(li);
   }
@@ -1373,27 +1524,11 @@ function _setManualScale(s) {
   scaleMode = "manual";
   scale = Math.max(0.25, Math.min(4.0, s));
   _updateZoomUI();
-  if (currentDoc) renderAllPages(currentDoc);
+  _rerenderCurrentDocument();
 }
 
 async function _applyFitMode() {
-  if (!currentDoc) return;
-  const page = await currentDoc.getPage(currentPageNum);
-  const base = page.getViewport({ scale: 1 });
-  // 16 px padding on each side of #viewer, minus a bit for the
-  // scrollbar (~14 px on most platforms).
-  const padding = 32;
-  const scrollbar = 14;
-  const availW = Math.max(100, viewer.clientWidth - padding - scrollbar);
-  if (scaleMode === "fit-width") {
-    scale = availW / base.width;
-  } else if (scaleMode === "fit-page") {
-    const availH = Math.max(100, viewer.clientHeight - padding);
-    scale = Math.min(availW / base.width, availH / base.height);
-  }
-  scale = Math.max(0.25, Math.min(4.0, scale));
-  _updateZoomUI();
-  await renderAllPages(currentDoc);
+  await _rerenderCurrentDocument();
 }
 
 function _setFitMode(mode) {
