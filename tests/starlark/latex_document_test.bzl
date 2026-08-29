@@ -24,7 +24,7 @@ load("//latex:defs.bzl", "latex_document")
 # from `//latex/private/*` outside `//latex/*`. When you bump the
 # constant in action_schema.bzl, update this snapshot too — that's
 # what makes the canary test actually catch forgotten bumps.
-_EXPECTED_ACTION_SCHEMA = "v1"
+_EXPECTED_ACTION_SCHEMA = "v2"
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -298,7 +298,7 @@ serve_cache_override_dir_test = analysistest.make(
 # can't be expressed at analysis time. The empirical check lives in
 # the example workspace's `bazel build` output ("1 worker"), and the
 # wiring is small enough (two key-value pairs in
-# `execution_requirements` plus a param-file shim) that further test
+# `execution_requirements` plus a param file) that further test
 # coverage isn't warranted.
 
 # -----------------------------------------------------------------------------
@@ -400,12 +400,6 @@ def _action_schema_canary_test_impl(ctx):
         "_doc_synctex_canary.synctex.gz",
         # The implicit pipeline's intermediate cache tarball.
         "__doc_synctex_canary_implicit_cache.tar.gz",
-        # One-line shell shim the compile action wraps around
-        # python3 + tectonic_compile.py so Bazel's worker strategy
-        # has a single exec path to identify the worker by. See
-        # the `args.use_param_file(...)` block in
-        # latex_document.bzl _compile_action.
-        "__doc_synctex_canary_compile_shim.sh",
     ])
     asserts.equals(
         env,

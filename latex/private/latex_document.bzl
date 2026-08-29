@@ -116,7 +116,6 @@ def _populate_cache_action(
         srcs_depset,
         pkg_files,
         output_tarball,
-        staging_lib,
         tool,
         ctan_packages,
         bundle_manifest):
@@ -154,7 +153,7 @@ def _populate_cache_action(
 
     inputs = depset(
         direct = (
-            [main_in, tectonic, tool, staging_lib] +
+            [main_in, tectonic] +
             ([biber_file] if biber_file else []) +
             ([bundle_manifest] if ctan_packages else []) +
             [f for (f, _) in pkg_files]
@@ -170,24 +169,16 @@ def _populate_cache_action(
         # outputs.
         "RULES_LATEX_ACTION_SCHEMA": RULES_LATEX_ACTION_SCHEMA,
     }
-    if use_system_biber:
-        env["PATH"] = ""
 
-    # Skip the /bin/sh wrapper for the common (no system biber)
-    # path: it adds ~5-15 ms per action and only ever did anything
-    # for the `PATH=...` prefix that the system-biber escape hatch
-    # requires. `/usr/bin/env python3` reproduces the PATH-finding
-    # semantics of the old shell `exec python3` without spawning a
-    # shell.
+    # The system-biber escape hatch inherits PATH so the hermetic Python tool
+    # can locate the user's biber. All other execution still uses the action's
+    # explicit inputs and environment.
     if use_system_biber:
-        ctx.actions.run_shell(
-            command = (
-                "set -eu\n" +
-                'PATH="${PATH:-/usr/bin:/bin}"\n' +
-                'exec python3 "{tool}" "$@"\n'.format(tool = tool.path)
-            ),
+        ctx.actions.run(
+            executable = tool,
             arguments = [args],
             inputs = inputs,
+            tools = [tool],
             outputs = [output_tarball],
             mnemonic = "TectonicPopulateCache",
             progress_message = "Populating tectonic cache for %{label}",
@@ -202,9 +193,10 @@ def _populate_cache_action(
         )
     else:
         ctx.actions.run(
-            executable = "/usr/bin/env",
-            arguments = ["python3", tool.path, args],
+            executable = tool,
+            arguments = [args],
             inputs = inputs,
+            tools = [tool],
             outputs = [output_tarball],
             mnemonic = "TectonicPopulateCache",
             progress_message = "Populating tectonic cache for %{label}",
@@ -229,7 +221,6 @@ def _compile_action(
         output,
         synctex_output,
         outfmt,
-        staging_lib,
         tool):
     """Schedule the TectonicCompile action.
 
@@ -299,7 +290,7 @@ def _compile_action(
     if biber_file:
         args.add("--biber", biber_file.path)
 
-    direct_inputs = [main_in, tectonic, tool, staging_lib]
+    direct_inputs = [main_in, tectonic]
     if offline_source != None:
         direct_inputs.append(offline_source)
     if biber_file:
@@ -324,17 +315,13 @@ def _compile_action(
         "RULES_LATEX_ACTION_SCHEMA": RULES_LATEX_ACTION_SCHEMA,
     }
 
-    # See `_populate_cache_action` for the rationale: shell wrapper
-    # only for `use_system_biber`, direct `ctx.actions.run` otherwise.
+    # See `_populate_cache_action` for the system-biber PATH exception.
     if use_system_biber:
-        ctx.actions.run_shell(
-            command = (
-                "set -eu\n" +
-                'PATH="${PATH:-/usr/bin:/bin}"\n' +
-                'exec python3 "{tool}" "$@"\n'.format(tool = tool.path)
-            ),
+        ctx.actions.run(
+            executable = tool,
             arguments = [args],
             inputs = inputs,
+            tools = [tool],
             outputs = outputs,
             mnemonic = "TectonicCompile",
             progress_message = "Compiling LaTeX %{label}",
@@ -348,7 +335,7 @@ def _compile_action(
             use_default_shell_env = True,
         )
     else:
-        # Persistent-worker support: Bazel will keep a python3
+        # Persistent-worker support: Bazel will keep the hermetic Python
         # process alive across actions, eliminating ~80-150 ms
         # CPython cold-start per warm rebuild. The worker is
         # opt-in per-action via `supports-workers`; users can
@@ -364,30 +351,19 @@ def _compile_action(
         #   ``--persistent_worker`` (and the leading param-file
         #   token from the bootstrap argv, which the script
         #   tolerates by inlining it before parsing).
-        # * The executable is a tiny per-target shell shim that
-        #   ``exec``s ``python3 <tool>`` — equivalent to
-        #   ``/usr/bin/env python3 <tool>`` but presents a single
-        #   executable to Bazel, which the worker strategy
-        #   requires (it identifies the worker by exec path).
+        # * The executable is the rules_python launcher, which gives Bazel a
+        #   stable exec path for worker identity and launches the pinned
+        #   interpreter without consulting PATH.
         # * ``requires-worker-protocol = "json"`` selects the
         #   stdlib-friendly JSON flavour of the protocol; the
         #   protobuf flavour would require an external dep.
         args.use_param_file("@%s", use_always = True)
         args.set_param_file_format("multiline")
-        shim = ctx.actions.declare_file(
-            "_{}_compile_shim.sh".format(ctx.label.name),
-        )
-        ctx.actions.write(
-            shim,
-            "#!/bin/sh\nexec python3 \"{tool}\" \"$@\"\n".format(
-                tool = tool.path,
-            ),
-            is_executable = True,
-        )
         ctx.actions.run(
-            executable = shim,
+            executable = tool,
             arguments = [args],
-            inputs = depset(direct = [shim], transitive = [inputs]),
+            inputs = inputs,
+            tools = [tool],
             outputs = outputs,
             mnemonic = "TectonicCompile",
             progress_message = "Compiling LaTeX %{label}",
@@ -443,8 +419,9 @@ def _latex_document_impl(ctx):
                 .format(ctx.label),
         )
 
-    populate_tool = ctx.file._populate_cache_tool
-    compile_tool = ctx.file._compile_tool
+    populate_tool = ctx.attr._populate_cache_tool[DefaultInfo].files_to_run
+    compile_tool = ctx.attr._compile_tool[DefaultInfo].files_to_run
+    populate_src = ctx.file._populate_cache_src
     staging_lib = ctx.file._staging_lib
     bundle_manifest = ctx.file._bundle_manifest
 
@@ -493,7 +470,6 @@ def _latex_document_impl(ctx):
             srcs_depset = all_srcs,
             pkg_files = pkg_files,
             output_tarball = offline_source,
-            staging_lib = staging_lib,
             tool = populate_tool,
             ctan_packages = ctan_packages,
             bundle_manifest = bundle_manifest,
@@ -513,7 +489,6 @@ def _latex_document_impl(ctx):
         output = output,
         synctex_output = synctex_output,
         outfmt = outfmt,
-        staging_lib = staging_lib,
         tool = compile_tool,
     )
 
@@ -549,7 +524,7 @@ def _latex_document_impl(ctx):
             biber = biber_file,
             use_system_biber = use_system_biber,
             pkg_files = pkg_files,
-            populate_tool = populate_tool,
+            populate_tool = populate_src,
             staging_lib = staging_lib,
         ),
     ]
@@ -662,11 +637,17 @@ latex_document = rule(
                   "sparingly; prefer rule-level attributes when possible.",
         ),
         "_populate_cache_tool": attr.label(
-            default = "//tools:tectonic_populate_cache.py",
-            allow_single_file = True,
+            default = "//tools:tectonic_populate_cache",
+            executable = True,
+            cfg = "exec",
         ),
         "_compile_tool": attr.label(
-            default = "//tools:tectonic_compile.py",
+            default = "//tools:tectonic_compile",
+            executable = True,
+            cfg = "exec",
+        ),
+        "_populate_cache_src": attr.label(
+            default = "//tools:tectonic_populate_cache.py",
             allow_single_file = True,
         ),
         "_staging_lib": attr.label(
