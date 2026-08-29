@@ -1258,16 +1258,23 @@ These are deliberately out of scope for v0.1 but worth flagging.
       Index-based, so page insertions/removals re-render the shifted
       tail.
 
+    - **Viewport-bounded canvas memory.** Page placeholders keep only
+      CSS dimensions; their intrinsic HiDPI backing stores are allocated
+      when the render observer admits them and reset to zero once they
+      leave its retention margin. Layout and SyncTeX coordinate mapping
+      use the stored PDF.js viewport, so neither depends on a retained
+      bitmap. This bounds canvas memory to the visible/nearby working set
+      even after scrolling through a long document.
+
     - **Cheap jank mitigations + measurement.** `content-visibility:
       auto` on `.page-wrap` lets the browser skip paint/compositing of
       off-screen pages; the render observer defers a page's raster
       until scrolling settles (`RENDER_SETTLE_MS`) so a fast fling
       doesn't start-then-cancel a render for every page flung past.
-      And `recordRenderTiming` keeps a rolling per-page raster-cost
-      aggregate on `window.__serveWebRenderStats` — the data needed to
-      decide whether off-main-thread rendering is worth its cost, now
-      that lazy paint + page reuse already minimise how much
-      rasterises.
+      `window.__serveWebRenderStats.current` now scopes commit,
+      first-paint, reuse, canvas-memory, eviction, and browser Long Task
+      metrics to the latest render generation, while the existing raster
+      aggregate remains available across the session.
 
     **Still open:**
 

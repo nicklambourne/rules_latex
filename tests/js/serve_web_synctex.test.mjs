@@ -5,7 +5,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pdfBoxToViewportRect } from "../../latex/private/serve_web_synctex.js";
+import {
+  clientPointToPdfPoint,
+  pdfBoxToViewportRect,
+} from "../../latex/private/serve_web_synctex.js";
 
 // A stand-in for a PDF.js viewport. Real viewports flip the y-axis
 // (PDF points up, device space down); this models that with a known
@@ -41,4 +44,18 @@ test("a zero-size box yields a zero-size rect at the point", () => {
   assert.equal(r.height, 0);
   assert.equal(r.left, 7);
   assert.equal(r.top, 43);
+});
+
+test("maps CSS client coordinates without using canvas backing dimensions", () => {
+  const viewport = {
+    width: 200,
+    height: 400,
+    convertToPdfPoint: (x, y) => [x / 2, 400 - y],
+  };
+  const rect = { left: 10, top: 20, width: 100, height: 200 };
+  // Midpoint in the CSS rect -> midpoint in the viewport -> PDF transform.
+  assert.deepEqual(
+    clientPointToPdfPoint(viewport, rect, 60, 120),
+    [50, 200],
+  );
 });

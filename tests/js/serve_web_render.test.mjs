@@ -11,6 +11,7 @@ import {
   planPageReconciliation,
   newRenderStats,
   recordRenderTiming,
+  recordLongTask,
 } from "../../latex/private/serve_web_render.js";
 
 const PG = (hash, width = 612, height = 792) => ({ contentHash: hash, width, height });
@@ -145,9 +146,9 @@ test("renderObserverAction: off-screen mid-paint -> cancel", () => {
   assert.equal(renderObserverAction({ isIntersecting: false, target }), "cancel");
 });
 
-test("renderObserverAction: off-screen but already painted -> skip", () => {
-  const target = { dataset: { rendered: "1" }, _renderTask: { cancel() {} } };
-  assert.equal(renderObserverAction({ isIntersecting: false, target }), "skip");
+test("renderObserverAction: off-screen but already painted -> release", () => {
+  const target = { dataset: { rendered: "1" }, _renderTask: null };
+  assert.equal(renderObserverAction({ isIntersecting: false, target }), "release");
 });
 
 test("renderObserverAction: off-screen with nothing in flight -> skip", () => {
@@ -199,6 +200,8 @@ test("newRenderStats starts empty", () => {
     maxMs: 0,
     slowestPage: null,
     slowCount: 0,
+    generations: 0,
+    current: null,
   });
 });
 
@@ -213,4 +216,19 @@ test("recordRenderTiming aggregates count/avg/max and flags slow pages", () => {
   assert.equal(s.maxMs, 80);
   assert.equal(s.slowestPage, 3);
   assert.equal(s.slowCount, 1);
+});
+
+test("recordLongTask stays scoped to the active generation", () => {
+  const stats = newRenderStats();
+  recordLongTask(stats, 80);
+  stats.current = {
+    longTaskCount: 0,
+    longTaskTotalMs: 0,
+    longTaskMaxMs: 0,
+  };
+  recordLongTask(stats, 70);
+  recordLongTask(stats, 55);
+  assert.equal(stats.current.longTaskCount, 2);
+  assert.equal(stats.current.longTaskTotalMs, 125);
+  assert.equal(stats.current.longTaskMaxMs, 70);
 });

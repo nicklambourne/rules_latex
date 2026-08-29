@@ -54,13 +54,14 @@ export async function paintPage(
 }
 
 // Decide what the render observer should do for one IntersectionObserver
-// entry: "paint" a page that has come into (or near) view, "cancel" an
-// in-flight raster for a page that scrolled out before it started, or
-// "skip". Pure — the caller performs the side effects.
+// entry: paint a nearby page, cancel work that left the retention margin,
+// release a completed far-away backing store, or skip an idle placeholder.
+// Pure — the caller performs the side effects.
 export function renderObserverAction(entry) {
   if (entry.isIntersecting) return "paint";
   const wrap = entry.target;
-  if (wrap.dataset.rendered !== "1" && wrap._renderTask) return "cancel";
+  if (wrap.dataset.rendered === "1") return "release";
+  if (wrap._renderTask) return "cancel";
   return "skip";
 }
 
@@ -102,6 +103,8 @@ export function newRenderStats() {
     maxMs: 0,
     slowestPage: null,
     slowCount: 0,
+    generations: 0,
+    current: null,
   };
 }
 
@@ -117,5 +120,15 @@ export function recordRenderTiming(stats, pageNum, ms, slowMs = 50) {
     stats.slowestPage = pageNum;
   }
   if (ms > slowMs) stats.slowCount += 1;
+  return stats;
+}
+
+// Fold a PerformanceObserver long-task entry into the active generation.
+// Unsupported browsers simply never call this function.
+export function recordLongTask(stats, ms) {
+  if (!stats.current) return stats;
+  stats.current.longTaskCount += 1;
+  stats.current.longTaskTotalMs += ms;
+  stats.current.longTaskMaxMs = Math.max(stats.current.longTaskMaxMs, ms);
   return stats;
 }
