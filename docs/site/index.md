@@ -111,9 +111,9 @@ See the [Design rationale](about/design.md) for the full story.
 | In-doc search, outline sidebar, build-log drawer, theme toggle | Stable since v0.5.0 |
 | Linux arm64 biber | Vendored (prebuilt biber 2.21) since v0.6.0 |
 | Fast-path live rebuilds (`serve_fast`) | Stable since v0.6.1 |
-| Long-document preview performance | Stable on `master` ([#50][issue-50]) |
-| Hermetic private Python 3.13 toolchain | Stable on `master` |
-| Bazel Central Registry publication | [v0.6.1 available in the BCR][bcr-module] |
+| Long-document preview performance | Stable since v0.7.0 ([#50][issue-50]) |
+| Hermetic private Python 3.13 toolchain | Stable since v0.7.0 |
+| Bazel Central Registry publication | [Published releases are available in the BCR][bcr-module] |
 
 [issue-10]: https://github.com/nicklambourne/rules_latex/issues/10
 [issue-50]: https://github.com/nicklambourne/rules_latex/issues/50

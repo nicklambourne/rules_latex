@@ -6,12 +6,18 @@ Demonstrates:
   * biblatex + biber with a separate `references.bib` file.
   * Table of contents.
   * Title-page logo via a cross-package latex_pkg.
+  * Long-document browser preview with bounded page rendering.
 
 The compile is non-trivial: tectonic does multiple passes (TeX → biber
 → TeX) to resolve the ToC and citations.
 """
 
-load("@rules_latex//latex:defs.bzl", "latex_document", "latex_test")
+load(
+    "@rules_latex//latex:defs.bzl",
+    "latex_document",
+    "latex_live",
+    "latex_test",
+)
 
 latex_document(
     name = "thesis",
@@ -23,6 +29,13 @@ latex_document(
     main = "main.tex",
     visibility = ["//visibility:public"],
     deps = ["//_shared/logo"],
+)
+
+# Browser preview for a multi-page document. Only pages near the viewport keep
+# canvas backing stores, and unchanged pages are reused across rebuilds.
+latex_live(
+    name = "thesis_live",
+    document = ":thesis",
 )
 
 latex_test(

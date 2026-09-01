@@ -6,6 +6,8 @@ that, expect breaking changes in any v0.x release.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-01
+
 ### Changed
 
 - **Hermetic Python execution.** Private build tools, generated live-preview
