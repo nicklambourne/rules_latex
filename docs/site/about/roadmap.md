@@ -14,9 +14,9 @@ that the existing rules cannot support. The detailed decision record lives in
 | Self-hosted TeX Live 2026 bundle with biblatex 3.21 | Shipped in v0.6.0 | [#1][issue-1] |
 | Vendored biber 2.21 on Linux arm64 | Shipped in v0.6.0 | [#10][issue-10] |
 | Fast-path live rebuilds (`serve_fast`) | Shipped in v0.6.1 | — |
-| Bazel Central Registry publication | v0.6.1 is published; later releases use the repository's manually dispatched publish workflow | — |
-| Long-document live-preview performance | Completed on `master` after v0.6.1 | [#50][issue-50] |
-| Hermetic private Python 3.13 toolchain | Completed on `master` after v0.6.1 | [#2][issue-2] |
+| Bazel Central Registry publication | Publishing is operational; releases use the repository's manually dispatched publish workflow | — |
+| Long-document live-preview performance | Shipped in v0.7.0 | [#50][issue-50] |
+| Hermetic private Python 3.13 toolchain | Shipped in v0.7.0 | [#2][issue-2] |
 
 ## Measured or considered, then declined
 

@@ -1069,7 +1069,7 @@ available if concrete user demand justifies them.
     and fails on drift, prompting the developer to bump the
     constant alongside the output-set change. Tracked in
     [GitHub issue #11](https://github.com/nicklambourne/rules_latex/issues/11).
-11. **Python toolchain hermeticity.** **Shipped after v0.6.1.** Private tools,
+11. **Python toolchain hermeticity.** **Shipped in v0.7.0.** Private tools,
     generated live-preview servers, and Python tests run with a pinned Python
     3.13 toolchain from `rules_python`; no action or launcher searches for a
     system `python3`. The scripts remain stdlib-only. Consumer fixtures verify

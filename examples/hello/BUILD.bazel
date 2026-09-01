@@ -77,8 +77,8 @@ latex_live(
 )
 
 # Same document built with synctex output, wired into a serve target
-# so clicking in the rendered PDF jumps to the corresponding source
-# location.
+# so clicking in the rendered PDF copies the corresponding source
+# location. Editors can also send a source location to the preview.
 latex_document(
     name = "hello_synctex",
     srcs = ["hello.tex"],

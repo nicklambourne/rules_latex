@@ -45,8 +45,8 @@ glues them together.
 
 ## Release-engineering configuration
 
-The repository and registry fork are already configured, and v0.6.1 is
-[published in the BCR][bcr-module]. The working setup is:
+The repository and registry fork are already configured, and published
+releases are listed on the [BCR module page][bcr-module]. The working setup is:
 
 1. **Registry fork.** `bazelbuild/bazel-central-registry` is forked to the
    account that owns `rules_latex` (i.e. `nicklambourne`). The fork name in

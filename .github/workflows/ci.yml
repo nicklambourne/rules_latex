@@ -408,6 +408,7 @@ jobs:
                 //letter:letter \
                 //cv:cv \
                 //thesis:thesis \
+                //thesis:thesis_live \
                 //beamer:slides \
                 //shared_library/report:report \
                 //shared_library/memo:memo \
@@ -499,6 +500,27 @@ jobs:
             exit 1
           fi
           echo "OK: snapshot regeneration is byte-identical (sha256=$first_sha)"
+
+  python-consumers:
+    # These fixtures are nested modules (and intentionally excluded from the
+    # root Bazel workspace), so //tests/... cannot exercise them. Run both
+    # ends of the supported rules_python interaction once on Linux: Bazel 8 +
+    # consumer Python 3.11, and Bazel 9 + consumer Python 3.14.
+    name: rules_python consumer compatibility
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Set up Bazelisk
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-python-consumers
+          repository-cache: true
+
+      - name: Run consumer fixtures
+        run: ./tests/consumers/check.sh
 
   biber-aarch64:
     # Verify the linux/aarch64 biber binary (the only biber pinned now —

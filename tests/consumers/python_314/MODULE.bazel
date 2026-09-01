@@ -1,6 +1,6 @@
 module(name = "rules_latex_python_314_consumer")
 
-bazel_dep(name = "rules_latex", version = "0.6.1")
+bazel_dep(name = "rules_latex", version = "0.7.0")
 bazel_dep(name = "rules_python", version = "2.3.2")
 
 local_path_override(
