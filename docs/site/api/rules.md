@@ -59,8 +59,8 @@ Bazel-run target that captures a tectonic cache snapshot.
 <pre>
 load("@rules_latex//latex:defs.bzl", "latex_document")
 
-latex_document(<a href="#latex_document-name">name</a>, <a href="#latex_document-deps">deps</a>, <a href="#latex_document-srcs">srcs</a>, <a href="#latex_document-biber">biber</a>, <a href="#latex_document-biber_strategy">biber_strategy</a>, <a href="#latex_document-cache">cache</a>, <a href="#latex_document-ctan_lock">ctan_lock</a>, <a href="#latex_document-ctan_packages">ctan_packages</a>, <a href="#latex_document-main">main</a>, <a href="#latex_document-outfmt">outfmt</a>,
-               <a href="#latex_document-pkg_files">pkg_files</a>, <a href="#latex_document-reproducible">reproducible</a>, <a href="#latex_document-synctex">synctex</a>, <a href="#latex_document-tectonic_args">tectonic_args</a>)
+latex_document(<a href="#latex_document-name">name</a>, <a href="#latex_document-deps">deps</a>, <a href="#latex_document-srcs">srcs</a>, <a href="#latex_document-biber">biber</a>, <a href="#latex_document-biber_strategy">biber_strategy</a>, <a href="#latex_document-cache">cache</a>, <a href="#latex_document-ctan_lock">ctan_lock</a>, <a href="#latex_document-ctan_packages">ctan_packages</a>, <a href="#latex_document-main">main</a>,
+               <a href="#latex_document-outfmt">outfmt</a>, <a href="#latex_document-pkg_files">pkg_files</a>, <a href="#latex_document-reproducible">reproducible</a>, <a href="#latex_document-synctex">synctex</a>, <a href="#latex_document-tectonic_args">tectonic_args</a>)
 </pre>
 
 Compiles a LaTeX source tree using tectonic.
@@ -164,8 +164,8 @@ A bundle of resource files (images, bib, fonts) consumed by documents.
 <pre>
 load("@rules_latex//latex:defs.bzl", "latex_test")
 
-latex_test(<a href="#latex_test-name">name</a>, <a href="#latex_test-deps">deps</a>, <a href="#latex_test-srcs">srcs</a>, <a href="#latex_test-biber">biber</a>, <a href="#latex_test-biber_strategy">biber_strategy</a>, <a href="#latex_test-cache">cache</a>, <a href="#latex_test-ctan_lock">ctan_lock</a>, <a href="#latex_test-ctan_packages">ctan_packages</a>, <a href="#latex_test-forbidden_patterns">forbidden_patterns</a>,
-           <a href="#latex_test-forbidden_patterns_replace">forbidden_patterns_replace</a>, <a href="#latex_test-main">main</a>, <a href="#latex_test-outfmt">outfmt</a>, <a href="#latex_test-pkg_files">pkg_files</a>, <a href="#latex_test-required_patterns">required_patterns</a>)
+latex_test(<a href="#latex_test-name">name</a>, <a href="#latex_test-deps">deps</a>, <a href="#latex_test-srcs">srcs</a>, <a href="#latex_test-biber">biber</a>, <a href="#latex_test-biber_strategy">biber_strategy</a>, <a href="#latex_test-cache">cache</a>, <a href="#latex_test-ctan_lock">ctan_lock</a>, <a href="#latex_test-ctan_packages">ctan_packages</a>,
+           <a href="#latex_test-forbidden_patterns">forbidden_patterns</a>, <a href="#latex_test-forbidden_patterns_replace">forbidden_patterns_replace</a>, <a href="#latex_test-main">main</a>, <a href="#latex_test-outfmt">outfmt</a>, <a href="#latex_test-pkg_files">pkg_files</a>, <a href="#latex_test-required_patterns">required_patterns</a>)
 </pre>
 
 Compiles a LaTeX document and asserts on the resulting log.
