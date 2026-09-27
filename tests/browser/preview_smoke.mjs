@@ -144,6 +144,16 @@ try {
 } finally {
   await writeFile(sourcePath, original);
   cdp?.close();
-  chrome.kill("SIGTERM");
-  await rm(profile, { recursive: true, force: true });
+  if (chrome.exitCode === null && chrome.signalCode === null) {
+    const exited = new Promise((resolve) => chrome.once("exit", resolve));
+    chrome.kill("SIGTERM");
+    await Promise.race([exited, pause(5000)]);
+    if (chrome.exitCode === null && chrome.signalCode === null) {
+      chrome.kill("SIGKILL");
+      await exited;
+    }
+  }
+  await rm(profile, {
+    recursive: true, force: true, maxRetries: 20, retryDelay: 100,
+  });
 }
