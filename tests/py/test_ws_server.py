@@ -425,11 +425,13 @@ class ConnectionTest(unittest.TestCase):
 
             ta = threading.Thread(target=push, args=(msgs_a,))
             tb = threading.Thread(target=push, args=(msgs_b,))
+            client.settimeout(5)
             ta.start()
             tb.start()
-            ta.join(timeout=5)
-            tb.join(timeout=5)
 
+            # Drain while writers run: a bounded sender correctly
+            # closes if a peer stops reading, and Linux socketpairs
+            # can fill before all 100 small frames are queued.
             # Read 2N frames off the client side. We don't care
             # about ordering between A and B — we only care that
             # each frame is intact.
@@ -439,6 +441,10 @@ class ConnectionTest(unittest.TestCase):
                 self.assertEqual(len(header), 2)
                 length = header[1] & 0x7F
                 received.append(client.recv(length))
+
+            ta.join(timeout=5)
+            tb.join(timeout=5)
+            self.assertFalse(ta.is_alive() or tb.is_alive())
 
             received_set = set(received)
             self.assertEqual(received_set, set(msgs_a) | set(msgs_b))
