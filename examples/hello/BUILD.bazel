@@ -56,6 +56,25 @@ latex_document(
     deps = [":preamble"],
 )
 
+# The other supported single-file outputs use the same offline inputs.
+latex_document(
+    name = "hello_xdv",
+    srcs = ["hello.tex"],
+    cache = "hello_cache.tar.gz",
+    main = "hello.tex",
+    outfmt = "xdv",
+    deps = [":preamble"],
+)
+
+latex_document(
+    name = "hello_aux",
+    srcs = ["hello.tex"],
+    cache = "hello_cache.tar.gz",
+    main = "hello.tex",
+    outfmt = "aux",
+    deps = [":preamble"],
+)
+
 # Developer command: refresh the cache snapshot. Run with:
 #     bazel run //hello:hello_snapshot
 latex_cache_snapshot(
@@ -102,5 +121,14 @@ latex_test(
     srcs = ["hello.tex"],
     cache = "hello_cache.tar.gz",
     main = "hello.tex",
+    deps = [":preamble"],
+)
+
+latex_test(
+    name = "hello_xdv_compiles",
+    srcs = ["hello.tex"],
+    cache = "hello_cache.tar.gz",
+    main = "hello.tex",
+    outfmt = "xdv",
     deps = [":preamble"],
 )

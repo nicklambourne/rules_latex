@@ -55,7 +55,7 @@ load("//latex:providers.bzl", "LatexDocumentInfo", "LatexInfo")
 load("//latex/private:action_schema.bzl", "RULES_LATEX_ACTION_SCHEMA")
 load("//latex/private:bundles.bzl", "DEFAULT_BUNDLE")
 
-_OUTFMTS = ["pdf", "html", "xdv", "aux"]
+_OUTFMTS = ["pdf", "xdv", "aux", "html"]
 
 _BIBER_STRATEGIES = ["toolchain", "system"]
 
@@ -373,6 +373,10 @@ def _compile_action(
         )
 
 def _latex_document_impl(ctx):
+    if ctx.attr.outfmt == "html":
+        fail("latex_document(outfmt = 'html') is unsupported: Tectonic " +
+             "can emit multiple HTML assets, but latex_document declares " +
+             "one output file. Use pdf, xdv, or aux.")
     main = ctx.file.main
     if main not in ctx.files.srcs:
         fail("`main` ({}) must also appear in `srcs`.".format(main.short_path))
@@ -548,7 +552,8 @@ latex_document = rule(
             providers = [[LatexInfo]],
         ),
         "outfmt": attr.string(
-            doc = "Output format. Passed to `tectonic -X compile --outfmt`.",
+            doc = "Single-file output format: pdf, xdv, or aux. HTML is " +
+                  "unsupported because Tectonic can emit multiple HTML assets.",
             default = "pdf",
             values = _OUTFMTS,
         ),

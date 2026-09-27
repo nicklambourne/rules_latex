@@ -49,6 +49,12 @@ def _resolved_pkg_files(ctx):
     return out
 
 def _latex_test_impl(ctx):
+    if ctx.attr.outfmt == "html":
+        fail("latex_test(outfmt = 'html') is unsupported: Tectonic can " +
+             "emit multiple HTML assets, but latex_test expects one file.")
+    if ctx.attr.outfmt == "aux":
+        fail("latex_test(outfmt = 'aux') cannot assert on a TeX log: " +
+             "Tectonic does not produce a log for AUX output. Use pdf or xdv.")
     main = ctx.file.main
     if main not in ctx.files.srcs:
         fail("`main` ({}) must also appear in `srcs`.".format(main.short_path))
@@ -212,8 +218,8 @@ trap 'rm -rf "$WORK"' EXIT
     {pkg_file_args}
 
 LOG="$WORK/output.log"
-if [[ ! -f "$LOG" ]]; then
-    echo "FAIL: tectonic_compile.py did not produce a log file" >&2
+if [[ ! -s "$LOG" ]]; then
+    echo "FAIL: tectonic_compile.py did not produce a nonempty log file" >&2
     exit 1
 fi
 
@@ -282,9 +288,10 @@ latex_test = rule(
             providers = [[LatexInfo]],
         ),
         "outfmt": attr.string(
-            doc = "Output format. Passed to tectonic's --outfmt.",
+            doc = "Output format: pdf or xdv. AUX has no TeX log to assert on; " +
+                  "HTML is unsupported by the single-file output contract.",
             default = "pdf",
-            values = ["pdf", "html", "xdv", "aux"],
+            values = ["pdf", "xdv", "aux", "html"],
         ),
         "cache": attr.label(
             doc = "Optional cache snapshot tarball (typically produced by " +
