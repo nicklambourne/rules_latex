@@ -67,10 +67,10 @@ export function renderObserverAction(entry) {
 
 // Decide, per page, whether a reload can reuse the previous render's
 // `.page-wrap` (and its painted canvas) instead of rebuilding it
-// (option B, DESIGN.md §5 #13). Index-based: a page is reused only when
-// the same index exists in the previous manifest with an identical
-// content hash and geometry. Page insertions/removals shift indices, so
-// affected pages re-render — correct, just not optimal. Returns an array
+// (option B, DESIGN.md §5 #13). The server includes the whole PDF hash
+// in each contentHash, so even shared image/font changes invalidate
+// every page. A page is reused only when the PDF and geometry match.
+// Returns an array
 // the length of `newPages` of "reuse" | "render". Pure; the caller
 // applies the DOM moves and gates on zoom (scale) separately.
 export function planPageReconciliation(oldPages, newPages) {
