@@ -243,13 +243,7 @@ class TestStageSources(unittest.TestCase):
 
 
 class TestMaterialise(unittest.TestCase):
-    """The link-or-copy materialisation helper.
-
-    The whole point of replacing the old copy-only path is to make
-    `stage_sources` cheap on the live-preview hot path. These tests
-    pin down that links are used when possible and that the
-    fallback to copy is still correct.
-    """
+    """Staged inputs must not share writes with their sources."""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -259,66 +253,34 @@ class TestMaterialise(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp)
 
-    def test_uses_hardlink_when_possible_same_filesystem(self):
+    def test_copy_is_independent_on_same_filesystem(self):
         dest = self.tmp / "dest.tex"
         strategy = _S._materialise(self.src, dest)
-        self.assertEqual(strategy, "hardlink")
-        # Hardlinks share inode.
-        self.assertEqual(self.src.stat().st_ino, dest.stat().st_ino)
-        # Hardlinks share content.
+        self.assertEqual(strategy, "copy")
+        self.assertNotEqual(self.src.stat().st_ino, dest.stat().st_ino)
         self.assertEqual(dest.read_text(), "source content")
+        dest.write_text("compiler output")
+        self.assertEqual(self.src.read_text(), "source content")
 
-    def test_uses_absolute_path_for_link_target(self):
-        # Symlinks targeting a relative path break when the work
-        # directory's cwd differs from the caller's. We always
-        # resolve src to an absolute path before linking.
+    def test_copy_from_symlink_is_independent(self):
+        link = self.tmp / "link.tex"
+        link.symlink_to(self.src)
         dest = self.tmp / "subdir" / "dest.tex"
         dest.parent.mkdir(parents=True)
-        _S._materialise(self.src, dest)
-        # Regardless of which strategy was picked, content is right.
+        _S._materialise(link, dest)
         self.assertEqual(dest.read_text(), "source content")
+        dest.write_text("compiler output")
+        self.assertEqual(self.src.read_text(), "source content")
 
-    def test_hardlinked_dest_unlink_preserves_src(self):
-        # When the staging tmpdir is torn down, hardlinks have
-        # their link count decremented but the original file is
-        # untouched. This is the property pkg_files override
-        # cleanup relies on.
+    def test_dest_unlink_preserves_src(self):
         dest = self.tmp / "dest.tex"
         _S._materialise(self.src, dest)
         dest.unlink()
         self.assertTrue(self.src.is_file())
         self.assertEqual(self.src.read_text(), "source content")
 
-    def test_falls_back_to_copy_when_link_fails(self):
-        # Force the fallback by monkey-patching os.link and
-        # os.symlink to raise. Confirms the copy path is wired up
-        # and produces a regular file with identical content.
-        dest = self.tmp / "dest.tex"
-        orig_link = os.link
-        orig_symlink = os.symlink
-
-        def _fail(*_a, **_k):
-            raise OSError(1, "simulated link failure")
-
-        try:
-            os.link = _fail
-            os.symlink = _fail
-            strategy = _S._materialise(self.src, dest)
-        finally:
-            os.link = orig_link
-            os.symlink = orig_symlink
-
-        self.assertEqual(strategy, "copy")
-        self.assertEqual(dest.read_text(), "source content")
-        # Copy produces a distinct inode -- modifying the dest
-        # must not affect the src.
-        self.assertNotEqual(self.src.stat().st_ino, dest.stat().st_ino)
-
-
-class TestStageSourcesUsesLinks(unittest.TestCase):
-    """End-to-end check that `stage_sources` actually goes through
-    the link path on a normal POSIX filesystem (not just the
-    materialise helper in isolation)."""
+class TestStageSourcesIsolatesInputs(unittest.TestCase):
+    """A compiler-written filename cannot change a declared input."""
 
     def setUp(self):
         self.workspace = Path(tempfile.mkdtemp())
@@ -333,20 +295,19 @@ class TestStageSourcesUsesLinks(unittest.TestCase):
         shutil.rmtree(self.workspace)
         shutil.rmtree(self.work_dir)
 
-    def test_staged_main_shares_inode_with_source(self):
+    def test_staged_main_is_independent(self):
         main = Path("pkg/main.tex")
         _S.stage_sources(main, [main], [], self.work_dir)
-        src_ino = (self.workspace / "pkg" / "main.tex").stat().st_ino
-        dest_ino = (self.work_dir / "main.tex").stat().st_ino
-        # On any modern POSIX filesystem this is a hardlink.
-        # Skip rather than fail on filesystems that don't support
-        # hardlinks (we still produce a usable copy in that case).
-        if src_ino != dest_ino:
-            self.skipTest(
-                "filesystem appears not to support hardlinks; "
-                "staging fell back to copy",
-            )
-        self.assertEqual(src_ino, dest_ino)
+        (self.work_dir / "main.tex").write_text("compiler output")
+        self.assertEqual((self.workspace / main).read_text(), "body")
+
+    def test_log_input_is_not_overwritten_by_compiler(self):
+        main = Path("pkg/main.tex")
+        log = Path("pkg/main.log")
+        (self.workspace / log).write_text("original log")
+        _S.stage_sources(main, [main, log], [], self.work_dir)
+        (self.work_dir / "main.log").write_text("new compiler log")
+        self.assertEqual((self.workspace / log).read_text(), "original log")
 
 
 if __name__ == "__main__":
