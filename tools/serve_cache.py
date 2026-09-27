@@ -249,6 +249,7 @@ class PrimeSpec:
     bundle_url: str
     ctan_packages: tuple[str, ...]
     bundle_manifest: Path | None
+    ctan_lock: Path | None = None
 
 
 def prime_config_key(spec: PrimeSpec) -> str:
@@ -420,6 +421,8 @@ def run_prime(
                 if spec.bundle_manifest is None:
                     raise ValueError("CTAN priming requires a bundle manifest")
                 cmd.extend(["--bundle-manifest", str(spec.bundle_manifest)])
+            if spec.ctan_lock is not None:
+                cmd.extend(["--ctan-lock", str(spec.ctan_lock)])
 
             env = os.environ.copy()
             env["LC_ALL"] = "C.UTF-8"

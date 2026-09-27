@@ -43,6 +43,8 @@ def _collect_transitive_srcs(deps):
     return [dep[LatexInfo].srcs for dep in deps if LatexInfo in dep]
 
 def _latex_cache_snapshot_impl(ctx):
+    if ctx.file.ctan_lock and not ctx.attr.ctan_packages:
+        fail("ctan_lock requires ctan_packages on {}".format(ctx.label))
     toolchain = ctx.toolchains["//latex/toolchain:toolchain_type"].latex_toolchain_info
     tectonic = toolchain.tectonic
 
@@ -92,6 +94,9 @@ def _latex_cache_snapshot_impl(ctx):
         '--ctan-package "{}"'.format(pkg)
         for pkg in ctx.attr.ctan_packages
     ])
+
+    if ctx.file.ctan_lock:
+        ctan_args += ' --ctan-lock "{}"'.format(ctx.file.ctan_lock.short_path)
 
     # Hand the auto-resolver the bundle-resident manifest when
     # ctan_packages is non-empty, so it can filter transitive refs
@@ -149,6 +154,8 @@ exec "{tool}" \\
         runfiles_files.append(biber_file)
     if ctx.attr.ctan_packages:
         runfiles_files.append(ctx.file._bundle_manifest)
+    if ctx.file.ctan_lock:
+        runfiles_files.append(ctx.file.ctan_lock)
     runfiles = ctx.runfiles(files = runfiles_files).merge(tool_info.default_runfiles)
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
 
@@ -210,6 +217,10 @@ latex_cache_snapshot = rule(
                   "(e.g. 'fancyhdr'). Packages are downloaded from CTAN " +
                   "mirrors in TDS format during the snapshot generation.",
             default = [],
+        ),
+        "ctan_lock": attr.label(
+            doc = "Optional version-1 JSON lock of CTAN URLs and SHA-256 digests.",
+            allow_single_file = True,
         ),
         "pkg_files": attr.label_keyed_string_dict(
             doc = "Map of label-of-input -> staged-relative-path. " +

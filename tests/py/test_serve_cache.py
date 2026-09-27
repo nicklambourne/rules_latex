@@ -101,6 +101,7 @@ class TestPrimeConfiguration(unittest.TestCase):
                 bundle_url="https://example.invalid/texlive2026.ttb",
                 ctan_packages=("example",),
                 bundle_manifest=workspace / "bundle_manifest.txt",
+                ctan_lock=workspace / "ctan.lock.json",
             )
             commands = []
 
@@ -148,6 +149,9 @@ class TestPrimeConfiguration(unittest.TestCase):
             self.assertEqual(
                 cmd[cmd.index("--bundle-manifest") + 1],
                 str(spec.bundle_manifest),
+            )
+            self.assertEqual(
+                cmd[cmd.index("--ctan-lock") + 1], str(spec.ctan_lock),
             )
 
 

@@ -49,6 +49,8 @@ def _resolved_pkg_files(ctx):
     return out
 
 def _latex_test_impl(ctx):
+    if ctx.file.ctan_lock and not ctx.attr.ctan_packages:
+        fail("ctan_lock requires ctan_packages on {}".format(ctx.label))
     main = ctx.file.main
     if main not in ctx.files.srcs:
         fail("`main` ({}) must also appear in `srcs`.".format(main.short_path))
@@ -107,6 +109,8 @@ def _latex_test_impl(ctx):
     # and Bazel's action cache reuses the result. For tests this means
     # `bazel test` may need network the first time, then runs hermetic.
     cache_snapshot = ctx.file.cache
+    if ctx.file.ctan_lock and cache_snapshot:
+        fail("ctan_lock on {} has no effect with cache; set it on the snapshot rule instead".format(ctx.label))
     cache_args = ""
     if cache_snapshot:
         cache_args = '--cache-tarball "{}"'.format(cache_snapshot.short_path)
@@ -144,6 +148,8 @@ def _latex_test_impl(ctx):
     bundle_manifest_arg = (
         '--bundle-manifest "{}"'.format(ctx.file._bundle_manifest.short_path) if ctx.attr.ctan_packages else ""
     )
+    if ctx.file.ctan_lock:
+        ctan_args += ' --ctan-lock "{}"'.format(ctx.file.ctan_lock.short_path)
 
     src_args = " \\\n    ".join([
         '--src "{}"'.format(s.short_path)
@@ -252,6 +258,7 @@ exit $status
         ([cache_snapshot] if cache_snapshot else []) +
         ([biber_file] if biber_file else []) +
         ([ctx.file._bundle_manifest] if ctx.attr.ctan_packages else []) +
+        ([ctx.file.ctan_lock] if ctx.file.ctan_lock else []) +
         [f for (f, _) in pkg_files]
     )
     runfiles = ctx.runfiles(
@@ -317,6 +324,10 @@ latex_test = rule(
                   "Packages are downloaded from CTAN mirrors in TDS format during " +
                   "the test's inline cache population step.",
             default = [],
+        ),
+        "ctan_lock": attr.label(
+            doc = "Optional version-1 JSON lock of CTAN URLs and SHA-256 digests.",
+            allow_single_file = True,
         ),
         "pkg_files": attr.label_keyed_string_dict(
             doc = "Same semantics as `latex_document.pkg_files`. Override " +

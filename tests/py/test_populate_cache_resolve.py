@@ -222,6 +222,26 @@ class ResolveTransitiveClosureTest(unittest.TestCase):
         self.assertEqual(set(result), {"lipsum"})
         self.assertEqual(result["lipsum"], {"etoolbox"})
 
+    def test_locked_resolution_never_probes_or_fetches_unlocked_names(self):
+        lock = {
+            "seed": {"url": "https://example/seed.zip", "sha256": "a" * 64},
+            "known": {"url": "https://example/known.zip", "sha256": "b" * 64},
+        }
+        fetched = []
+
+        def fake_download(pkg, _dest, _lock):
+            fetched.append(pkg)
+            return {"known", "unknown"} if pkg == "seed" else set()
+
+        with patch.object(tpc, "download_ctan_package", fake_download), \
+             patch.object(tpc, "_head_probe_ctan", side_effect=AssertionError):
+            result = tpc.resolve_transitive_closure(
+                ["seed"], self.dest, bundle_manifest=set(),
+                locked_packages=lock,
+            )
+        self.assertEqual(fetched, ["seed", "known"])
+        self.assertEqual(set(result), {"seed", "known"})
+
     def test_two_level_transitive_chain(self):
         # User lists pkg_a. pkg_a references pkg_b (not in bundle,
         # CTAN-resident). pkg_b references etoolbox (bundle).

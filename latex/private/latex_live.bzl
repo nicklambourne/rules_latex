@@ -135,6 +135,7 @@ def _latex_live_impl(ctx):
     prime_bundle_url = ""
     prime_ctan_packages_lines = []
     prime_bundle_manifest_path = ""
+    prime_ctan_lock_path = ""
 
     if enable_serve_cache:
         if LatexDocumentInfo not in ctx.attr.document:
@@ -207,6 +208,9 @@ def _latex_live_impl(ctx):
             if doc_info.ctan_packages:
                 prime_bundle_manifest_path = doc_info.bundle_manifest.short_path
                 serve_cache_runfiles.append(doc_info.bundle_manifest)
+            if doc_info.ctan_lock:
+                prime_ctan_lock_path = doc_info.ctan_lock.short_path
+                serve_cache_runfiles.append(doc_info.ctan_lock)
 
     # serve_fast (opt-in, default False): when set, the watcher replays
     # the TectonicCompile action's params file directly via
@@ -265,6 +269,7 @@ def _latex_live_impl(ctx):
             "{{PRIME_BUNDLE_URL}}": prime_bundle_url,
             "{{PRIME_CTAN_PACKAGES}}": "\n".join(prime_ctan_packages_lines),
             "{{PRIME_BUNDLE_MANIFEST_RUNFILE}}": prime_bundle_manifest_path,
+            "{{PRIME_CTAN_LOCK_RUNFILE}}": prime_ctan_lock_path,
             "{{PRIME_SRCS}}": "\n".join(prime_srcs_lines),
             "{{PRIME_PKG_FILES}}": "\n".join(prime_pkg_files_lines),
             "{{SERVE_WEB_ASSETS}}": serve_web_assets_manifest,

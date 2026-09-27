@@ -16,8 +16,11 @@ real.
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import io
+import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -273,6 +276,38 @@ class DownloadAndScanFlowTest(unittest.TestCase):
             deps = tpc.download_ctan_package("lonely", self.dest)
 
         self.assertEqual(deps, set())
+
+    def test_lock_rejects_changed_archive_bytes(self):
+        fake_zip = self._make_fake_zip(
+            "locked", {"locked/locked.sty": "% locked\n"},
+        )
+        lock_path = Path(self.tmp.name) / "ctan.lock.json"
+        expected = hashlib.sha256(fake_zip.read_bytes()).hexdigest()
+        lock_path.write_text(json.dumps({
+            "version": 1,
+            "packages": {"locked": {
+                "url": "https://example.test/locked.zip",
+                "sha256": expected,
+            }},
+        }))
+        lock = tpc._load_ctan_lock(lock_path)
+
+        def copy_archive(url, archive):
+            self.assertEqual(url, "https://example.test/locked.zip")
+            shutil.copyfile(fake_zip, archive)
+
+        with patch.object(tpc.urllib.request, "urlretrieve", copy_archive):
+            self.assertEqual(
+                tpc.download_ctan_package("locked", self.dest, lock), set(),
+            )
+
+        changed = self._make_fake_zip(
+            "changed", {"locked/locked.sty": "% changed\n"},
+        )
+        with patch.object(tpc.urllib.request, "urlretrieve",
+                          lambda _url, archive: shutil.copyfile(changed, archive)):
+            with self.assertRaisesRegex(SystemExit, "SHA-256 mismatch"):
+                tpc.download_ctan_package("locked", self.dest, lock)
 
 
 if __name__ == "__main__":

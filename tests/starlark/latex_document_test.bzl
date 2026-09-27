@@ -18,6 +18,7 @@ happen.
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
 load("//latex:defs.bzl", "latex_document")
+load("//latex:providers.bzl", "LatexDocumentInfo")
 load("//latex/toolchain:toolchain.bzl", "latex_toolchain")
 
 # Mirror of `_EXPECTED_ACTION_SCHEMA` from
@@ -67,6 +68,20 @@ def _implicit_pipeline_test_impl(ctx):
     return analysistest.end(env)
 
 implicit_pipeline_test = analysistest.make(_implicit_pipeline_test_impl)
+
+def _ctan_lock_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    actions = analysistest.target_actions(env)
+    prime = [a for a in actions if a.mnemonic == "TectonicPopulateCache"]
+    asserts.equals(env, 1, len(prime))
+    if prime:
+        inputs = [f.basename for f in prime[0].inputs.to_list()]
+        asserts.true(env, "_fake_ctan_lock.json" in inputs)
+    asserts.equals(env, "_fake_ctan_lock.json", target[LatexDocumentInfo].ctan_lock.basename)
+    return analysistest.end(env)
+
+ctan_lock_test = analysistest.make(_ctan_lock_test_impl)
 
 # -----------------------------------------------------------------------------
 # Test: cache = "foo.tar.gz" -> only Compile, no PopulateCache
@@ -505,6 +520,11 @@ def latex_document_test_suite(name):
         outs = ["_fake_cache.tar.gz"],
         cmd = "echo fake > $@",
     )
+    native.genrule(
+        name = "_fake_ctan_lock",
+        outs = ["_fake_ctan_lock.json"],
+        cmd = "echo '{}' > $@",
+    )
 
     native.genrule(
         name = "_fake_bundle",
@@ -540,6 +560,14 @@ def latex_document_test_suite(name):
         main = "_test_doc.tex",
         srcs = [":_test_doc_tex"],
         cache = ":_fake_cache",
+        tags = ["manual"],
+    )
+    latex_document(
+        name = "_doc_ctan_lock",
+        main = "_test_doc.tex",
+        srcs = [":_test_doc_tex"],
+        ctan_packages = ["example"],
+        ctan_lock = ":_fake_ctan_lock",
         tags = ["manual"],
     )
 
@@ -596,6 +624,10 @@ def latex_document_test_suite(name):
         name = "checked_in_cache_test",
         target_under_test = ":_doc_with_cache",
     )
+    ctan_lock_test(
+        name = "ctan_lock_test",
+        target_under_test = ":_doc_ctan_lock",
+    )
     ttb_toolchain_bundle_test(
         name = "ttb_toolchain_bundle_test",
         target_under_test = ":_toolchain_with_ttb_bundle",
@@ -634,6 +666,7 @@ def latex_document_test_suite(name):
         tests = [
             ":implicit_pipeline_test",
             ":checked_in_cache_test",
+            ":ctan_lock_test",
             ":ttb_toolchain_bundle_test",
             ":synctex_output_test",
             ":no_synctex_test",

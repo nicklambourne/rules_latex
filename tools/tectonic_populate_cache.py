@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -184,6 +185,13 @@ def parse_args() -> argparse.Namespace:
         "mirrors.ctan.org and made available through Tectonic search paths."
     )
     parser.add_argument(
+        "--ctan-lock",
+        type=Path,
+        default=None,
+        help="JSON lock file mapping CTAN package names to URL and SHA-256. "
+             "When set, only locked packages are downloaded.",
+    )
+    parser.add_argument(
         "--bundle-manifest",
         type=Path,
         default=None,
@@ -227,7 +235,33 @@ def _parse_pkg_files(raw_entries: list[str]) -> list[PkgFile]:
     return out
 
 
-def download_ctan_package(package: str, dest_dir: Path) -> set[str]:
+def _load_ctan_lock(path: Path) -> dict[str, dict[str, str]]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"invalid CTAN lock {path}: {exc}") from exc
+    if not isinstance(data, dict) or data.get("version") != 1:
+        raise SystemExit("CTAN lock must have version: 1")
+    packages = data.get("packages")
+    if not isinstance(packages, dict):
+        raise SystemExit("CTAN lock must contain a packages object")
+    for name, entry in packages.items():
+        if not isinstance(name, str) or not isinstance(entry, dict):
+            raise SystemExit("CTAN lock has an invalid package entry")
+        url = entry.get("url")
+        digest = entry.get("sha256")
+        if not isinstance(url, str) or not url.startswith(("https://", "http://")):
+            raise SystemExit(f"CTAN lock package {name}: invalid URL")
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise SystemExit(f"CTAN lock package {name}: invalid SHA-256")
+    return packages
+
+
+def download_ctan_package(
+    package: str,
+    dest_dir: Path,
+    locked_packages: dict[str, dict[str, str]] | None = None,
+) -> set[str]:
     """Download a single CTAN package in TDS format.
 
     Tries the TDS .zip first (structured tex/latex/contrib tree),
@@ -246,6 +280,10 @@ def download_ctan_package(package: str, dest_dir: Path) -> set[str]:
         f"{CTAN_MIRROR}/macros/latex/contrib/biblatex-contrib/{package}.zip",
         f"{CTAN_MIRROR}/macros/latex/contrib/biblatex-contrib/{package}/{package}.zip",
     ]
+    if locked_packages is not None:
+        if package not in locked_packages:
+            raise SystemExit(f"CTAN package '{package}' is missing from ctan_lock")
+        urls = [locked_packages[package]["url"]]
 
     archive = dest_dir / f"{package}.zip"
 
@@ -254,6 +292,19 @@ def download_ctan_package(package: str, dest_dir: Path) -> set[str]:
         try:
             print(f"Downloading CTAN package {package} from {url}...", file=sys.stderr)
             _retry_urlretrieve(url, archive)
+            if locked_packages is not None:
+                digest = hashlib.sha256()
+                with archive.open("rb") as input_file:
+                    for chunk in iter(lambda: input_file.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                actual = digest.hexdigest()
+                expected = locked_packages[package]["sha256"]
+                if actual != expected:
+                    archive.unlink(missing_ok=True)
+                    raise SystemExit(
+                        f"CTAN package '{package}' SHA-256 mismatch: "
+                        f"expected {expected}, got {actual}"
+                    )
             print(f"Downloaded {archive.stat().st_size} bytes for {package}", file=sys.stderr)
             break
         except urllib.error.HTTPError as e:
@@ -378,6 +429,7 @@ def resolve_transitive_closure(
     bundle_manifest: set[str],
     *,
     max_iterations: int = 64,
+    locked_packages: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, set[str]]:
     """Auto-fetch the transitive closure of CTAN packages.
 
@@ -422,7 +474,12 @@ def resolve_transitive_closure(
             # Transitive: skip if bundle-resident, else HEAD-probe.
             if pkg in bundle_manifest:
                 continue
-            if not _head_probe_ctan(pkg):
+            if locked_packages is not None and pkg not in locked_packages:
+                # Scanner references include TeX-internal names. In
+                # locked mode we never probe or fetch undeclared names;
+                # a genuinely missing package fails at compile time.
+                continue
+            if locked_packages is None and not _head_probe_ctan(pkg):
                 print(
                     f"  '{pkg}' referenced by a fetched package but not "
                     f"in the bundle and not found on CTAN — skipping "
@@ -431,7 +488,10 @@ def resolve_transitive_closure(
                 )
                 continue
 
-        deps = download_ctan_package(pkg, dest_dir)
+        if locked_packages is None:
+            deps = download_ctan_package(pkg, dest_dir)
+        else:
+            deps = download_ctan_package(pkg, dest_dir, locked_packages)
         fetched[pkg] = deps
 
         for ref in deps:
@@ -928,6 +988,8 @@ def main() -> int:
         output = args.workspace / output
 
     pkg_files = _parse_pkg_files(args.pkg_files)
+    if args.ctan_lock is not None and not args.ctan_packages:
+        raise SystemExit("--ctan-lock requires --ctan-package")
 
     with tempfile.TemporaryDirectory(prefix="rules_latex_snapshot_") as tmp:
         tmp_path = Path(tmp)
@@ -942,6 +1004,10 @@ def main() -> int:
         if args.ctan_packages:
             ctan_dir = tmp_path / "ctan_pkgs"
             ctan_dir.mkdir()
+            locked_packages = (
+                _load_ctan_lock(args.ctan_lock)
+                if args.ctan_lock is not None else None
+            )
             if args.bundle_manifest is not None:
                 # Auto-resolve: fetch the listed seed packages and
                 # walk their dep graph, fetching transitive CTAN deps
@@ -949,13 +1015,16 @@ def main() -> int:
                 manifest = _load_bundle_manifest(args.bundle_manifest)
                 package_deps = resolve_transitive_closure(
                     args.ctan_packages, ctan_dir, manifest,
+                    locked_packages=locked_packages,
                 )
             else:
                 # Legacy path (no manifest plumbed through): fetch
                 # only what the user listed. The failure-path hint
                 # still triggers if a transitive dep is missing.
                 for pkg in args.ctan_packages:
-                    package_deps[pkg] = download_ctan_package(pkg, ctan_dir)
+                    package_deps[pkg] = download_ctan_package(
+                        pkg, ctan_dir, locked_packages,
+                    )
             _print_dep_summary(package_deps)
 
         main_in_workdir = stage_sources(

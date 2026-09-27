@@ -31,7 +31,7 @@ Load symbols from here:
 <pre>
 load("@rules_latex//latex:defs.bzl", "latex_cache_snapshot")
 
-latex_cache_snapshot(<a href="#latex_cache_snapshot-name">name</a>, <a href="#latex_cache_snapshot-deps">deps</a>, <a href="#latex_cache_snapshot-srcs">srcs</a>, <a href="#latex_cache_snapshot-biber">biber</a>, <a href="#latex_cache_snapshot-ctan_packages">ctan_packages</a>, <a href="#latex_cache_snapshot-main">main</a>, <a href="#latex_cache_snapshot-output">output</a>, <a href="#latex_cache_snapshot-pkg_files">pkg_files</a>)
+latex_cache_snapshot(<a href="#latex_cache_snapshot-name">name</a>, <a href="#latex_cache_snapshot-deps">deps</a>, <a href="#latex_cache_snapshot-srcs">srcs</a>, <a href="#latex_cache_snapshot-biber">biber</a>, <a href="#latex_cache_snapshot-ctan_lock">ctan_lock</a>, <a href="#latex_cache_snapshot-ctan_packages">ctan_packages</a>, <a href="#latex_cache_snapshot-main">main</a>, <a href="#latex_cache_snapshot-output">output</a>, <a href="#latex_cache_snapshot-pkg_files">pkg_files</a>)
 </pre>
 
 Bazel-run target that captures a tectonic cache snapshot.
@@ -45,6 +45,7 @@ Bazel-run target that captures a tectonic cache snapshot.
 | <a id="latex_cache_snapshot-deps"></a>deps |  Other targets that contribute LaTeX sources.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | optional |  `[]`  |
 | <a id="latex_cache_snapshot-srcs"></a>srcs |  All LaTeX source files needed to compile the document online. The cache snapshot will contain whatever tectonic decides to fetch for this compile, so make sure this list is realistic.   | <a href="https://bazel.build/concepts/labels">List of labels</a> | required |  |
 | <a id="latex_cache_snapshot-biber"></a>biber |  If True, prime the cache with biber on PATH so the resulting snapshot contains bibliography-related files. Required when consumers compile biblatex documents against this snapshot.   | Boolean | optional |  `False`  |
+| <a id="latex_cache_snapshot-ctan_lock"></a>ctan_lock |  Optional version-1 JSON lock of CTAN URLs and SHA-256 digests.   | <a href="https://bazel.build/concepts/labels">Label</a> | optional |  `None`  |
 | <a id="latex_cache_snapshot-ctan_packages"></a>ctan_packages |  Names of CTAN packages to download and include in the cache snapshot. Each entry is a CTAN package name (e.g. 'fancyhdr'). Packages are downloaded from CTAN mirrors in TDS format during the snapshot generation.   | List of strings | optional |  `[]`  |
 | <a id="latex_cache_snapshot-main"></a>main |  The top-level .tex file passed to tectonic. Must also appear in `srcs`.   | <a href="https://bazel.build/concepts/labels">Label</a> | required |  |
 | <a id="latex_cache_snapshot-output"></a>output |  Destination path for the snapshot tarball, relative to the workspace root.   | String | required |  |
@@ -58,7 +59,7 @@ Bazel-run target that captures a tectonic cache snapshot.
 <pre>
 load("@rules_latex//latex:defs.bzl", "latex_document")
 
-latex_document(<a href="#latex_document-name">name</a>, <a href="#latex_document-deps">deps</a>, <a href="#latex_document-srcs">srcs</a>, <a href="#latex_document-biber">biber</a>, <a href="#latex_document-biber_strategy">biber_strategy</a>, <a href="#latex_document-cache">cache</a>, <a href="#latex_document-ctan_packages">ctan_packages</a>, <a href="#latex_document-main">main</a>, <a href="#latex_document-outfmt">outfmt</a>,
+latex_document(<a href="#latex_document-name">name</a>, <a href="#latex_document-deps">deps</a>, <a href="#latex_document-srcs">srcs</a>, <a href="#latex_document-biber">biber</a>, <a href="#latex_document-biber_strategy">biber_strategy</a>, <a href="#latex_document-cache">cache</a>, <a href="#latex_document-ctan_lock">ctan_lock</a>, <a href="#latex_document-ctan_packages">ctan_packages</a>, <a href="#latex_document-main">main</a>, <a href="#latex_document-outfmt">outfmt</a>,
                <a href="#latex_document-pkg_files">pkg_files</a>, <a href="#latex_document-reproducible">reproducible</a>, <a href="#latex_document-synctex">synctex</a>, <a href="#latex_document-tectonic_args">tectonic_args</a>)
 </pre>
 
@@ -75,6 +76,7 @@ Compiles a LaTeX source tree using tectonic.
 | <a id="latex_document-biber"></a>biber |  Enable biber bibliography processing. When True, tectonic can shell out to a `biber` binary at compile time, resolving `\\addbibresource`/`\\bibliography` directives via biblatex. The binary comes from the rules_latex toolchain by default; set `biber_strategy = "system"` to use a system install instead.   | Boolean | optional |  `False`  |
 | <a id="latex_document-biber_strategy"></a>biber_strategy |  Which biber binary to use when `biber = True`. `"toolchain"` (default) uses the rules_latex-vendored biber 2.21, matched to the bundle's biblatex 3.21, on every supported platform. A custom or unsupported toolchain without biber fails at analysis time. `"system"` propagates $PATH so a system-installed biber is found; less hermetic, intended as an escape hatch.   | String | optional |  `"toolchain"`  |
 | <a id="latex_document-cache"></a>cache |  Optional cache snapshot tarball (typically produced by `latex_cache_snapshot` and checked into the repository). When set, the action extracts the snapshot into the compile-time `TECTONIC_CACHE_DIR` and runs with `--only-cached`, giving a fully offline, hermetic build without pulling the full ~1.78 GiB tectonic bundle or running an online prime. Takes precedence over the toolchain-level `tectonic.bundle()` and over the implicit cache pipeline.   | <a href="https://bazel.build/concepts/labels">Label</a> | optional |  `None`  |
+| <a id="latex_document-ctan_lock"></a>ctan_lock |  Optional version-1 JSON lock with exact URL and SHA-256 for each CTAN package. Also locks automatically resolved transitive packages; undeclared names are not fetched.   | <a href="https://bazel.build/concepts/labels">Label</a> | optional |  `None`  |
 | <a id="latex_document-ctan_packages"></a>ctan_packages |  Names of CTAN packages to fetch and make available to the document. Each entry is a CTAN package name (e.g. 'fancyhdr'). Packages are downloaded from CTAN mirrors in TDS format during the cache population step and bundled into the offline cache. Requires the implicit cache pipeline (default) or a cache snapshot generated with matching `ctan_packages`. Not supported when `tectonic.bundle()` is active (the toolchain-level bundle does not support on-demand CTAN package fetching).   | List of strings | optional |  `[]`  |
 | <a id="latex_document-main"></a>main |  The top-level .tex file passed to tectonic. Must also appear in `srcs`.   | <a href="https://bazel.build/concepts/labels">Label</a> | required |  |
 | <a id="latex_document-outfmt"></a>outfmt |  Output format. Passed to `tectonic -X compile --outfmt`.   | String | optional |  `"pdf"`  |
@@ -162,7 +164,7 @@ A bundle of resource files (images, bib, fonts) consumed by documents.
 <pre>
 load("@rules_latex//latex:defs.bzl", "latex_test")
 
-latex_test(<a href="#latex_test-name">name</a>, <a href="#latex_test-deps">deps</a>, <a href="#latex_test-srcs">srcs</a>, <a href="#latex_test-biber">biber</a>, <a href="#latex_test-biber_strategy">biber_strategy</a>, <a href="#latex_test-cache">cache</a>, <a href="#latex_test-ctan_packages">ctan_packages</a>, <a href="#latex_test-forbidden_patterns">forbidden_patterns</a>,
+latex_test(<a href="#latex_test-name">name</a>, <a href="#latex_test-deps">deps</a>, <a href="#latex_test-srcs">srcs</a>, <a href="#latex_test-biber">biber</a>, <a href="#latex_test-biber_strategy">biber_strategy</a>, <a href="#latex_test-cache">cache</a>, <a href="#latex_test-ctan_lock">ctan_lock</a>, <a href="#latex_test-ctan_packages">ctan_packages</a>, <a href="#latex_test-forbidden_patterns">forbidden_patterns</a>,
            <a href="#latex_test-forbidden_patterns_replace">forbidden_patterns_replace</a>, <a href="#latex_test-main">main</a>, <a href="#latex_test-outfmt">outfmt</a>, <a href="#latex_test-pkg_files">pkg_files</a>, <a href="#latex_test-required_patterns">required_patterns</a>)
 </pre>
 
@@ -179,6 +181,7 @@ Compiles a LaTeX document and asserts on the resulting log.
 | <a id="latex_test-biber"></a>biber |  Enable biber bibliography processing for the test compile, mirroring the same-named attribute on latex_document. When True, the toolchain biber binary is staged onto PATH so tectonic's biblatex subprocess can resolve it.   | Boolean | optional |  `False`  |
 | <a id="latex_test-biber_strategy"></a>biber_strategy |  Which biber binary to use when `biber = True`. `"toolchain"` (default) uses the rules_latex-vendored biber. `"system"` is rejected because the test sandbox scrubs PATH; it remains an accepted value only for API parity with latex_document.   | String | optional |  `"toolchain"`  |
 | <a id="latex_test-cache"></a>cache |  Optional cache snapshot tarball (typically produced by `latex_cache_snapshot`). When set, the test extracts the snapshot and runs tectonic with `--only-cached`, giving a fully offline test that doesn't need internet to run. Takes precedence over the toolchain-level bundle.   | <a href="https://bazel.build/concepts/labels">Label</a> | optional |  `None`  |
+| <a id="latex_test-ctan_lock"></a>ctan_lock |  Optional version-1 JSON lock of CTAN URLs and SHA-256 digests.   | <a href="https://bazel.build/concepts/labels">Label</a> | optional |  `None`  |
 | <a id="latex_test-ctan_packages"></a>ctan_packages |  Names of CTAN packages to fetch and make available to the document. Each entry is a CTAN package name (e.g. 'fancyhdr'). Packages are downloaded from CTAN mirrors in TDS format during the test's inline cache population step.   | List of strings | optional |  `[]`  |
 | <a id="latex_test-forbidden_patterns"></a>forbidden_patterns |  Substrings whose presence in the tectonic log file fails the test. Appended to a sensible default list (LaTeX Error, Undefined control sequence, Emergency stop, Fatal error). Set `forbidden_patterns_replace = True` to discard the defaults entirely.   | List of strings | optional |  `[]`  |
 | <a id="latex_test-forbidden_patterns_replace"></a>forbidden_patterns_replace |  If True, `forbidden_patterns` replaces the default list instead of extending it.   | Boolean | optional |  `False`  |
@@ -207,5 +210,4 @@ Information about a LaTeX source set or compiled document.
 | <a id="LatexInfo-srcs"></a>srcs |  depset[File]: transitive set of LaTeX source files (.tex, .sty, .cls, .bib, images, etc.) that documents depending on this target need to see.    |
 | <a id="LatexInfo-search_paths"></a>search_paths |  depset[string]: directories (relative to the Bazel execroot) that downstream tectonic invocations should add to TEXINPUTS/BIBINPUTS/BSTINPUTS.    |
 | <a id="LatexInfo-offline_strategy"></a>offline_strategy |  string: which offline-mode strategy the target resolved to. One of "user_cache" (explicit `cache = "..."` attr), "bundle" (toolchain-level tectonic.bundle()), or "implicit" (implicit populate-cache pipeline). Set only by `latex_document`; other rules that provide `LatexInfo` (`latex_library`, `latex_pkg`) leave it as the empty string. Consumed by `latex_live` to decide whether to interpose a persistent serve-time cache snapshot via the `//latex:_serve_cache_override` build setting.    |
-
 
