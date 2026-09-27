@@ -1,6 +1,9 @@
 # Python implementation code and developer-facing helpers.
 #
-# Nothing under this package is part of the public rules_latex API.
+# Nothing under this package is part of the supported rules_latex API.
+# Labels remain visible because rule defaults and generated launchers use
+# them across package/repository boundaries; consumers should load the six
+# rules and public providers from @rules_latex//latex:defs.bzl instead.
 
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_library.bzl", "py_library")

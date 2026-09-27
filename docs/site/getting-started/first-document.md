@@ -109,6 +109,11 @@ bazel build //:cv
 First run takes ~30 seconds (tectonic prime + compile); subsequent
 builds are <5 seconds. The PDF lives at `bazel-bin/cv.pdf`.
 
+Files from `latex_library` and `latex_pkg` dependencies are staged into
+the document's work directory. Those rules do not set `TEXINPUTS`,
+`BIBINPUTS`, or `BSTINPUTS`; use `pkg_files` on `latex_document` if a
+file needs a different staged path.
+
 ## Iterate with the live preview
 
 In one terminal:

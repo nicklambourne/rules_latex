@@ -1,7 +1,7 @@
 """Providers exposed by rules_latex.
 
 `LatexInfo` propagates the transitive set of LaTeX source files that a target
-contributes, plus any options that downstream documents should inherit.
+contributes. Document actions stage those files into the work directory.
 
 `LatexDocumentInfo` carries the compile-time inputs (main file, biber binary,
 pkg_files overrides) of a `latex_document` target, so consumers like
@@ -15,9 +15,11 @@ LatexInfo = provider(
         "srcs": "depset[File]: transitive set of LaTeX source files (.tex, " +
                 ".sty, .cls, .bib, images, etc.) that documents depending on " +
                 "this target need to see.",
-        "search_paths": "depset[string]: directories (relative to the Bazel " +
-                        "execroot) that downstream tectonic invocations " +
-                        "should add to TEXINPUTS/BIBINPUTS/BSTINPUTS.",
+        "search_paths": "depset[string]: retained for provider compatibility. " +
+                        "Document compilation does not read this field or " +
+                        "set TEXINPUTS/BIBINPUTS/BSTINPUTS; it stages " +
+                        "source files by path instead. Use pkg_files to " +
+                        "override a staged path.",
         "offline_strategy": "string: which offline-mode strategy the target " +
                             "resolved to. One of \"user_cache\" (explicit " +
                             "`cache = \"...\"` attr), \"bundle\" (toolchain-" +

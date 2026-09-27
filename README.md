@@ -121,6 +121,11 @@ bibliography shared across multiple documents) — and the full
 | [`latex_live`](./latex/private/latex_live.bzl) | `bazel run`-able live-preview loop: watches the document's sources, rebuilds through Bazel by default (with an opt-in content-only fast path), and serves the result as a localhost HTTP page rendered with PDF.js — Overleaf-style in-browser preview with auto-refresh, search, outline sidebar, and a build-log drawer. |
 
 All six are loaded from `@rules_latex//latex:defs.bzl`.
+`latex_library` and `latex_pkg` contribute files, not TeX environment search
+paths. Sources are staged into the document's work directory; use
+`pkg_files` on `latex_document` to override a file's staged path.
+Targets under `//tools` are implementation details, even where their
+visibility permits direct reference.
 
 ## Features
 
