@@ -142,15 +142,22 @@ try {
   assert.match(original, /\\end\{document\}/);
   const revised = original.replace(
     /\\end\{document\}/,
-    "\\par {\\large\\bfseries Browser smoke revision.}\\par\\rule{120pt}{18pt}\n\\end{document}",
+    "\\par Browser smoke revision.\\par\\rule{120pt}{18pt}\n\\end{document}",
   );
   await writeFile(sourcePath, revised);
+  let lastStatus;
+  let lastState;
   const second = await waitFor(async () => {
     const status = await fetch(`${url}status`).then((response) => response.json());
     const current = await state();
+    lastStatus = status;
+    lastState = current;
     return status.last_success && status.build_count > before.build_count &&
       current?.rendered && current.renders > first.renders ? current : null;
-  }, "PDF.js render after a source edit", 60000);
+  }, "PDF.js render after a source edit", 60000).catch((error) => {
+    throw new Error(`${error.message}; status=${JSON.stringify(lastStatus)}; ` +
+      `browser=${JSON.stringify(lastState)}; errors=${cdp.errors.join("; ")}`);
+  });
 
   assert.notEqual(second.pixels, first.pixels, "the edited PDF should repaint different pixels");
   assert.deepEqual(cdp.errors, [], `browser errors: ${cdp.errors.join("; ")}`);
