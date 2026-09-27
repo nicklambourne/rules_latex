@@ -3,7 +3,7 @@
 Providers exposed by rules_latex.
 
 `LatexInfo` propagates the transitive set of LaTeX source files that a target
-contributes, plus any options that downstream documents should inherit.
+contributes. Document actions stage those files into the work directory.
 
 `LatexDocumentInfo` carries the compile-time inputs (main file, biber binary,
 pkg_files overrides) of a `latex_document` target, so consumers like
