@@ -32,6 +32,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -203,7 +204,7 @@ class _ServerFixture:
         _M.Handler.ws_server_mod = _WS
 
         self.port = _free_port()
-        self._server = _M.ThreadingHTTPServer(
+        self._server = _M.BoundedHTTPServer(
             ("127.0.0.1", self.port), _M.Handler,
         )
         self._thread = threading.Thread(
@@ -438,6 +439,56 @@ class TestPostUnchanged(unittest.TestCase):
         self.assertEqual(h_status, 404)
         self.assertEqual(g_status, 404)
         self.assertEqual(h_body, b"")
+
+    def test_oversized_sync_body_rejected_before_read(self):
+        with mock.patch.object(_M, "SYNCTEX_ENABLED", True):
+            status, _, body = _request(
+                self.fixture.port, "POST", "/sync/reverse",
+                headers={"Content-Length": str(_M.MAX_SYNC_BODY_BYTES + 1)},
+                timeout=1,
+            )
+        self.assertEqual(status, 413)
+        self.assertIn(b"too large", body)
+
+    def test_slow_sync_body_times_out(self):
+        conn = http.client.HTTPConnection(
+            "127.0.0.1", self.fixture.port, timeout=2,
+        )
+        try:
+            with mock.patch.object(_M, "SYNCTEX_ENABLED", True), \
+                 mock.patch.object(_M, "SYNC_BODY_TIMEOUT_SECONDS", 0.05):
+                conn.putrequest("POST", "/sync/reverse")
+                conn.putheader("Content-Length", "10")
+                conn.endheaders(b"{")
+                response = conn.getresponse()
+                self.assertEqual(response.status, 408)
+        finally:
+            conn.close()
+
+
+class TestConnectionBound(unittest.TestCase):
+    def test_excess_connections_rejected_and_slot_reused(self):
+        with mock.patch.object(_M.BoundedHTTPServer, "max_connections", 2):
+            with _ServerFixture() as fixture:
+                clients = [socket.create_connection(
+                    ("127.0.0.1", fixture.port), timeout=1,
+                ) for _ in range(2)]
+                try:
+                    # Idle connections occupy both slots. Wait until the
+                    # accept loop has accounted for them before probing.
+                    deadline = time.monotonic() + 1
+                    while fixture._server._connection_slots._value != 0:
+                        if time.monotonic() >= deadline:
+                            self.fail("server did not accept idle connections")
+                        time.sleep(0.001)
+                    with socket.create_connection(
+                        ("127.0.0.1", fixture.port), timeout=1,
+                    ) as excess:
+                        excess.sendall(b"GET / HTTP/1.1\r\n\r\n")
+                        self.assertIn(b"503", excess.recv(256))
+                finally:
+                    for client in clients:
+                        client.close()
 
 
 class TestLocalOriginPolicy(unittest.TestCase):

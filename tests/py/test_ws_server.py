@@ -29,9 +29,11 @@ import socket
 import struct
 import sys
 import threading
+import time
 import unittest
 from pathlib import Path
 from typing import Optional
+from unittest import mock
 
 
 # Make tools/ importable without installing the package. Mirrors
@@ -387,6 +389,19 @@ class ConnectionTest(unittest.TestCase):
             self.assertFalse(header[1] & 0x80, "server frame must not be masked")
             self.assertEqual(header[1] & 0x7F, len(payload))
             self.assertEqual(client.recv(len(payload)), payload)
+        finally:
+            conn.close()
+            client.close()
+
+    def test_nonreading_peer_cannot_block_sender_indefinitely(self):
+        client, server = _socketpair()
+        conn = ws_server.WebSocketConnection(server)
+        try:
+            with mock.patch.object(ws_server, "SEND_TIMEOUT_SECONDS", 0.05):
+                start = time.monotonic()
+                with self.assertRaises(ws_server.WebSocketClosed):
+                    conn.send_binary(b"x" * (4 * 1024 * 1024))
+                self.assertLess(time.monotonic() - start, 1.0)
         finally:
             conn.close()
             client.close()

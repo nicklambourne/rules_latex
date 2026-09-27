@@ -20,6 +20,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from typing import Optional
@@ -302,6 +303,38 @@ class BroadcastChunksTest(unittest.TestCase):
         self.assertEqual(len(ok.text_frames), 1,
                          "second conn must still get the manifest")
         self.assertEqual(len(ok.binary_frames), 1)
+
+    def test_stalled_client_does_not_delay_other_client(self):
+        self.state.update_manifest(
+            _Manifest(pdf_size=100, chunks=(), skeleton_ranges=()),
+        )
+        stalled = threading.Event()
+        release = threading.Event()
+        delivered = threading.Event()
+
+        class SlowConn(FakeConn):
+            def send_text(self, payload):
+                stalled.set()
+                release.wait(timeout=1)
+                super().send_text(payload)
+
+        class FastConn(FakeConn):
+            def send_text(self, payload):
+                delivered.set()
+                super().send_text(payload)
+
+        self.state.add_ws(SlowConn())
+        self.state.add_ws(FastConn())
+        worker = threading.Thread(
+            target=self.state.broadcast_chunks, args=(self.chunks_dir,),
+        )
+        worker.start()
+        try:
+            self.assertTrue(stalled.wait(timeout=1))
+            self.assertTrue(delivered.wait(timeout=0.2))
+        finally:
+            release.set()
+            worker.join(timeout=1)
 
 
 # --- broadcast_log_update / broadcast_ws_build_failed -------------

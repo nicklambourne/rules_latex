@@ -36,11 +36,13 @@ import os
 import queue
 import re
 import signal
+import socket
 import subprocess
 import sys
 import threading
 import time
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -84,6 +86,9 @@ GIT_INFO_TTL_S = 2.0
 # few hundred lines, more than enough to debug typical compile
 # failures without holding pathological logs forever.
 LOG_MAX_BYTES = 64 * 1024
+MAX_SYNC_BODY_BYTES = 64 * 1024
+SYNC_BODY_TIMEOUT_SECONDS = 5.0
+MAX_HTTP_CONNECTIONS = 64
 
 # Path (within runfiles) to the pure-Python PDF chunker. Loaded
 # lazily on first successful build to compute the content-addressed
@@ -625,8 +630,19 @@ class BuildState:
             snapshot = list(self._ws_conns.values())
         if manifest is None:
             return
-        for conn, known in snapshot:
+        if len(snapshot) == 1:
+            conn, known = snapshot[0]
             self._send_to_ws(conn, manifest, known, chunks_dir)
+        elif snapshot:
+            # A client that stops reading must not delay the other clients.
+            # The HTTP connection cap also bounds the worker count here.
+            with ThreadPoolExecutor(max_workers=len(snapshot)) as pool:
+                list(pool.map(
+                    lambda entry: self._send_to_ws(
+                        entry[0], manifest, entry[1], chunks_dir,
+                    ),
+                    snapshot,
+                ))
 
     def broadcast_ws_build_failed(self, message: str) -> None:
         """Notify every WS client that the latest build failed.
@@ -640,15 +656,7 @@ class BuildState:
         if not snapshot:
             return
         payload = json.dumps({"type": "build-failed", "message": message})
-        for conn in snapshot:
-            try:
-                conn.send_text(payload)
-            except Exception:
-                # Connection is broken; the read loop on the
-                # handler thread will tear it down. Don't drop
-                # here to avoid mutating the registry from the
-                # watcher thread for transient socket errors.
-                pass
+        self._broadcast_ws_text(snapshot, payload)
 
     def broadcast_log_update(self, log_id: int, success: bool) -> None:
         """Notify every WS client that the build log has new content.
@@ -666,11 +674,22 @@ class BuildState:
             "logId": log_id,
             "success": success,
         })
-        for conn in snapshot:
+        self._broadcast_ws_text(snapshot, payload)
+
+    @staticmethod
+    def _broadcast_ws_text(snapshot: list[object], payload: str) -> None:
+        def send(conn: object) -> None:
             try:
                 conn.send_text(payload)
             except Exception:
+                # The handler's read loop owns connection teardown.
                 pass
+
+        if len(snapshot) == 1:
+            send(snapshot[0])
+        elif snapshot:
+            with ThreadPoolExecutor(max_workers=len(snapshot)) as pool:
+                list(pool.map(send, snapshot))
 
     def _send_to_ws(
         self,
@@ -1713,6 +1732,40 @@ class _NullWriter:
         self.closed = True
 
 
+class BoundedHTTPServer(ThreadingHTTPServer):
+    """Limit the long-lived SSE/WS and incomplete-request threads."""
+
+    max_connections = MAX_HTTP_CONNECTIONS
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        self._connection_slots = threading.BoundedSemaphore(self.max_connections)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request: socket.socket, client_address: object) -> None:
+        if not self._connection_slots.acquire(blocking=False):
+            try:
+                request.send(b"HTTP/1.1 503 Service Unavailable\r\n"
+                             b"Content-Length: 0\r\nConnection: close\r\n\r\n",
+                             socket.MSG_DONTWAIT)
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._connection_slots.release()
+            raise
+
+    def process_request_thread(
+        self, request: socket.socket, client_address: object,
+    ) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._connection_slots.release()
+
+
 class Handler(BaseHTTPRequestHandler):
     # Class-level attributes set by run_server() before this is used.
     state: BuildState
@@ -2116,6 +2169,62 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _read_sync_json(self) -> object | None:
+        lengths = self.headers.get_all("Content-Length", [])
+        try:
+            if len(lengths) != 1:
+                raise ValueError("one Content-Length header is required")
+            length = int(lengths[0])
+            if length < 0:
+                raise ValueError("negative Content-Length")
+        except ValueError as exc:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+            return None
+        if length > MAX_SYNC_BODY_BYTES:
+            self.close_connection = True
+            self._send_json(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                {"ok": False, "error": "request body too large"},
+            )
+            return None
+
+        old_timeout = self.connection.gettimeout()
+        try:
+            deadline = time.monotonic() + SYNC_BODY_TIMEOUT_SECONDS
+            chunks = []
+            remaining = length
+            while remaining:
+                self.connection.settimeout(max(0.001, deadline - time.monotonic()))
+                chunk = self.rfile.read(min(remaining, 4096))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            body = b"".join(chunks)
+        except (TimeoutError, socket.timeout):
+            self.close_connection = True
+            self._send_json(
+                HTTPStatus.REQUEST_TIMEOUT,
+                {"ok": False, "error": "request body timed out"},
+            )
+            return None
+        finally:
+            self.connection.settimeout(old_timeout)
+        if len(body) != length:
+            self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"ok": False, "error": "incomplete request body"},
+            )
+            return None
+        try:
+            return json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"ok": False, "error": "invalid JSON request body"},
+            )
+            return None
+
     def _handle_sync_reverse(self) -> None:
         """POST /sync/reverse — map a PDF click to a source location.
 
@@ -2135,14 +2244,14 @@ class Handler(BaseHTTPRequestHandler):
                 {"ok": False, "error": "synctex not enabled for this document"},
             )
             return
+        payload = self._read_sync_json()
+        if payload is None:
+            return
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-            body_raw = self.rfile.read(length) if length else b""
-            payload = json.loads(body_raw.decode("utf-8"))
             page = int(payload["page"])
             x = float(payload["x"])
             y = float(payload["y"])
-        except (KeyError, ValueError, json.JSONDecodeError) as exc:
+        except (KeyError, ValueError, TypeError) as exc:
             self._send_json(
                 HTTPStatus.BAD_REQUEST,
                 {"ok": False, "error": "bad request: {}".format(exc)},
@@ -2209,13 +2318,13 @@ class Handler(BaseHTTPRequestHandler):
                 {"ok": False, "error": "synctex not enabled for this document"},
             )
             return
+        payload = self._read_sync_json()
+        if payload is None:
+            return
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-            body_raw = self.rfile.read(length) if length else b""
-            payload = json.loads(body_raw.decode("utf-8"))
             file = str(payload["file"])
             line = int(payload["line"])
-        except (KeyError, ValueError, json.JSONDecodeError) as exc:
+        except (KeyError, ValueError, TypeError) as exc:
             self._send_json(
                 HTTPStatus.BAD_REQUEST,
                 {"ok": False, "error": "bad request: {}".format(exc)},
@@ -2943,8 +3052,8 @@ def main() -> int:
     # without hitting "Address already in use" while the kernel holds
     # the TIME_WAIT socket. (We're localhost-only, so the usual
     # warnings about REUSEADDR don't apply.)
-    ThreadingHTTPServer.allow_reuse_address = True
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    BoundedHTTPServer.allow_reuse_address = True
+    server = BoundedHTTPServer(("127.0.0.1", PORT), Handler)
 
     print(f"latex_live: serving live preview for {DOCUMENT_LABEL}")
     print(f"  rebuild target: {DOCUMENT_LABEL}")
