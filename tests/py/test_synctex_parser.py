@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import gzip
 import importlib.util
+import json
+from tests.py._template_loader import _PLACEHOLDERS as _DEFAULT_PLACEHOLDERS
 import sys
 import tempfile
 import unittest
@@ -57,8 +59,8 @@ _PLACEHOLDERS = {
 def _load_template_module():
     """Substitute placeholders and import the resulting Python."""
     source = _TEMPLATE_PATH.read_text()
-    for placeholder, replacement in _PLACEHOLDERS.items():
-        source = source.replace(placeholder, replacement)
+    for placeholder, replacement in {**_DEFAULT_PLACEHOLDERS, **_PLACEHOLDERS}.items():
+        source = source.replace(placeholder, json.dumps(replacement))
 
     # Write to a real .py file so dataclass introspection of __module__
     # works correctly (it can't if we just exec the source against

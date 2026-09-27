@@ -28,6 +28,7 @@ naturally.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -51,6 +52,7 @@ _PLACEHOLDERS = {
     "{{DOCUMENT_LABEL}}": "//test:doc",
     "{{DOCUMENT_NAME}}": "doc",
     "{{ENABLE_SERVE_CACHE}}": "",
+    "{{LOGO_RUNFILE}}": "_assets/logo.svg",
     "{{OPEN_ON_START}}": "0",
     "{{PDF_CHUNKS_RUNFILE}}": "_tools/pdf_chunks.py",
     "{{PDFJS_LIB_RUNFILE}}": "_pdfjs/pdf.mjs",
@@ -101,7 +103,7 @@ def load_template_module(
 
     source = _TEMPLATE_PATH.read_text()
     for placeholder, replacement in overrides.items():
-        source = source.replace(placeholder, replacement)
+        source = source.replace(placeholder, json.dumps(replacement))
 
     tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=".py", delete=False, encoding="utf-8",
