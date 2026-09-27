@@ -8,8 +8,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # Allow only one concurrent deployment, but don't cancel in-progress
 # runs since we want CI to complete before publishing.
@@ -22,9 +20,9 @@ jobs:
     name: Verify Stardoc output matches committed copy
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up Bazelisk
-        uses: bazel-contrib/setup-bazel@0.19.0
+        uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
         with:
           bazelisk-cache: true
           disk-cache: docs-${{ github.workflow }}
@@ -67,16 +65,12 @@ jobs:
     outputs:
       artifact: ${{ steps.upload.outputs.artifact_id }}
     steps:
-      - uses: actions/checkout@v6.0.2
-      - uses: actions/setup-python@v6.2.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
       - name: Install MkDocs Material
-        run: |
-          pip install \
-            mkdocs-material==9.* \
-            'pymdown-extensions>=10' \
-            'mkdocs-material[imaging]'
+        run: python -m pip install --require-hashes -r docs/requirements.lock
       - name: Build site
         working-directory: docs
         run: mkdocs build --strict
@@ -85,7 +79,7 @@ jobs:
         # Only upload from master push (PRs and other branches just
         # verify the build works).
         if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-        uses: actions/upload-pages-artifact@v5.0.0
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: _site
 
@@ -97,7 +91,11 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v5.0.0
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

@@ -48,11 +48,16 @@ permissions:
   id-token: write
   attestations: write
 
+# The pinned upstream workflow requires a classic PAT while it opens
+# the BCR PR itself. A fine-grained token is supported only with
+# open_pull_request: false and a manual PR step; changing that would
+# alter this release policy. Keep BCR_PUBLISH_TOKEN on a dedicated
+# account/fork and review its scopes and rotation in repository settings.
+
 jobs:
   publish:
-    # Pinned tag rather than @main so an upstream breaking change
-    # doesn't silently affect our release.
-    uses: bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@v1.2.0
+    # Commit pin (v1.2.0) so upstream tag movement cannot alter a release.
+    uses: bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@0a23c53c2baffdaf2ce8dd23c2c0e45eb3b79093 # v1.2.0
     with:
       tag_name: ${{ inputs.tag_name }}
       # Fork of bazelbuild/bazel-central-registry. The PAT under

@@ -22,9 +22,8 @@
 #      .ttb.index.gz (tools/extract_bundle_manifest.py).
 # See DESIGN.md §4.10 / §5 #4.
 #
-# Reproducibility notes: the builder is the (archived, hence frozen)
-# tectonic-texlive-bundles repo; the TeX Live source hash is computed and
-# pinned into bundle.toml at build time. The .ttb is not guaranteed
+# Reproducibility notes: the builder commit and TeX Live source archive
+# digest are fixed below. The .ttb is not guaranteed
 # byte-identical across rebuilds, but the recipe reliably yields a valid
 # bundle. The spec is authored in-CI from the builder's texlive2023
 # template (it ships only a 2023 spec); the 2023-era patches may need
@@ -38,6 +37,8 @@ on:
 env:
   TL_YEAR: "2026"
   TL_DATE: "20260301"
+  TL_SOURCE_SHA512: "0b8f87622e4b9e31d4bd8c7720376aa9685e5ee299c896e3e1660459546a31e11508946f2c40a71671944c8b467483e5d4d859ff17698d239c7d5aced65d4a6b"
+  TTB_BUILDER_COMMIT: "4b111c1f32492ca36d8656b670d3acab8d4bc066"
 
 jobs:
   build:
@@ -59,7 +60,12 @@ jobs:
           cargo --version
 
       - name: Clone the (archived) bundle builder
-        run: git clone --depth 1 https://github.com/tectonic-typesetting/tectonic-texlive-bundles.git ttb
+        run: |
+          git init ttb
+          git -C ttb remote add origin https://github.com/tectonic-typesetting/tectonic-texlive-bundles.git
+          git -C ttb fetch --depth 1 origin "$TTB_BUILDER_COMMIT"
+          git -C ttb checkout --detach FETCH_HEAD
+          test "$(git -C ttb rev-parse HEAD)" = "$TTB_BUILDER_COMMIT"
 
       - name: Author a texliveYYYY spec from the 2023 template
         working-directory: ttb/bundles
@@ -77,7 +83,7 @@ jobs:
           echo "--- retargeted [inputs.texlive] ---"
           grep -nE "name =|tarball|root_dir|patch_dir" bundle.toml
 
-      - name: Fetch + decompress TeX Live source, pin its hash
+      - name: Verify and decompress pinned TeX Live source
         working-directory: ttb/bundles
         run: |
           TL="texlive-${TL_DATE}-texmf"
@@ -85,6 +91,7 @@ jobs:
           curl -fL --retry 3 \
             "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/${TL_YEAR}/${TL}.tar.xz" \
             -o "${TL}.tar.xz"
+          echo "$TL_SOURCE_SHA512  ${TL}.tar.xz" | sha512sum -c -
           echo "Decompressing (~5 GiB -> ~13 GiB); unxz removes the .xz as it goes."
           unxz "${TL}.tar.xz"
           ls -lh "${TL}.tar"
@@ -97,7 +104,7 @@ jobs:
       - name: Build the bundle (select + pack -> .ttb)
         working-directory: ttb/builder
         run: |
-          cargo run --release -- --build-dir ../build "../bundles/texlive${TL_YEAR}/bundle.toml"
+          cargo run --locked --release -- --build-dir ../build "../bundles/texlive${TL_YEAR}/bundle.toml"
           find ../build -maxdepth 2 -type f -printf '%s\t%p\n' 2>/dev/null | sort -n | tail -20
 
       - name: Locate, measure, checksum the .ttb
@@ -121,7 +128,9 @@ jobs:
         run: |
           # Confirm the pinned tectonic reads the new .ttb and the
           # biblatex/biber coupling holds before you publish it.
-          curl -fL "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.16.9/tectonic-0.16.9-x86_64-unknown-linux-musl.tar.gz" | tar xz
+          curl -fL --retry 3 -o tectonic.tar.gz "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.16.9/tectonic-0.16.9-x86_64-unknown-linux-musl.tar.gz"
+          echo '60b13a0826ae7ad9ce34b4a2df06bff2cfcfa6dda8a915477c0cbb84e1a4a902  tectonic.tar.gz' | sha256sum -c -
+          tar xzf tectonic.tar.gz
           ./tectonic --version
           sudo apt-get install -qq -y biber || true
           cat > plain.tex <<'EOF'
@@ -142,7 +151,7 @@ jobs:
           file out_bib/bib.pdf | grep -q "PDF document" && echo "OK: biblatex+biber compiles against the new bundle"
 
       - name: Upload the bundle artifact (download, then host on R2)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: texlive-ttb
           path: ttb/out/*
