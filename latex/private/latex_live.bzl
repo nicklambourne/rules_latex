@@ -55,6 +55,7 @@ Design notes:
 """
 
 load("//latex:providers.bzl", "LatexDocumentInfo", "LatexInfo")
+load("@bazel_skylib//lib:shell.bzl", "shell")
 
 def _latex_live_impl(ctx):
     info = ctx.attr.document[LatexInfo]
@@ -273,10 +274,12 @@ if [[ -z "${{BUILD_WORKSPACE_DIRECTORY:-}}" ]]; then
 fi
 
 RUNFILES="$(pwd)"
-exec "$RUNFILES/{runner}" "$RUNFILES/{server}" "$BUILD_WORKSPACE_DIRECTORY" "$RUNFILES" "$@"
+RUNNER={runner}
+SERVER={server}
+exec "$RUNFILES/$RUNNER" "$RUNFILES/$SERVER" "$BUILD_WORKSPACE_DIRECTORY" "$RUNFILES" "$@"
 """.format(
-        runner = python_runner.short_path,
-        server = server_script.short_path,
+        runner = shell.quote(python_runner.short_path),
+        server = shell.quote(server_script.short_path),
     )
     ctx.actions.write(launcher, launcher_content, is_executable = True)
 
