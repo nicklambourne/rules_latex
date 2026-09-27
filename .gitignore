@@ -1,7 +1,6 @@
 # Bazel
 bazel-*
 .bazelrc.user
-MODULE.bazel.lock
 
 # Editors / agent scratch
 .idea/
@@ -28,4 +27,3 @@ __pycache__/
 
 # Release archives produced by release_prep.sh at release time.
 /rules_latex-*.tar.gz
-
