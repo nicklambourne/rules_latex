@@ -24,7 +24,8 @@ re-introspecting attributes.
 <pre>
 load("@rules_latex//latex:providers.bzl", "LatexDocumentInfo")
 
-LatexDocumentInfo(<a href="#LatexDocumentInfo-main">main</a>, <a href="#LatexDocumentInfo-tectonic">tectonic</a>, <a href="#LatexDocumentInfo-biber">biber</a>, <a href="#LatexDocumentInfo-use_system_biber">use_system_biber</a>, <a href="#LatexDocumentInfo-pkg_files">pkg_files</a>, <a href="#LatexDocumentInfo-populate_tool">populate_tool</a>, <a href="#LatexDocumentInfo-staging_lib">staging_lib</a>)
+LatexDocumentInfo(<a href="#LatexDocumentInfo-main">main</a>, <a href="#LatexDocumentInfo-tectonic">tectonic</a>, <a href="#LatexDocumentInfo-biber">biber</a>, <a href="#LatexDocumentInfo-use_system_biber">use_system_biber</a>, <a href="#LatexDocumentInfo-pkg_files">pkg_files</a>, <a href="#LatexDocumentInfo-populate_tool">populate_tool</a>, <a href="#LatexDocumentInfo-staging_lib">staging_lib</a>,
+                  <a href="#LatexDocumentInfo-bundle_url">bundle_url</a>, <a href="#LatexDocumentInfo-ctan_packages">ctan_packages</a>, <a href="#LatexDocumentInfo-bundle_manifest">bundle_manifest</a>)
 </pre>
 
 Compile-time inputs of a `latex_document` target. Exposed so live-preview rules can drive their own parallel tectonic invocations (in particular, a serve-startup cache prime) without re-introspecting the document's attributes.
@@ -40,6 +41,9 @@ Compile-time inputs of a `latex_document` target. Exposed so live-preview rules 
 | <a id="LatexDocumentInfo-pkg_files"></a>pkg_files |  list[(File, string)]: explicit staging overrides.    |
 | <a id="LatexDocumentInfo-populate_tool"></a>populate_tool |  File: the tools/tectonic_populate_cache.py script.    |
 | <a id="LatexDocumentInfo-staging_lib"></a>staging_lib |  File: the tools/staging.py library imported by populate_tool.    |
+| <a id="LatexDocumentInfo-bundle_url"></a>bundle_url |  string: pinned bundle identity used by the implicit prime.    |
+| <a id="LatexDocumentInfo-ctan_packages"></a>ctan_packages |  list[string]: CTAN packages requested by the document.    |
+| <a id="LatexDocumentInfo-bundle_manifest"></a>bundle_manifest |  File: the pinned bundle package manifest for CTAN resolution.    |
 
 
 <a id="LatexInfo"></a>
@@ -61,5 +65,4 @@ Information about a LaTeX source set or compiled document.
 | <a id="LatexInfo-srcs"></a>srcs |  depset[File]: transitive set of LaTeX source files (.tex, .sty, .cls, .bib, images, etc.) that documents depending on this target need to see.    |
 | <a id="LatexInfo-search_paths"></a>search_paths |  depset[string]: directories (relative to the Bazel execroot) that downstream tectonic invocations should add to TEXINPUTS/BIBINPUTS/BSTINPUTS.    |
 | <a id="LatexInfo-offline_strategy"></a>offline_strategy |  string: which offline-mode strategy the target resolved to. One of "user_cache" (explicit `cache = "..."` attr), "bundle" (toolchain-level tectonic.bundle()), or "implicit" (implicit populate-cache pipeline). Set only by `latex_document`; other rules that provide `LatexInfo` (`latex_library`, `latex_pkg`) leave it as the empty string. Consumed by `latex_live` to decide whether to interpose a persistent serve-time cache snapshot via the `//latex:_serve_cache_override` build setting.    |
-
 
