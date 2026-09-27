@@ -1799,7 +1799,27 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _local_origin(self) -> str:
+        return f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def _require_local_request(self, *, require_origin: bool = False) -> bool:
+        # A loopback bind alone does not prevent DNS rebinding or a browser
+        # page on another origin from opening our WebSocket and reading PDFs.
+        origin = self._local_origin()
+        if self.headers.get_all("Host", []) != [origin[7:]]:
+            self._send(HTTPStatus.FORBIDDEN, b"invalid host", "text/plain")
+            return False
+        origins = self.headers.get_all("Origin", [])
+        if (require_origin or origins) and origins != [origin]:
+            self._send(HTTPStatus.FORBIDDEN, b"invalid origin", "text/plain")
+            return False
+        return True
+
     def do_GET(self) -> None:  # noqa: N802 (http.server API)
+        if not self._require_local_request(
+            require_origin=self.path.split("?", 1)[0] == "/ws",
+        ):
+            return
         path = self.path.split("?", 1)[0]
         if path == "/":
             html = INDEX_HTML_TEMPLATE.format(
@@ -1905,6 +1925,8 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self) -> None:  # noqa: N802 (http.server API)
+        if not self._require_local_request():
+            return
         path = self.path.split("?", 1)[0]
         if path == "/sync/reverse":
             self._handle_sync_reverse()
