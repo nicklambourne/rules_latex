@@ -22,6 +22,7 @@ build.
 
 load("//latex:providers.bzl", "LatexInfo")
 load("//latex/private:bundles.bzl", "DEFAULT_BUNDLE")
+load("//latex/private:resolved_inputs.bzl", "resolve_inputs")
 
 # Patterns that, if present in the log, fail the test by default. Users can
 # add to this list via `forbidden_patterns` or override entirely with
@@ -33,30 +34,10 @@ _DEFAULT_FORBIDDEN_PATTERNS = [
     "Fatal error occurred",
 ]
 
-def _collect_transitive_srcs(deps):
-    return [dep[LatexInfo].srcs for dep in deps if LatexInfo in dep]
-
-def _resolved_pkg_files(ctx):
-    out = []
-    for label, rel in ctx.attr.pkg_files.items():
-        files = label.files.to_list()
-        if len(files) != 1:
-            fail(
-                "pkg_files key {} expands to {} files; expected exactly one."
-                    .format(label, len(files)),
-            )
-        out.append((files[0], rel))
-    return out
-
 def _latex_test_impl(ctx):
-    main = ctx.file.main
-    if main not in ctx.files.srcs:
-        fail("`main` ({}) must also appear in `srcs`.".format(main.short_path))
-
-    all_srcs = depset(
-        direct = ctx.files.srcs,
-        transitive = _collect_transitive_srcs(ctx.attr.deps),
-    )
+    inputs = resolve_inputs(ctx)
+    main = inputs.main
+    all_srcs = inputs.srcs
 
     toolchain = ctx.toolchains["//latex/toolchain:toolchain_type"].latex_toolchain_info
     tectonic = toolchain.tectonic
@@ -81,7 +62,7 @@ def _latex_test_impl(ctx):
             )
         biber_file = toolchain.biber
 
-    pkg_files = _resolved_pkg_files(ctx)
+    pkg_files = inputs.pkg_files
     compile_info = ctx.attr._compile_tool[DefaultInfo]
     compile_tool = compile_info.files_to_run.executable
     populate_info = ctx.attr._populate_tool[DefaultInfo]

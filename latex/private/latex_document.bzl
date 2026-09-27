@@ -54,13 +54,11 @@ load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("//latex:providers.bzl", "LatexDocumentInfo", "LatexInfo")
 load("//latex/private:action_schema.bzl", "RULES_LATEX_ACTION_SCHEMA")
 load("//latex/private:bundles.bzl", "DEFAULT_BUNDLE")
+load("//latex/private:resolved_inputs.bzl", "resolve_inputs")
 
 _OUTFMTS = ["pdf", "html", "xdv", "aux"]
 
 _BIBER_STRATEGIES = ["toolchain", "system"]
-
-def _collect_transitive_srcs(deps):
-    return [dep[LatexInfo].srcs for dep in deps if LatexInfo in dep]
 
 def _resolve_biber(ctx, toolchain):
     """Return (biber_file_or_None, use_system) given the rule's attrs.
@@ -85,23 +83,6 @@ def _resolve_biber(ctx, toolchain):
             "See DESIGN.md §4.9.".format(ctx.label),
         )
     return (toolchain.biber, False)
-
-def _resolved_pkg_files(ctx):
-    """Resolve `pkg_files` to a list of (File, staged-path) pairs.
-
-    Each label key must expand to exactly one file (typically a
-    `filegroup` with a single src, or a plain file label).
-    """
-    out = []
-    for label, rel in ctx.attr.pkg_files.items():
-        files = label.files.to_list()
-        if len(files) != 1:
-            fail(
-                "pkg_files key {} expands to {} files; expected exactly one."
-                    .format(label, len(files)),
-            )
-        out.append((files[0], rel))
-    return out
 
 def _populate_cache_action(
         ctx,
@@ -373,9 +354,8 @@ def _compile_action(
         )
 
 def _latex_document_impl(ctx):
-    main = ctx.file.main
-    if main not in ctx.files.srcs:
-        fail("`main` ({}) must also appear in `srcs`.".format(main.short_path))
+    inputs = resolve_inputs(ctx)
+    main = inputs.main
     if ctx.attr.reproducible and ctx.attr.synctex:
         fail(
             "`reproducible` and `synctex` cannot both be True on the same " +
@@ -386,10 +366,7 @@ def _latex_document_impl(ctx):
 
     ctan_packages = ctx.attr.ctan_packages
 
-    all_srcs = depset(
-        direct = ctx.files.srcs,
-        transitive = _collect_transitive_srcs(ctx.attr.deps),
-    )
+    all_srcs = inputs.srcs
 
     outfmt = ctx.attr.outfmt
     output = ctx.actions.declare_file("{}.{}".format(ctx.label.name, outfmt))
@@ -404,7 +381,7 @@ def _latex_document_impl(ctx):
     tectonic = toolchain.tectonic
     biber_file, use_system_biber = _resolve_biber(ctx, toolchain)
     user_cache = ctx.file.cache
-    pkg_files = _resolved_pkg_files(ctx)
+    pkg_files = inputs.pkg_files
 
     # Validate ctan_packages compatibility with offline mode.
     if ctan_packages and toolchain.bundle and not user_cache:

@@ -38,22 +38,15 @@ destination. It's a developer command, run on demand, much like
 
 load("//latex:providers.bzl", "LatexInfo")
 load("//latex/private:bundles.bzl", "DEFAULT_BUNDLE")
-
-def _collect_transitive_srcs(deps):
-    return [dep[LatexInfo].srcs for dep in deps if LatexInfo in dep]
+load("//latex/private:resolved_inputs.bzl", "resolve_inputs")
 
 def _latex_cache_snapshot_impl(ctx):
     toolchain = ctx.toolchains["//latex/toolchain:toolchain_type"].latex_toolchain_info
     tectonic = toolchain.tectonic
 
-    main = ctx.file.main
-    if main not in ctx.files.srcs:
-        fail("`main` ({}) must also appear in `srcs`.".format(main.short_path))
-
-    all_srcs = depset(
-        direct = ctx.files.srcs,
-        transitive = _collect_transitive_srcs(ctx.attr.deps),
-    ).to_list()
+    inputs = resolve_inputs(ctx)
+    main = inputs.main
+    all_srcs = inputs.srcs.to_list()
 
     # Decide whether to include biber in the priming run. Snapshots
     # built without biber miss bibliography-related TeX Live files, so
@@ -82,7 +75,7 @@ def _latex_cache_snapshot_impl(ctx):
             src = src.short_path,
             rel = rel,
         )
-        for src, rel in _resolved_pkg_files(ctx).items()
+        for src, rel in inputs.pkg_files
     ])
     biber_arg = (
         '--biber "{}"'.format(biber_file.short_path) if biber_file else ""
@@ -151,23 +144,6 @@ exec "{tool}" \\
         runfiles_files.append(ctx.file._bundle_manifest)
     runfiles = ctx.runfiles(files = runfiles_files).merge(tool_info.default_runfiles)
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
-
-def _resolved_pkg_files(ctx):
-    """Resolve `pkg_files` to a {File: staged-path} dict.
-
-    Each label key must expand to exactly one file (typically a
-    `filegroup` with a single src, or a plain file label).
-    """
-    out = {}
-    for label, rel in ctx.attr.pkg_files.items():
-        files = label.files.to_list()
-        if len(files) != 1:
-            fail(
-                "pkg_files key {} expands to {} files; expected exactly one."
-                    .format(label, len(files)),
-            )
-        out[files[0]] = rel
-    return out
 
 latex_cache_snapshot = rule(
     implementation = _latex_cache_snapshot_impl,
