@@ -258,6 +258,9 @@ exit $status
         files = runfiles_files,
         transitive_files = all_srcs,
     ).merge(compile_info.default_runfiles).merge(populate_info.default_runfiles)
+    runfiles = runfiles.merge(toolchain.tectonic_runfiles)
+    if biber_file:
+        runfiles = runfiles.merge(toolchain.biber_runfiles)
     return [DefaultInfo(executable = test_script, runfiles = runfiles)]
 
 latex_test = rule(

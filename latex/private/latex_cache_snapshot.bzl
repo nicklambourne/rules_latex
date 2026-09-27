@@ -150,6 +150,9 @@ exec "{tool}" \\
     if ctx.attr.ctan_packages:
         runfiles_files.append(ctx.file._bundle_manifest)
     runfiles = ctx.runfiles(files = runfiles_files).merge(tool_info.default_runfiles)
+    runfiles = runfiles.merge(toolchain.tectonic_runfiles)
+    if biber_file:
+        runfiles = runfiles.merge(toolchain.biber_runfiles)
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
 
 def _resolved_pkg_files(ctx):

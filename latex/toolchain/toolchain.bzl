@@ -12,19 +12,27 @@ LatexToolchainInfo = provider(
     doc = "Resolved tectonic toolchain.",
     fields = {
         "tectonic": "File: the tectonic executable.",
+        "tectonic_tool": "FilesToRunProvider: executable plus its runtime files.",
+        "tectonic_runfiles": "Runfiles: runtime files for launchers.",
         "bundle": "File|None: a fully downloaded offline package bundle, " +
                   "or None for range-fetched/implicit-cache operation.",
         "biber": "File|None: a biber executable for bibliography processing, " +
                  "or None if biber isn't available for this platform.",
+        "biber_tool": "FilesToRunProvider|None: biber plus its runtime files.",
+        "biber_runfiles": "Runfiles|None: runtime files for biber launchers.",
     },
 )
 
 def _latex_toolchain_impl(ctx):
     toolchain_info = platform_common.ToolchainInfo(
         latex_toolchain_info = LatexToolchainInfo(
-            tectonic = ctx.file.tectonic,
+            tectonic = ctx.executable.tectonic,
+            tectonic_tool = ctx.attr.tectonic[DefaultInfo].files_to_run,
+            tectonic_runfiles = ctx.attr.tectonic[DefaultInfo].default_runfiles,
             bundle = ctx.file.bundle,
-            biber = ctx.file.biber,
+            biber = ctx.executable.biber,
+            biber_tool = ctx.attr.biber[DefaultInfo].files_to_run if ctx.attr.biber else None,
+            biber_runfiles = ctx.attr.biber[DefaultInfo].default_runfiles if ctx.attr.biber else None,
         ),
     )
     return [toolchain_info]
@@ -35,7 +43,7 @@ latex_toolchain = rule(
     attrs = {
         "tectonic": attr.label(
             doc = "The tectonic executable.",
-            allow_single_file = True,
+            allow_files = True,
             executable = True,
             cfg = "exec",
             mandatory = True,
@@ -53,7 +61,7 @@ latex_toolchain = rule(
                   "available on PATH so tectonic can shell out to it for " +
                   "bibliography processing. Vendored for every supported " +
                   "platform (biber 2.21).",
-            allow_single_file = True,
+            allow_files = True,
             executable = True,
             cfg = "exec",
         ),

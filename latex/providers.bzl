@@ -41,7 +41,9 @@ LatexDocumentInfo = provider(
     fields = {
         "main": "File: the main .tex file passed to tectonic.",
         "tectonic": "File: the tectonic binary resolved from the toolchain.",
+        "tectonic_runfiles": "Runfiles: runtime files of the tectonic executable.",
         "biber": "File or None: the biber binary, if biber = True was set.",
+        "biber_runfiles": "Runfiles or None: runtime files of biber, if enabled.",
         "use_system_biber": "bool: True when biber_strategy = \"system\".",
         "pkg_files": "list[(File, string)]: explicit staging overrides.",
         "populate_tool": "File: the tools/tectonic_populate_cache.py script.",

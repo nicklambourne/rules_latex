@@ -292,6 +292,11 @@ exec "$RUNFILES/{runner}" "$RUNFILES/{server}" "$BUILD_WORKSPACE_DIRECTORY" "$RU
             ] + serve_web_assets + serve_cache_runfiles + serve_fast_runfiles
         ),
     ).merge(python_runner_info.default_runfiles)
+    if LatexDocumentInfo in ctx.attr.document:
+        doc_info = ctx.attr.document[LatexDocumentInfo]
+        runfiles = runfiles.merge(doc_info.tectonic_runfiles)
+        if doc_info.biber_runfiles:
+            runfiles = runfiles.merge(doc_info.biber_runfiles)
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
 
 latex_live = rule(
