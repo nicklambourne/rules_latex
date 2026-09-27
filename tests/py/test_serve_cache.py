@@ -11,8 +11,9 @@ without actually invoking tectonic:
     re-prime on build failure).
   * Cache nonce computation (used as an --action_env to invalidate
     Bazel's action cache when the snapshot is re-primed).
+  * Serve-time prime arguments for the pinned bundle and CTAN overlay.
 
-End-to-end behaviour (run_prime invoking tectonic, the override
+End-to-end behaviour (actually running tectonic, the override
 flag actually changing the action graph, etc.) is covered by the
 Starlark analysis test and the example targets in CI.
 """
@@ -20,12 +21,16 @@ Starlark analysis test and the example targets in CI.
 from __future__ import annotations
 
 import importlib.util
+import io
 import os
 import sys
+import tarfile
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 _TOOLS_DIR = Path(__file__).resolve().parent.parent.parent / "tools"
@@ -41,6 +46,52 @@ def _load_module(name: str, path: Path):
 
 
 _SC = _load_module("serve_cache", _SERVE_CACHE_PATH)
+
+
+class TestPrimeConfiguration(unittest.TestCase):
+    def test_preview_prime_passes_bundle_and_ctan_options(self):
+        with tempfile.TemporaryDirectory(prefix="serve_cache_prime_test_") as directory:
+            workspace = Path(directory)
+            layout = _SC.derive_cache_layout(workspace, "//doc:doc")
+            spec = _SC.PrimeSpec(
+                tectonic=workspace / "tectonic",
+                populate_tool=workspace / "populate.py",
+                main="doc/main.tex",
+                srcs=("doc/main.tex",),
+                pkg_files=(),
+                biber=None,
+                use_system_biber=False,
+                bundle_url="https://example.invalid/texlive2026.ttb",
+                ctan_packages=("example",),
+                bundle_manifest=workspace / "bundle_manifest.txt",
+            )
+            commands = []
+
+            def fake_run(cmd, **_kwargs):
+                commands.append(cmd)
+                with tarfile.open(layout.snapshot, "w:gz") as archive:
+                    content = b"cache fixture"
+                    info = tarfile.TarInfo("cache/data")
+                    info.size = len(content)
+                    archive.addfile(info, io.BytesIO(content))
+                return SimpleNamespace(returncode=0, stderr="")
+
+            with patch.object(_SC.subprocess, "run", side_effect=fake_run):
+                _SC.run_prime(layout, spec, workspace, log=lambda _: None)
+
+            self.assertTrue(_SC.is_extracted(layout))
+            self.assertEqual(len(commands), 1)
+            cmd = commands[0]
+            self.assertEqual(
+                cmd[cmd.index("--bundle-url") + 1], spec.bundle_url,
+            )
+            self.assertEqual(
+                cmd[cmd.index("--ctan-package") + 1], "example",
+            )
+            self.assertEqual(
+                cmd[cmd.index("--bundle-manifest") + 1],
+                str(spec.bundle_manifest),
+            )
 
 
 # -----------------------------------------------------------------------------

@@ -251,6 +251,9 @@ class PrimeSpec:
     pkg_files: tuple[tuple[str, str], ...]  # (workspace-rel src, staged rel)
     biber: Path | None
     use_system_biber: bool
+    bundle_url: str
+    ctan_packages: tuple[str, ...]
+    bundle_manifest: Path | None
 
 
 class PrimeFailure(RuntimeError):
@@ -386,6 +389,8 @@ def run_prime(
                 spec.main,
                 "--output",
                 str(layout.snapshot),
+                "--bundle-url",
+                spec.bundle_url,
             ]
             for src in spec.srcs:
                 cmd.extend(["--src", src])
@@ -393,6 +398,12 @@ def run_prime(
                 cmd.extend(["--pkg-file", f"{src}={rel}"])
             if spec.biber is not None:
                 cmd.extend(["--biber", str(spec.biber)])
+            for package in spec.ctan_packages:
+                cmd.extend(["--ctan-package", package])
+            if spec.ctan_packages:
+                if spec.bundle_manifest is None:
+                    raise ValueError("CTAN priming requires a bundle manifest")
+                cmd.extend(["--bundle-manifest", str(spec.bundle_manifest)])
 
             env = os.environ.copy()
             env["LC_ALL"] = "C.UTF-8"

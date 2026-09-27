@@ -24,6 +24,10 @@ latex_document(
 ```
 
 That's the entire API surface: list package names, get the packages.
+If you attach `latex_live` to this document, its first serve-time cache
+prime uses the same TeX Live 2026 bundle and CTAN package list. The
+pre-extracted structured cache retains the `ctan_pkgs/` overlay for
+subsequent offline preview compiles.
 
 [tds]: https://tug.org/tds/
 

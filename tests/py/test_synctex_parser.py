@@ -46,6 +46,9 @@ _PLACEHOLDERS = {
     "{{PRIME_STAGING_LIB_RUNFILE}}": "",
     "{{PRIME_BIBER_RUNFILE}}": "",
     "{{PRIME_USE_SYSTEM_BIBER}}": "",
+    "{{PRIME_BUNDLE_URL}}": "",
+    "{{PRIME_BUNDLE_MANIFEST_RUNFILE}}": "",
+    "{{PRIME_CTAN_PACKAGES}}": "",
     "{{PRIME_SRCS}}": "",
     "{{PRIME_PKG_FILES}}": "",
 }
