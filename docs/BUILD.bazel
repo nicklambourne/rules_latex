@@ -69,6 +69,7 @@ bzl_library(
         # common_settings.bzl for the _serve_cache_override build
         # setting; Stardoc needs a bzl_library reference to it.
         "@bazel_skylib//rules:common_settings",
+        "@bazel_skylib//lib:shell",
     ],
 )
 

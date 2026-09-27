@@ -54,8 +54,8 @@ Design notes:
   wiring.
 """
 
-load("//latex:providers.bzl", "LatexDocumentInfo", "LatexInfo")
 load("@bazel_skylib//lib:shell.bzl", "shell")
+load("//latex:providers.bzl", "LatexDocumentInfo", "LatexInfo")
 
 def _latex_live_impl(ctx):
     info = ctx.attr.document[LatexInfo]

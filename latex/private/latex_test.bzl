@@ -20,9 +20,9 @@ and runtime errors — the things that should never silently slip into a
 build.
 """
 
+load("@bazel_skylib//lib:shell.bzl", "shell")
 load("//latex:providers.bzl", "LatexInfo")
 load("//latex/private:bundles.bzl", "DEFAULT_BUNDLE")
-load("@bazel_skylib//lib:shell.bzl", "shell")
 
 # Patterns that, if present in the log, fail the test by default. Users can
 # add to this list via `forbidden_patterns` or override entirely with

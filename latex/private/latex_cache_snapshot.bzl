@@ -36,9 +36,9 @@ destination. It's a developer command, run on demand, much like
 `cargo vendor` or `pip-compile`.
 """
 
+load("@bazel_skylib//lib:shell.bzl", "shell")
 load("//latex:providers.bzl", "LatexInfo")
 load("//latex/private:bundles.bzl", "DEFAULT_BUNDLE")
-load("@bazel_skylib//lib:shell.bzl", "shell")
 
 def _collect_transitive_srcs(deps):
     return [dep[LatexInfo].srcs for dep in deps if LatexInfo in dep]
