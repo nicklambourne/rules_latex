@@ -111,14 +111,27 @@ try {
   ]);
   await cdp.send("Page.navigate", { url });
 
-  const state = () => cdp.evaluate(`(() => ({
-    rendered: [...document.querySelectorAll("#viewer .page-wrap")]
-      .some((page) => page.dataset.rendered === "1" &&
-        page.querySelector("canvas")?.width > 0),
-    renders: window.__serveWebRenderStats?.count || 0,
-    generations: window.__serveWebRenderStats?.generations || 0,
-    status: document.querySelector("#status")?.className || "",
-  }))()`);
+  const state = () => cdp.evaluate(`(() => {
+    const canvas = [...document.querySelectorAll("#viewer .page-wrap")]
+      .find((page) => page.dataset.rendered === "1")?.querySelector("canvas");
+    let pixels = null;
+    if (canvas?.width > 0) {
+      const data = canvas.getContext("2d")
+        .getImageData(0, 0, canvas.width, canvas.height).data;
+      let hash = 2166136261;
+      for (let i = 0; i < data.length; i += 4) {
+        hash = Math.imul(hash ^ data[i], 16777619) >>> 0;
+      }
+      pixels = hash;
+    }
+    return {
+      rendered: pixels !== null,
+      pixels,
+      renders: window.__serveWebRenderStats?.count || 0,
+      generations: window.__serveWebRenderStats?.generations || 0,
+      status: document.querySelector("#status")?.className || "",
+    };
+  })()`);
   const first = await waitFor(async () => {
     const current = await state();
     return current?.rendered && current.status === "ok" ? current : null;
@@ -129,7 +142,7 @@ try {
   assert.match(original, /\\end\{document\}/);
   const revised = original.replace(
     /\\end\{document\}/,
-    "\\par Browser smoke revision.\n\\end{document}",
+    "\\par {\\large\\bfseries Browser smoke revision.}\\par\\rule{120pt}{18pt}\n\\end{document}",
   );
   await writeFile(sourcePath, revised);
   const second = await waitFor(async () => {
@@ -139,6 +152,7 @@ try {
       current?.rendered && current.renders > first.renders ? current : null;
   }, "PDF.js render after a source edit", 60000);
 
+  assert.notEqual(second.pixels, first.pixels, "the edited PDF should repaint different pixels");
   assert.deepEqual(cdp.errors, [], `browser errors: ${cdp.errors.join("; ")}`);
   console.log("PDF.js browser smoke passed", { first, second });
 } finally {
