@@ -122,6 +122,12 @@ def normalise_short_path(p: Path) -> Path:
         and parts[2] == _BAZEL_BIN_SEGMENT
     ):
         return Path(*parts[3:])
+    # Runfiles short_path for an external repository begins with
+    # ../<repo>, while execroot actions see external/<repo>.
+    # Normalize only the logical staged location; callers still read
+    # the original physical path when copying the file.
+    if len(parts) >= 3 and parts[0] == "..":
+        return Path("external", *parts[1:])
     return p
 
 
@@ -178,7 +184,7 @@ def stage_sources(
     work_dir: Path,
 ) -> Path:
     """Stage ``main`` and all ``srcs`` into ``work_dir`` under the
-    main-rooted layout. Apply ``pkg_files`` overrides last.
+    main-rooted layout. Resolve ``pkg_files`` before copying inputs.
 
     All ``src`` paths (and ``main``) must be **workspace-relative**
     (or, equivalently, bazel execroot-relative). Absolute paths are
@@ -201,48 +207,15 @@ def stage_sources(
                 f"src {src} must be a workspace-relative path, not absolute"
             )
     main_pkg = _main_package(main)
-    work_dir.mkdir(parents=True, exist_ok=True)
-
-    # Track placements so we can detect conflicts.
-    placements: dict[Path, Path] = {}
-
-    def _place(src: Path, rel: Path) -> None:
-        # Reject paths that escape work_dir. Use string-level check
-        # against ``..`` segments so we don't depend on the work_dir
-        # actually existing on disk (it may be a future location).
-        if ".." in rel.parts or rel.is_absolute():
-            raise StagingError(
-                f"staged path {rel} for {src} escapes the work directory"
-            )
-        # Reject conflicting placements.
-        existing = placements.get(rel)
-        if existing is not None:
-            if existing != src:
-                raise StagingError(
-                    f"two different inputs would be staged at the same path "
-                    f"{rel}: {existing} and {src}. Use pkg_files to override "
-                    "placement for one of them."
-                )
-            # Same src at same rel: already placed, idempotent no-op.
-            # The repeat is normal under the action wrappers, which
-            # pass `main` in both --main and --src (see
-            # tools/tectonic_compile.py).
-            return
-        placements[rel] = src
-        dest = work_dir / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        _materialise(src, dest)
-
-    # Auto-staged inputs first.
     main_rel = compute_staged_path(main, main_pkg)
-    _place(main, main_rel)
-    for src in srcs:
-        rel = compute_staged_path(src, main_pkg)
-        _place(src, rel)
-
-    # User-declared overrides last so they win on path conflicts.
+    if main_rel.is_absolute() or ".." in main_rel.parts:
+        raise StagingError(f"staged main path {main_rel} escapes the work directory")
+    overrides: dict[Path, Path] = {}
+    overridden_sources: set[Path] = set()
     for entry in pkg_files:
         rel = Path(entry.rel)
+        if rel == Path("."):
+            raise StagingError("pkg_files staged path must name a file")
         if rel.is_absolute():
             raise StagingError(
                 f"pkg_files staged path {rel} must be relative to the "
@@ -253,13 +226,45 @@ def stage_sources(
                 f"pkg_files staged path {rel} contains '..' and would "
                 "escape the work directory"
             )
-        # An override replaces whatever was there before.
-        placements[rel] = entry.src
+        existing = overrides.get(rel)
+        if existing is not None and existing != entry.src:
+            raise StagingError(
+                f"two pkg_files inputs target {rel}: {existing} and {entry.src}"
+            )
+        if rel == main_rel and entry.src != main:
+            raise StagingError(f"pkg_files cannot replace main file at {main_rel}")
+        overrides[rel] = entry.src
+        overridden_sources.add(entry.src)
+
+    placements: dict[Path, Path] = {main_rel: main}
+    for src in srcs:
+        if src in overridden_sources and src != main:
+            continue
+        rel = compute_staged_path(src, main_pkg)
+        if rel.is_absolute() or ".." in rel.parts:
+            raise StagingError(f"staged path {rel} for {src} escapes the work directory")
+        existing = placements.get(rel)
+        if existing is not None and existing != src and rel not in overrides:
+            raise StagingError(
+                f"two different inputs would be staged at the same path "
+                f"{rel}: {existing} and {src}. Use pkg_files to override "
+                "placement for one of them."
+            )
+        placements[rel] = src
+
+    # Explicit destinations replace auto-placement only after every
+    # override and collision has been validated.
+    placements.update(overrides)
+    for rel in placements:
+        for parent in rel.parents:
+            if parent in placements:
+                raise StagingError(
+                    f"staged file {parent} conflicts with nested file {rel}"
+                )
+    work_dir.mkdir(parents=True, exist_ok=True)
+    for rel, src in placements.items():
         dest = work_dir / rel
-        # Clean any previous file at this location so the override wins.
-        if dest.exists() or dest.is_symlink():
-            dest.unlink()
         dest.parent.mkdir(parents=True, exist_ok=True)
-        _materialise(entry.src, dest)
+        _materialise(src, dest)
 
     return work_dir / main_rel
