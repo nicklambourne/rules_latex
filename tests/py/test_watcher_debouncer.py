@@ -1,4 +1,4 @@
-"""Unit tests for the watcher debouncer FSM embedded in serve_web.py.tpl.
+"""Unit tests for the watcher debouncer FSM in serve_web_runtime.py.
 
 The watcher's job is to bridge between filesystem mtime polling and
 the ``bazel build`` invocation. The debouncer FSM in
@@ -23,76 +23,16 @@ serve smoke target.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-import tempfile
 import unittest
 from pathlib import Path
 
+from tests.py._server_loader import load_server_module
 
-_TEMPLATE_PATH = (
-    Path(__file__).resolve().parent.parent.parent
-    / "latex"
-    / "private"
-    / "serve_web.py.tpl"
+
+_M = load_server_module(
+    "serve_web_test_module_debouncer",
+    extra={"SYNCTEX_RELPATH": ""},
 )
-
-# Identical to the test_synctex_parser placeholder set. Kept
-# separate (rather than imported) so this test stays runnable
-# in isolation without an import-order dependency on the sibling
-# test file.
-_PLACEHOLDERS = {
-    "{{DOCUMENT_LABEL}}": "//test:doc",
-    "{{PDF_RELPATH}}": "test/doc.pdf",
-    "{{SYNCTEX_RELPATH}}": "",
-    "{{WATCHED_PATHS}}": "test/doc.tex",
-    "{{POLL_INTERVAL}}": "80",
-    "{{DEBOUNCE_MS}}": "250",
-    "{{DEBOUNCE_MAX_MS}}": "1500",
-    "{{PORT}}": "8765",
-    "{{DOCUMENT_NAME}}": "doc",
-    "{{PDFJS_LIB_RUNFILE}}": "_pdfjs/pdf.mjs",
-    "{{PDFJS_WORKER_RUNFILE}}": "_pdfjs/pdf.worker.mjs",
-    "{{OPEN_ON_START}}": "0",
-    "{{PDF_CHUNKS_RUNFILE}}": "_tools/pdf_chunks.py",
-    "{{ENABLE_SERVE_CACHE}}": "",
-    "{{SERVE_CACHE_RUNFILE}}": "",
-    "{{PRIME_MAIN_RUNFILE}}": "",
-    "{{PRIME_TECTONIC_RUNFILE}}": "",
-    "{{PRIME_POPULATE_TOOL_RUNFILE}}": "",
-    "{{PRIME_STAGING_LIB_RUNFILE}}": "",
-    "{{PRIME_BIBER_RUNFILE}}": "",
-    "{{PRIME_USE_SYSTEM_BIBER}}": "",
-    "{{PRIME_SRCS}}": "",
-    "{{PRIME_PKG_FILES}}": "",
-}
-
-
-def _load_template_module():
-    source = _TEMPLATE_PATH.read_text()
-    for placeholder, replacement in _PLACEHOLDERS.items():
-        source = source.replace(placeholder, replacement)
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".py", delete=False, encoding="utf-8",
-    )
-    try:
-        tmp.write(source)
-        tmp.close()
-        spec = importlib.util.spec_from_file_location(
-            "serve_web_test_module_debouncer", tmp.name,
-        )
-        module = importlib.util.module_from_spec(spec)
-        # Install in sys.modules before exec so the @dataclass
-        # decorator's `sys.modules.get(cls.__module__).__dict__`
-        # lookup works under Python 3.12+.
-        sys.modules["serve_web_test_module_debouncer"] = module
-        spec.loader.exec_module(module)
-        return module
-    finally:
-        Path(tmp.name).unlink()
-
-
-_M = _load_template_module()
 
 
 # Convenience: short aliases for the symbols under test.

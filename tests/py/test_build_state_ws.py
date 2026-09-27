@@ -24,9 +24,9 @@ import unittest
 from pathlib import Path
 from typing import Optional
 
-from tests.py._template_loader import load_template_module
+from tests.py._server_loader import load_server_module
 
-_M = load_template_module(name="serve_web_ws_test")
+_M = load_server_module(name="serve_web_ws_test")
 
 
 # --- Test doubles -----------------------------------------------

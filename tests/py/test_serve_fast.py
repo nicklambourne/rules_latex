@@ -1,4 +1,4 @@
-"""Unit tests for the serve_fast decision logic inside serve_web.py.tpl.
+"""Unit tests for the serve_fast decision logic inside serve_web_runtime.py.
 
 serve_fast lets the watcher recompile a content edit by replaying the
 TectonicCompile action directly (via tools/tectonic_compile.py) instead
@@ -21,9 +21,9 @@ import types
 import unittest
 from pathlib import Path
 
-from tests.py._template_loader import load_template_module
+from tests.py._server_loader import load_server_module
 
-_M = load_template_module(name="serve_web_serve_fast_test")
+_M = load_server_module(name="serve_web_serve_fast_test")
 
 
 def _fake_cache_ctx(missing_resource: bool):

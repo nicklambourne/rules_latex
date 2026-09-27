@@ -101,7 +101,7 @@ def _latex_live_impl(ctx):
     python_runner = python_runner_info.files_to_run.executable
 
     # Live-preview client assets (serve_web.js / serve_web.css and the
-    # pure-logic modules they import). Extracted from serve_web.py.tpl so
+    # pure-logic modules they import). They are separate source files so
     # they can be unit-tested under //tests/js; the server serves each at
     # /_assets/<basename>. Passed as a newline-separated
     # "<basename>=<runfile_path>" manifest.
@@ -131,7 +131,7 @@ def _latex_live_impl(ctx):
     prime_serve_cache_path = ""
     prime_staging_lib_path = ""
     prime_biber_path = ""
-    prime_use_system_biber = ""
+    prime_use_system_biber = False
 
     if enable_serve_cache:
         if LatexDocumentInfo not in ctx.attr.document:
@@ -154,8 +154,7 @@ def _latex_live_impl(ctx):
 
         # The source-side runfiles we will hand to the populate tool
         # via --src on serve startup. Stored as short_paths so the
-        # serve_web.py.tpl substitution can resolve them against the
-        # workspace at runtime.
+        # runtime can resolve them against the workspace.
         for src in srcs:
             if src.owner.workspace_name:
                 # Cross-repo sources don't have a workspace-relative
@@ -198,7 +197,7 @@ def _latex_live_impl(ctx):
             if doc_info.biber:
                 prime_biber_path = doc_info.biber.short_path
                 serve_cache_runfiles.append(doc_info.biber)
-            prime_use_system_biber = "1" if doc_info.use_system_biber else ""
+            prime_use_system_biber = doc_info.use_system_biber
 
     # serve_fast (opt-in, default False): when set, the watcher replays
     # the TectonicCompile action's params file directly via
@@ -209,7 +208,6 @@ def _latex_live_impl(ctx):
     # so we can stage hermetically. The watcher always falls back to
     # `bazel build` for the first build and for any fast build that
     # fails a missing-resource check. See DESIGN.md §4.7.4.
-    serve_fast_flag = ""
     compile_tool_path = ""
     serve_fast_runfiles = []
     if ctx.attr.serve_fast:
@@ -222,43 +220,49 @@ def _latex_live_impl(ctx):
             )
         fast_doc_info = ctx.attr.document[LatexDocumentInfo]
         compile_tool = ctx.file._compile_tool
-        serve_fast_flag = "1"
         compile_tool_path = compile_tool.short_path
         serve_fast_runfiles = [compile_tool, fast_doc_info.staging_lib]
+
+    server_runtime = ctx.file._server_runtime
+    server_config = ctx.actions.declare_file(ctx.label.name + ".json")
+    ctx.actions.write(server_config, json.encode({
+        "DOCUMENT_LABEL": document_label,
+        "PDF_RELPATH": pdf_relpath,
+        "SYNCTEX_RELPATH": synctex_relpath,
+        "WATCHED_PATHS_RAW": "\n".join(watched_paths),
+        "POLL_INTERVAL_MS": ctx.attr.poll_interval_ms,
+        "DEBOUNCE_MS": ctx.attr.debounce_ms,
+        "DEBOUNCE_MAX_MS": ctx.attr.debounce_max_ms,
+        "PORT": ctx.attr.port,
+        "DOCUMENT_NAME": ctx.attr.document.label.name,
+        "OPEN_ON_START": ctx.attr.open_on_start,
+        "PDFJS_LIB_RUNFILE": pdfjs_lib.short_path,
+        "PDFJS_WORKER_RUNFILE": pdfjs_worker.short_path,
+        "SERVE_WEB_ASSETS": serve_web_assets_manifest,
+        "PDF_CHUNKS_RUNFILE": pdf_chunks_lib.short_path,
+        "WS_SERVER_RUNFILE": ws_server_lib.short_path,
+        "LOGO_RUNFILE": logo.short_path,
+        "ENABLE_SERVE_CACHE": enable_serve_cache,
+        "SERVE_CACHE_RUNFILE": prime_serve_cache_path,
+        "PRIME_MAIN_RUNFILE": prime_main_path,
+        "PRIME_TECTONIC_RUNFILE": prime_tectonic_path,
+        "PRIME_POPULATE_TOOL_RUNFILE": prime_populate_tool_path,
+        "PRIME_STAGING_LIB_RUNFILE": prime_staging_lib_path,
+        "PRIME_BIBER_RUNFILE": prime_biber_path,
+        "PRIME_USE_SYSTEM_BIBER": prime_use_system_biber,
+        "PRIME_SRCS_RAW": "\n".join(prime_srcs_lines),
+        "PRIME_PKG_FILES_RAW": "\n".join(prime_pkg_files_lines),
+        "SERVE_FAST": ctx.attr.serve_fast,
+        "COMPILE_TOOL_RUNFILE": compile_tool_path,
+    }))
 
     server_script = ctx.actions.declare_file(ctx.label.name + ".py")
     ctx.actions.expand_template(
         template = ctx.file._server_template,
         output = server_script,
         substitutions = {
-            "{{DOCUMENT_LABEL}}": document_label,
-            "{{PDF_RELPATH}}": pdf_relpath,
-            "{{SYNCTEX_RELPATH}}": synctex_relpath,
-            "{{WATCHED_PATHS}}": "\n".join(watched_paths),
-            "{{POLL_INTERVAL}}": str(ctx.attr.poll_interval_ms),
-            "{{DEBOUNCE_MS}}": str(ctx.attr.debounce_ms),
-            "{{DEBOUNCE_MAX_MS}}": str(ctx.attr.debounce_max_ms),
-            "{{PORT}}": str(ctx.attr.port),
-            "{{DOCUMENT_NAME}}": ctx.attr.document.label.name,
-            "{{PDFJS_LIB_RUNFILE}}": pdfjs_lib.short_path,
-            "{{PDFJS_WORKER_RUNFILE}}": pdfjs_worker.short_path,
-            "{{OPEN_ON_START}}": "1" if ctx.attr.open_on_start else "0",
-            "{{PDF_CHUNKS_RUNFILE}}": pdf_chunks_lib.short_path,
-            "{{WS_SERVER_RUNFILE}}": ws_server_lib.short_path,
-            "{{LOGO_RUNFILE}}": logo.short_path,
-            "{{ENABLE_SERVE_CACHE}}": "1" if enable_serve_cache else "",
-            "{{SERVE_CACHE_RUNFILE}}": prime_serve_cache_path,
-            "{{PRIME_MAIN_RUNFILE}}": prime_main_path,
-            "{{PRIME_TECTONIC_RUNFILE}}": prime_tectonic_path,
-            "{{PRIME_POPULATE_TOOL_RUNFILE}}": prime_populate_tool_path,
-            "{{PRIME_STAGING_LIB_RUNFILE}}": prime_staging_lib_path,
-            "{{PRIME_BIBER_RUNFILE}}": prime_biber_path,
-            "{{PRIME_USE_SYSTEM_BIBER}}": prime_use_system_biber,
-            "{{PRIME_SRCS}}": "\n".join(prime_srcs_lines),
-            "{{PRIME_PKG_FILES}}": "\n".join(prime_pkg_files_lines),
-            "{{SERVE_WEB_ASSETS}}": serve_web_assets_manifest,
-            "{{SERVE_FAST}}": serve_fast_flag,
-            "{{COMPILE_TOOL_RUNFILE}}": compile_tool_path,
+            "{{SERVER_RUNTIME_RUNFILE}}": server_runtime.short_path,
+            "{{SERVER_CONFIG_RUNFILE}}": server_config.short_path,
         },
     )
 
@@ -284,6 +288,8 @@ exec "$RUNFILES/{runner}" "$RUNFILES/{server}" "$BUILD_WORKSPACE_DIRECTORY" "$RU
         files = (
             [
                 server_script,
+                server_config,
+                server_runtime,
                 pdfjs_lib,
                 pdfjs_worker,
                 pdf_chunks_lib,
@@ -371,6 +377,10 @@ latex_live = rule(
             default = "//latex/private:serve_web.py.tpl",
             allow_single_file = True,
         ),
+        "_server_runtime": attr.label(
+            default = "//latex/private:serve_web_runtime.py",
+            allow_single_file = True,
+        ),
         "_python_runner": attr.label(
             default = "//tools:python_runner",
             executable = True,
@@ -394,8 +404,8 @@ latex_live = rule(
         ),
         "_serve_web_assets": attr.label(
             doc = "Live-preview client assets (serve_web*.js + " +
-                  "serve_web.css), extracted from serve_web.py.tpl and " +
-                  "served at /_assets/. Pure-logic modules are " +
+                  "serve_web.css), served at /_assets/ by the Python " +
+                  "runtime. Pure-logic modules are " +
                   "unit-tested under //tests/js.",
             default = "//latex/private:serve_web_client_assets",
         ),

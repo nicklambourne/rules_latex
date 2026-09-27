@@ -1,4 +1,4 @@
-"""Unit tests for `_combine_output` inside serve_web.py.tpl.
+"""Unit tests for `_combine_output` inside serve_web_runtime.py.
 
 `_combine_output(stdout, stderr)` builds the "Build log" drawer
 payload from the captured outputs of a `bazel build` subprocess.
@@ -15,9 +15,9 @@ from __future__ import annotations
 import unittest
 
 # Test helpers — same loader pattern as test_synctex_parser.py.
-from tests.py._template_loader import load_template_module
+from tests.py._server_loader import load_server_module
 
-_M = load_template_module(name="serve_web_combine_output_test")
+_M = load_server_module(name="serve_web_combine_output_test")
 
 
 class CombineOutputTest(unittest.TestCase):

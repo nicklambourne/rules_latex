@@ -17,9 +17,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.py._template_loader import load_template_module
+from tests.py._server_loader import load_server_module
 
-_M = load_template_module(name="serve_web_git_test")
+_M = load_server_module(name="serve_web_git_test")
 
 
 def _git(*args: str, cwd: Path, env: dict | None = None):
