@@ -20,6 +20,13 @@ local_path_override(
     path = "..",
 )
 
+# Exercise a source-providing rules_latex library from another module.
+bazel_dep(name = "rules_latex_contract_fixture", version = "0.0.0")
+local_path_override(
+    module_name = "rules_latex_contract_fixture",
+    path = "contract_external",
+)
+
 tectonic = use_extension("@rules_latex//latex/toolchain:extensions.bzl", "tectonic")
 
 # The pinned TL2026 bundle ships modern biblatex 3.21 (matched by
