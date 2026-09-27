@@ -219,7 +219,7 @@ Wire format:
 
 | Direction | Frame | Payload |
 |---|---|---|
-| server → client | text | `{"type":"manifest","pdfSize":N,"ranges":[{objectId,start,end,hash},...],"skeletonRanges":[[s,e],...]}` |
+| server → client | text | `{"type":"manifest","pdfSize":N,"pdfHash":"<sha256>","ranges":[{objectId,start,end,hash},...],"skeletonRanges":[[s,e],...]}` |
 | server → client | text | `{"type":"build-failed","message":"…"}` |
 | server → client | text | `{"type":"jump",...}` (forward-sync from `POST /sync/forward`) |
 | server → client | binary | `<32-byte raw SHA-256><chunk bytes>` (one per missing chunk) |
@@ -229,6 +229,13 @@ Compared to the SSE path (reload event → `/pdf-manifest` fetch →
 `/chunk/<hash>` fetch per missing chunk), the WS push saves the
 two pull round-trips: the manifest arrives as part of the same
 push burst as the chunk bytes.
+
+Each manifest names an immutable PDF copy under the preview cache.
+Skeleton byte ranges come from `/pdf/<pdfHash>`, so a rebuild cannot
+mix two PDF generations in one render. Keeping old copies lets an
+in-flight render finish; they consume cache disk space until the
+preview cache is cleared. Copying and hashing a 10 MiB PDF added
+about 9 ms per successful rebuild in a local macOS measurement.
 
 **Fallback.** If `/ws` can't connect (WS upgrade refused, no
 `ws_server` module on the server side, proxy in the way, etc.)

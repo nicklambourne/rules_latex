@@ -271,6 +271,11 @@ class TestHeadParity(unittest.TestCase):
     def test_head_pdf_manifest(self):
         self._check_parity("/pdf-manifest")
 
+    def test_head_pdf_generation(self):
+        _, pdf_hash = self.fixture.state.get_manifest_snapshot()
+        self.assertIsNotNone(pdf_hash)
+        self._check_parity(f"/pdf/{pdf_hash}")
+
     def test_head_chunk(self):
         # Pick the first chunk hash from the seeded manifest.
         manifest = self.fixture.state.get_manifest()
@@ -334,6 +339,42 @@ class TestHeadRangeRequests(unittest.TestCase):
         # GET delivers 100 bytes; HEAD delivers zero.
         self.assertEqual(len(g_body), 100)
         self.assertEqual(h_body, b"")
+
+    def test_old_manifest_ranges_remain_immutable_after_rebuild(self):
+        original = self.fixture.pdf_path.read_bytes()
+        _, old_hash = self.fixture.state.get_manifest_snapshot()
+        self.assertIsNotNone(old_hash)
+        changed = original.replace(b"612 792", b"612 793")
+        self.assertNotEqual(changed, original)
+        self.fixture.pdf_path.write_bytes(changed)
+        _M._compute_manifest_post_build(
+            self.fixture.state, self.fixture.workspace, self.fixture.pdf_chunks_ctx,
+        )
+        _, new_hash = self.fixture.state.get_manifest_snapshot()
+        self.assertNotEqual(old_hash, new_hash)
+        offset = original.index(b"612 792")
+        headers = {"Range": f"bytes={offset}-{offset + 6}"}
+        old_status, _, old_bytes = _request(
+            self.fixture.port, "GET", f"/pdf/{old_hash}", headers=headers,
+        )
+        new_status, _, new_bytes = _request(
+            self.fixture.port, "GET", f"/pdf/{new_hash}", headers=headers,
+        )
+        self.assertEqual((old_status, new_status), (206, 206))
+        self.assertEqual(old_bytes, b"612 792")
+        self.assertEqual(new_bytes, b"612 793")
+        old_status, _, old_bytes = _request(
+            self.fixture.port, "GET", f"/pdf/{old_hash}",
+        )
+        self.assertEqual(old_status, 200)
+        self.assertEqual(old_bytes, original)
+
+    def test_unknown_pdf_generation_returns_gone(self):
+        status, _, _ = _request(
+            self.fixture.port, "GET", "/pdf/" + "a" * 64,
+            headers={"Range": "bytes=0-99"},
+        )
+        self.assertEqual(status, 410)
 
     def test_head_pdf_with_bad_range(self):
         # 416 Range Not Satisfiable on both GET and HEAD.

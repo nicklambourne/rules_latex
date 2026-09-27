@@ -31,6 +31,7 @@ and served from /_pdfjs/pdf.mjs at preview time — works fully offline.
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import os
 import queue
@@ -40,6 +41,7 @@ import subprocess
 import sys
 import threading
 import time
+import tempfile
 import webbrowser
 from dataclasses import dataclass, field
 from http import HTTPStatus
@@ -413,6 +415,7 @@ class BuildState:
         # browser falls back to whole-PDF transport when this is
         # None.
         self._pdf_manifest: object | None = None  # tools.pdf_chunks.Manifest | None
+        self._pdf_hash: str | None = None
         # Lazy git-state cache for the status footer badge. Keys:
         # (branch, dirty, short_sha). Refreshed on demand from
         # /status; cached for GIT_INFO_TTL_S to avoid running git
@@ -497,12 +500,8 @@ class BuildState:
             # We do NOT invalidate _pdf_manifest here. The watcher
             # thread updates it explicitly via update_manifest()
             # after computing the chunk manifest off the new PDF.
-            # Until that runs, the previous manifest is still
-            # technically valid: chunks are content-addressed, so a
-            # client requesting a hash from the old manifest gets
-            # the same bytes it would get from the new one (if the
-            # hash also appears in the new manifest) or a 404 (if
-            # not). The browser handles both cases.
+            # Until that runs, the previous manifest still points to
+            # its immutable PDF snapshot and content-addressed chunks.
             listeners = list(self._listeners)
         # Notify outside the lock so a slow listener can't block the
         # build thread for more than the per-queue timeout.
@@ -514,7 +513,9 @@ class BuildState:
                 # Slow listener; drop it. It can reconnect.
                 pass
 
-    def update_manifest(self, manifest: object | None) -> None:
+    def update_manifest(
+        self, manifest: object | None, pdf_hash: str | None = None,
+    ) -> None:
         """Install a freshly-computed manifest. Thread-safe.
 
         ``manifest`` is a ``tools.pdf_chunks.Manifest`` or ``None``
@@ -524,10 +525,15 @@ class BuildState:
         """
         with self._lock:
             self._pdf_manifest = manifest
+            self._pdf_hash = pdf_hash
 
     def get_manifest(self) -> object | None:
         with self._lock:
             return self._pdf_manifest
+
+    def get_manifest_snapshot(self) -> tuple[object | None, str | None]:
+        with self._lock:
+            return self._pdf_manifest, self._pdf_hash
 
     # -------------------------------------------------------------
     # Build log (drawer transport)
@@ -606,10 +612,11 @@ class BuildState:
         """
         with self._lock:
             manifest = self._pdf_manifest
+            pdf_hash = self._pdf_hash
             entry = self._ws_conns.get(id(conn))
         if manifest is None or entry is None:
             return
-        self._send_to_ws(entry[0], manifest, entry[1], chunks_dir)
+        self._send_to_ws(entry[0], manifest, entry[1], chunks_dir, pdf_hash)
 
     def broadcast_chunks(self, chunks_dir: Path) -> None:
         """Push the current manifest + missing chunks to every client.
@@ -622,11 +629,12 @@ class BuildState:
         """
         with self._lock:
             manifest = self._pdf_manifest
+            pdf_hash = self._pdf_hash
             snapshot = list(self._ws_conns.values())
         if manifest is None:
             return
         for conn, known in snapshot:
-            self._send_to_ws(conn, manifest, known, chunks_dir)
+            self._send_to_ws(conn, manifest, known, chunks_dir, pdf_hash)
 
     def broadcast_ws_build_failed(self, message: str) -> None:
         """Notify every WS client that the latest build failed.
@@ -678,6 +686,7 @@ class BuildState:
         manifest: object,
         known: set[str],
         chunks_dir: Path,
+        pdf_hash: str | None,
     ) -> None:
         """Serialize one manifest + push the chunks the client lacks.
 
@@ -702,6 +711,7 @@ class BuildState:
         manifest_payload = json.dumps({
             "type": "manifest",
             "pdfSize": manifest.pdf_size,
+            "pdfHash": pdf_hash,
             "ranges": ranges,
             "skeletonRanges": [
                 [r[0], r[1]] for r in manifest.skeleton_ranges
@@ -1829,6 +1839,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/pdf":
             self._serve_pdf_with_range()
             return
+        if path.startswith("/pdf/"):
+            self._serve_pdf_with_range(path[len("/pdf/"):])
+            return
         if path == "/pdf-manifest":
             self._serve_pdf_manifest()
             return
@@ -1922,7 +1935,7 @@ class Handler(BaseHTTPRequestHandler):
     # PDF transport (chunked + Range-aware /pdf)
     # -------------------------------------------------------------
 
-    def _serve_pdf_with_range(self) -> None:
+    def _serve_pdf_with_range(self, pdf_hash: str | None = None) -> None:
         """Serve ``/pdf`` with HTTP Range support.
 
         The chunked transport path on the client side relies on
@@ -1932,13 +1945,19 @@ class Handler(BaseHTTPRequestHandler):
         Without Range support, every skeleton-range fetch would
         pull the entire PDF.
         """
-        pdf_path = self.workspace / "bazel-bin" / PDF_RELPATH
+        if pdf_hash is not None:
+            if not re.fullmatch(r"[0-9a-f]{64}", pdf_hash) or self.pdf_chunks_ctx is None:
+                self._send(HTTPStatus.NOT_FOUND, b"invalid PDF generation", "text/plain")
+                return
+            pdf_path = self.pdf_chunks_ctx.chunks_dir.parent / "pdfs" / f"{pdf_hash}.pdf"
+        else:
+            pdf_path = self.workspace / "bazel-bin" / PDF_RELPATH
         try:
             file_size = pdf_path.stat().st_size
         except FileNotFoundError:
             self._send(
-                HTTPStatus.NOT_FOUND,
-                b"PDF not built yet.",
+                HTTPStatus.GONE if pdf_hash is not None else HTTPStatus.NOT_FOUND,
+                b"PDF generation expired." if pdf_hash is not None else b"PDF not built yet.",
                 "text/plain; charset=utf-8",
             )
             return
@@ -2007,7 +2026,7 @@ class Handler(BaseHTTPRequestHandler):
         current PDF, or 404 when no manifest is available (the
         client then falls back to whole-PDF transport).
         """
-        manifest = self.state.get_manifest()
+        manifest, pdf_hash = self.state.get_manifest_snapshot()
         if manifest is None:
             self._send(
                 HTTPStatus.NOT_FOUND,
@@ -2017,6 +2036,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         payload = {
             "pdfSize": manifest.pdf_size,
+            "pdfHash": pdf_hash,
             "ranges": [
                 {
                     "objectId": c.object_id,
@@ -2783,6 +2803,29 @@ def _gc_chunks(
     return deleted
 
 
+def _snapshot_pdf(pdf_path: Path, snapshots_dir: Path) -> tuple[Path, str]:
+    """Copy a completed PDF to an immutable, content-addressed path."""
+    snapshots_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256()
+    with tempfile.NamedTemporaryFile(dir=snapshots_dir, suffix=".tmp", delete=False) as out:
+        temporary = Path(out.name)
+        try:
+            with pdf_path.open("rb") as source:
+                while block := source.read(1024 * 1024):
+                    digest.update(block)
+                    out.write(block)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+    pdf_hash = digest.hexdigest()
+    snapshot = snapshots_dir / f"{pdf_hash}.pdf"
+    if snapshot.exists():
+        temporary.unlink()
+    else:
+        os.replace(temporary, snapshot)
+    return snapshot, pdf_hash
+
+
 def _compute_manifest_post_build(
     state: BuildState,
     workspace: Path,
@@ -2805,8 +2848,11 @@ def _compute_manifest_post_build(
         state.update_manifest(None)
         return
     try:
+        snapshot, pdf_hash = _snapshot_pdf(
+            pdf_path, pdf_chunks_ctx.chunks_dir.parent / "pdfs",
+        )
         manifest = pdf_chunks_ctx.module.compute_manifest(
-            pdf_path,
+            snapshot,
             pdf_chunks_ctx.chunks_dir,
         )
     except Exception as e:
@@ -2819,7 +2865,7 @@ def _compute_manifest_post_build(
         )
         state.update_manifest(None)
         return
-    state.update_manifest(manifest)
+    state.update_manifest(manifest, pdf_hash if manifest is not None else None)
     if manifest is not None:
         keep = {c.hash for c in manifest.chunks}
         _gc_chunks(pdf_chunks_ctx.chunks_dir, keep)
