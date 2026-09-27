@@ -26,18 +26,23 @@ alias(
 # `cache = "..."` and the resolved toolchain has no bundle.
 #
 # `latex_live` sets this on startup after priming the
-# snapshot at a persistent workspace-local location (typically
-# `.cache/rules_latex/<doc>/cache.tar.gz`). The setting is
+# extracted cache at a persistent workspace-local location (typically
+# `.cache/rules_latex/<doc>/cache`). The setting is
 # underscore-prefixed because it is not part of the public API:
 # users should never set it on the command line.
 #
 # Hermeticity note: the path is read at action-execution time and
-# the file is NOT in Bazel's input graph. `latex_live`
-# compensates by also passing `--action_env=LATEX_SERVE_CACHE_NONCE`
-# to invalidate the compile action when the snapshot is re-primed.
+# the file is NOT in Bazel's input graph. `latex_live` sets a second
+# build setting whose value is copied into the compile action's
+# explicit environment. That changes its action key after re-prime.
 # See latex/private/latex_document.bzl and serve_web.py.tpl for the
 # wiring.
 string_flag(
     name = "_serve_cache_override",
+    build_setting_default = "",
+)
+
+string_flag(
+    name = "_serve_cache_generation",
     build_setting_default = "",
 )

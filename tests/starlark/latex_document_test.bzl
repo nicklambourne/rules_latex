@@ -232,6 +232,12 @@ def _serve_cache_override_test_impl(ctx):
             break
     if compile_action == None:
         return analysistest.end(env)
+    asserts.equals(
+        env,
+        "test-generation",
+        compile_action.env.get("LATEX_SERVE_CACHE_GENERATION", ""),
+        "serve-cache generation must be in the compile action environment",
+    )
     argv = compile_action.argv
     found = False
     expected = "/tmp/serve_cache_override_test_path.tar.gz"
@@ -253,6 +259,7 @@ serve_cache_override_test = analysistest.make(
     config_settings = {
         # buildifier: disable=canonical-repository
         "@@//latex:_serve_cache_override": "/tmp/serve_cache_override_test_path.tar.gz",
+        "@@//latex:_serve_cache_generation": "test-generation",
     },
 )
 
@@ -308,6 +315,7 @@ serve_cache_override_dir_test = analysistest.make(
     config_settings = {
         # buildifier: disable=canonical-repository
         "@@//latex:_serve_cache_override": "/tmp/serve_cache_override_test_dir",
+        "@@//latex:_serve_cache_generation": "test-generation",
     },
 )
 

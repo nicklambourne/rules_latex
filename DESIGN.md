@@ -343,8 +343,10 @@ then passes its absolute path via the private build setting
 `bazel build` it invokes. `latex_document` consults the flag and,
 when set, uses the snapshot as its cache source — bypassing the
 implicit pipeline entirely. The serve cache lives outside Bazel's
-input graph; an `--action_env=LATEX_SERVE_CACHE_NONCE=<mtime>`
-flag invalidates the compile action when the snapshot changes.
+input graph; the private `_serve_cache_generation` build setting
+puts the cache generation in the compile action's explicit environment,
+so re-priming changes its action key. Serve-only compiles are marked
+`no-remote` because that directory exists only on the serving host.
 Documents with `cache=` or a toolchain bundle (already hermetic
 and fast) ignore the override.
 

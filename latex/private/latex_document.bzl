@@ -215,6 +215,7 @@ def _compile_action(
         offline_mode,
         offline_source,
         offline_source_path,
+        cache_generation,
         output,
         synctex_output,
         outfmt,
@@ -237,6 +238,8 @@ def _compile_action(
             "_compile_action: exactly one of offline_source or " +
             "offline_source_path must be set",
         )
+    if offline_mode == "serve_cache_override" and not cache_generation:
+        fail("serve-cache override requires a non-empty cache generation")
 
     args = ctx.actions.args()
     args.add("--tectonic", tectonic.path)
@@ -311,6 +314,14 @@ def _compile_action(
         # outputs.
         "RULES_LATEX_ACTION_SCHEMA": RULES_LATEX_ACTION_SCHEMA,
     }
+    if offline_mode == "serve_cache_override":
+        env["LATEX_SERVE_CACHE_GENERATION"] = cache_generation
+
+    execution_requirements = {"requires-network": ""}
+    if offline_mode == "serve_cache_override":
+        # The cache directory is an undeclared host-local input.
+        # Keep its result out of remote execution and remote caches.
+        execution_requirements["no-remote"] = "1"
 
     # See `_populate_cache_action` for the system-biber PATH exception.
     if use_system_biber:
@@ -323,12 +334,7 @@ def _compile_action(
             mnemonic = "TectonicCompile",
             progress_message = "Compiling LaTeX %{label}",
             env = env,
-            execution_requirements = {
-                # Fully hermetic in every mode: the cache (user-supplied,
-                # bundle, or implicitly populated) is content-addressed
-                # and present as an action input.
-                "requires-network": "",
-            },
+            execution_requirements = execution_requirements,
             use_default_shell_env = True,
         )
     else:
@@ -365,11 +371,13 @@ def _compile_action(
             mnemonic = "TectonicCompile",
             progress_message = "Compiling LaTeX %{label}",
             env = env,
-            execution_requirements = {
-                "requires-network": "",
-                "supports-workers": "1",
-                "requires-worker-protocol": "json",
-            },
+            execution_requirements = dict(
+                execution_requirements,
+                **{
+                    "supports-workers": "1",
+                    "requires-worker-protocol": "json",
+                }
+            ),
         )
 
 def _latex_document_impl(ctx):
@@ -428,6 +436,9 @@ def _latex_document_impl(ctx):
     serve_cache_override = (
         ctx.attr._serve_cache_override[BuildSettingInfo].value
     )
+    serve_cache_generation = (
+        ctx.attr._serve_cache_generation[BuildSettingInfo].value
+    )
 
     offline_source = None
     offline_source_path = None
@@ -448,7 +459,7 @@ def _latex_document_impl(ctx):
     elif serve_cache_override:
         # Serve-time fast path: read the snapshot at an absolute
         # path that's not in the Bazel input graph. The compile
-        # action is invalidated by an --action_env nonce passed by
+        # action is invalidated by a generation build setting passed by
         # latex_live; see the build-setting comment in
         # //latex:BUILD.bazel.
         offline_mode = "serve_cache_override"
@@ -483,6 +494,7 @@ def _latex_document_impl(ctx):
         offline_mode = offline_mode,
         offline_source = offline_source,
         offline_source_path = offline_source_path,
+        cache_generation = serve_cache_generation,
         output = output,
         synctex_output = synctex_output,
         outfmt = outfmt,
@@ -669,6 +681,11 @@ latex_document = rule(
                   "when set by `latex_live`. Not intended for direct " +
                   "use; see //latex:_serve_cache_override.",
             default = "//latex:_serve_cache_override",
+            providers = [BuildSettingInfo],
+        ),
+        "_serve_cache_generation": attr.label(
+            doc = "Private serve-cache action-key generation.",
+            default = "//latex:_serve_cache_generation",
             providers = [BuildSettingInfo],
         ),
     },

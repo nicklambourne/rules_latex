@@ -872,7 +872,7 @@ def run_bazel_build(
     When ``cache_ctx`` is provided (i.e. the document takes the
     implicit-pipeline path and ``latex_live`` has primed a
     persistent cache snapshot), the override flag and a cache-nonce
-    action-env are appended so the compile action consumes the
+    build setting are appended so the compile action consumes the
     snapshot instead of the implicit populate-cache pipeline.
     """
     start = time.monotonic()
@@ -895,7 +895,7 @@ def run_bazel_build(
             ),
         )
         cmd.append(
-            "--action_env=LATEX_SERVE_CACHE_NONCE={}".format(
+            "--@rules_latex//latex:_serve_cache_generation={}".format(
                 cache_ctx.module.cache_nonce(cache_ctx.layout),
             ),
         )
@@ -956,8 +956,8 @@ def run_bazel_build(
         # mtime, and we want the compile action's cache key to
         # change so it actually re-runs.
         for i, arg in enumerate(cmd_retry):
-            if arg.startswith("--action_env=LATEX_SERVE_CACHE_NONCE="):
-                cmd_retry[i] = "--action_env=LATEX_SERVE_CACHE_NONCE={}".format(
+            if arg.startswith("--@rules_latex//latex:_serve_cache_generation="):
+                cmd_retry[i] = "--@rules_latex//latex:_serve_cache_generation={}".format(
                     cache_ctx.module.cache_nonce(cache_ctx.layout),
                 )
                 break
@@ -1104,11 +1104,9 @@ def run_fast_build(
         return None
     try:
         # The params file is the action's argv, one token per line. We
-        # pass it to tectonic_compile.py *directly* (rather than as an
-        # `@response-file`) because the tool only expands `@`-files when
-        # args are handed in explicitly in worker mode, not for a plain
-        # CLI invocation. Reading it ourselves keeps the fast path
-        # independent of that detail.
+        # pass it to tectonic_compile.py directly. The wrapper also
+        # accepts @response-files in CLI and worker mode, but reading
+        # the params here lets us inspect declared output paths.
         arglist = [
             ln for ln in params.read_text(encoding="utf-8").splitlines() if ln
         ]
