@@ -283,7 +283,12 @@ caches the online prime through Bazel's action cache.
 | Linux aarch64   | ✅ musl  | ✅ prebuilt         | ✅      |
 | macOS x86_64    | ✅       | ✅ universal binary | ✅      |
 | macOS aarch64   | ✅       | ✅ universal binary | ✅      |
-| Windows x86_64  | ✅ MSVC  | ✅                  | ✅      |
+
+Windows x86_64 binaries are published, but rules_latex does not yet
+support native Windows builds, tests, snapshots, or live preview. The
+current launchers use Bash and the cache manager uses Unix-only file
+locking; Windows is not covered by CI. Use Linux or macOS for these
+workflows until a native Windows integration is implemented and tested.
 
 biber 2.21 is prebuilt for every supported platform, including Linux
 arm64. `biber_strategy = "system"` remains as an escape hatch for
