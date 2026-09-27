@@ -57,6 +57,8 @@ class TestPrimeConfiguration(unittest.TestCase):
             workspace = Path(directory)
             manifest = workspace / "manifest.txt"
             manifest.write_text("bundle packages", encoding="utf-8")
+            ctan_lock = workspace / "ctan.lock.json"
+            ctan_lock.write_text("first lock", encoding="utf-8")
             spec = _SC.PrimeSpec(
                 tectonic=workspace / "tectonic",
                 populate_tool=workspace / "populate.py",
@@ -68,6 +70,7 @@ class TestPrimeConfiguration(unittest.TestCase):
                 bundle_url="https://example.invalid/2026.ttb",
                 ctan_packages=("example",),
                 bundle_manifest=manifest,
+                ctan_lock=ctan_lock,
             )
             original = _SC.prime_config_key(spec)
             self.assertEqual(original, _SC.prime_config_key(spec))
@@ -78,8 +81,11 @@ class TestPrimeConfiguration(unittest.TestCase):
             )
             for changed in alternatives:
                 self.assertNotEqual(original, _SC.prime_config_key(changed))
+            ctan_lock.write_text("changed lock", encoding="utf-8")
+            after_lock = _SC.prime_config_key(spec)
+            self.assertNotEqual(original, after_lock)
             manifest.write_text("changed bundle packages", encoding="utf-8")
-            self.assertNotEqual(original, _SC.prime_config_key(spec))
+            self.assertNotEqual(after_lock, _SC.prime_config_key(spec))
             before_layout = _SC.derive_cache_layout(workspace, "//doc:doc", original)
             after_layout = _SC.derive_cache_layout(
                 workspace, "//doc:doc", _SC.prime_config_key(alternatives[0]),

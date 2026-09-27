@@ -274,6 +274,9 @@ def prime_config_key(spec: PrimeSpec) -> str:
     manifest_hash = None
     if spec.bundle_manifest is not None:
         manifest_hash = hashlib.sha256(spec.bundle_manifest.read_bytes()).hexdigest()
+    ctan_lock_hash = None
+    if spec.ctan_lock is not None:
+        ctan_lock_hash = hashlib.sha256(spec.ctan_lock.read_bytes()).hexdigest()
     payload = {
         "tectonic": identity(spec.tectonic),
         "populate_tool": identity(spec.populate_tool),
@@ -282,6 +285,7 @@ def prime_config_key(spec: PrimeSpec) -> str:
         "use_system_biber": spec.use_system_biber,
         "bundle_url": spec.bundle_url,
         "bundle_manifest": manifest_hash,
+        "ctan_lock": ctan_lock_hash,
         "ctan_packages": spec.ctan_packages,
         "main": spec.main,
         "srcs": spec.srcs,
