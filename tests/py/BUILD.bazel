@@ -29,6 +29,11 @@ py_unittest(
 )
 
 py_unittest(
+    name = "test_compile_args",
+    data = _TEST_DATA,
+)
+
+py_unittest(
     name = "test_serve_cache",
     data = _TEST_DATA,
 )
@@ -122,6 +127,7 @@ test_suite(
         ":test_build_state_log",
         ":test_build_state_ws",
         ":test_combine_output",
+        ":test_compile_args",
         ":test_http_head",
         ":test_open_browser",
         ":test_pdf_chunks",
