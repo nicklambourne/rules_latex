@@ -207,6 +207,10 @@ def parse_args() -> argparse.Namespace:
             "uses its built-in default (relay) bundle."
         ),
     )
+    parser.add_argument(
+        "--tectonic-arg", dest="tectonic_args", action="append", default=[],
+        help="Extra argument passed unchanged to the online Tectonic compile.",
+    )
     return parser.parse_args()
 
 
@@ -777,6 +781,7 @@ def run_tectonic(
     ctan_packages: list[str] | None = None,
     package_deps: dict[str, set[str]] | None = None,
     bundle_url: str | None = None,
+    extra_args: list[str] | None = None,
 ) -> None:
     """Run tectonic with cwd set to the staged work directory.
 
@@ -825,6 +830,7 @@ def run_tectonic(
     if ctan_dir is not None:
         for search_dir in _ctan_search_paths(ctan_dir):
             cmd.extend(["-Z", "search-path={}".format(search_dir)])
+    cmd += list(extra_args or [])
     cmd += [
         "--outdir",
         str(main_in_workdir.parent),
@@ -970,6 +976,7 @@ def main() -> int:
             ctan_packages=args.ctan_packages,
             package_deps=package_deps,
             bundle_url=args.bundle_url,
+            extra_args=args.tectonic_args,
         )
         pack_cache(cache_dir, output, ctan_dir=ctan_dir)
 
