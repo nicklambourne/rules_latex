@@ -186,6 +186,30 @@ jobs:
           wait "$PID" 2>/dev/null || true
           cat /tmp/web.log
 
+      - name: Set up Node for browser smoke test
+        if: matrix.os == 'ubuntu-22.04' && matrix.bazel-version == '8.7.0'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Render and reload PDF.js in Chrome
+        if: matrix.os == 'ubuntu-22.04' && matrix.bazel-version == '8.7.0'
+        working-directory: examples
+        run: |
+          bazel run //hello:hello_live --config=ci > /tmp/browser-smoke.log 2>&1 &
+          PID=$!
+          trap 'kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; cat /tmp/browser-smoke.log' EXIT
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8765/status | python3 -c \
+                'import json,sys; sys.exit(not json.load(sys.stdin).get("last_success"))' \
+                2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          node ../tests/browser/preview_smoke.mjs \
+            http://127.0.0.1:8765/ "$(command -v google-chrome)" hello/hello.tex
+
       - name: SyncTeX reverse-sync end-to-end
         working-directory: examples
         run: |
