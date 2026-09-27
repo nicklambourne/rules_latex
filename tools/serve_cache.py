@@ -25,10 +25,10 @@ The fix is to side-step Bazel's action cache for the prime step.
    the serve loop catches it, re-primes the cache, and retries
    the build once.
 
-The cache file lives outside Bazel's input graph by design -- it's
-ambient state, like ``$XDG_CACHE_HOME``. A nonce derived from the
-file's mtime is passed via ``--action_env`` so the compile action
-re-runs whenever the snapshot is refreshed.
+The cache file lives outside Bazel's input graph by design. The
+serve loop passes the resolved immutable extraction path and its
+content digest via private build settings, so re-priming changes the
+compile action key without invalidating files in use by older builds.
 
 Everything in here is stdlib-only -- consistent with the rest of
 the rules_latex tooling.
@@ -40,8 +40,10 @@ import dataclasses
 import errno
 import fcntl
 import hashlib
+import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -72,30 +74,28 @@ class CacheLayout:
 
     All paths are absolute. ``base`` is the per-document directory;
     ``snapshot`` is the cache tarball produced by the populate tool;
-    ``extracted`` is a directory holding the unpacked snapshot,
-    suitable for use as ``TECTONIC_CACHE_DIR`` directly (avoids
-    re-extracting the tarball on every compile, which on macOS
-    APFS is ~100-500 ms of wasted syscalls per warm rebuild);
+    ``extracted`` is an atomically updated symlink to an immutable
+    unpacked snapshot. Compiles receive its resolved target path,
+    avoiding re-extraction on every warm build;
     ``sentinel`` and ``extracted_sentinel`` are completion markers
     written after a successful prime / extract respectively;
     ``lock`` is a sidecar file used with ``flock(2)`` to serialise
     prime attempts across processes.
 
-    Both the snapshot tarball and the extracted directory live
+    Both the snapshot tarball and extracted generations live
     side-by-side because:
 
     * The tarball is what the populate tool emits (and what
       latex_cache_snapshot rules produce).
-    * The extracted directory is what tectonic actually wants as
+    * An extracted generation is what tectonic actually wants as
       its ``TECTONIC_CACHE_DIR``. Keeping both means the serve
       loop can hand tectonic a ready-to-use cache directory
       without re-extracting on every compile.
 
     Empirically tectonic does NOT write to its cache directory
     when invoked with ``--only-cached`` (verified against
-    rules_latex's pinned tectonic version), so the extracted
-    directory can be safely shared across concurrent compiles
-    without copy-on-extract.
+    rules_latex's pinned tectonic version), so each immutable
+    generation can be shared across concurrent compiles.
     """
 
     base: Path
@@ -106,7 +106,9 @@ class CacheLayout:
     lock: Path
 
 
-def derive_cache_layout(workspace: Path, document_label: str) -> CacheLayout:
+def derive_cache_layout(
+    workspace: Path, document_label: str, config_key: str = "",
+) -> CacheLayout:
     """Compute where this document's serve cache lives.
 
     ``document_label`` is the target label in canonical form, e.g.
@@ -124,6 +126,8 @@ def derive_cache_layout(workspace: Path, document_label: str) -> CacheLayout:
     """
     slug = _slugify_label(document_label)
     base = workspace / ".cache" / "rules_latex" / slug
+    if config_key:
+        base = base / config_key
     return CacheLayout(
         base=base,
         snapshot=base / "cache.tar.gz",
@@ -170,29 +174,20 @@ def is_primed(layout: CacheLayout) -> bool:
 def is_extracted(layout: CacheLayout) -> bool:
     """Return True iff a complete extracted cache directory exists.
 
-    Distinct from ``is_primed`` because the extracted directory has
-    its own atomicity sentinel: a half-extracted tree (interrupted
-    midway) must not be treated as ready-to-use.
+    Distinct from ``is_primed`` because the published generation has
+    its own completion sentinel. An interrupted extraction must not
+    be treated as ready-to-use.
     """
-    return (
-        layout.extracted.is_dir()
-        and layout.extracted_sentinel.is_file()
-    )
+    return layout.extracted.is_symlink() and layout.extracted_sentinel.is_file()
 
 
-def cache_nonce(layout: CacheLayout) -> str:
-    """Return a string derived from the snapshot's mtime.
-
-    Used as the value of ``--action_env=LATEX_SERVE_CACHE_NONCE``
-    passed to ``bazel build`` so the ``TectonicCompile`` action's
-    cache key changes when the snapshot does. (The snapshot file
-    itself is not in the action's input graph because it lives
-    outside the workspace's tracked source tree.)
-    """
+def cache_nonce(layout: CacheLayout, generation: Path | None = None) -> str:
+    """Return the immutable extracted generation's content digest."""
     try:
-        return str(layout.snapshot.stat().st_mtime_ns)
+        generation = generation or layout.extracted.resolve(strict=True)
     except FileNotFoundError:
         return "0"
+    return generation.name.removeprefix("cache-")
 
 
 def ensure_gitignore_excludes_cache(workspace: Path) -> None:
@@ -256,6 +251,46 @@ class PrimeSpec:
     bundle_manifest: Path | None
 
 
+def prime_config_key(spec: PrimeSpec) -> str:
+    """Fingerprint the inputs that determine a serve-time cache prime.
+
+    Source *paths* participate, but source contents do not: an ordinary
+    edit should keep using the warm cache until a missing resource asks
+    for re-priming. Tool identities are based on path, size and mtime so
+    startup does not rehash large Tectonic or biber binaries.
+    """
+    def identity(path: Path | None) -> object:
+        if path is None:
+            return None
+        try:
+            stat = path.stat()
+            return (str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            return (str(path), "missing")
+
+    system_biber_path = shutil.which("biber") if spec.use_system_biber else None
+    system_biber = Path(system_biber_path) if system_biber_path else None
+    manifest_hash = None
+    if spec.bundle_manifest is not None:
+        manifest_hash = hashlib.sha256(spec.bundle_manifest.read_bytes()).hexdigest()
+    payload = {
+        "tectonic": identity(spec.tectonic),
+        "populate_tool": identity(spec.populate_tool),
+        "staging_lib": identity(spec.populate_tool.parent / "staging.py"),
+        "biber": identity(spec.biber or system_biber),
+        "use_system_biber": spec.use_system_biber,
+        "bundle_url": spec.bundle_url,
+        "bundle_manifest": manifest_hash,
+        "ctan_packages": spec.ctan_packages,
+        "main": spec.main,
+        "srcs": spec.srcs,
+        "pkg_files": spec.pkg_files,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
 class PrimeFailure(RuntimeError):
     """Raised when the populate-cache tool exits non-zero."""
 
@@ -268,66 +303,47 @@ class PrimeFailure(RuntimeError):
 
 
 def _extract_snapshot(layout: CacheLayout) -> None:
-    """Untar ``layout.snapshot`` into ``layout.extracted``.
+    """Publish an immutable extraction and atomically switch the pointer.
 
-    Atomic: extracts into ``<extracted>.tmp.<rand>``, fsyncs the
-    files, then ``os.rename``s into place. The
-    ``_EXTRACTED_SENTINEL_NAME`` marker is written *inside* the
-    final directory after the rename so any reader can check
-    ``is_extracted`` and be confident the tree is complete.
-
-    Tectonic does not write back into its cache during
-    ``--only-cached`` compiles (verified empirically against the
-    pinned tectonic version we ship), so the resulting directory
-    is safe to share read-only across concurrent compiles.
-
-    If a previous extracted tree exists, it is removed first.
-    Callers must hold ``layout.lock``.
+    Compiles receive the resolved generation path, never the mutable
+    ``layout.extracted`` symlink. Old generations remain available to
+    in-flight readers after a re-prime. Callers hold ``layout.lock``.
     """
-    import shutil
     import tempfile
 
-    # Wipe any half-written or stale prior extracted tree. The
-    # lock keeps this race-free against other primes; in-flight
-    # reads from compile actions are fine because they hold the
-    # extracted directory open via TECTONIC_CACHE_DIR and tectonic
-    # opens files by path, not by mmap of the directory entry.
-    if layout.extracted.exists():
-        shutil.rmtree(layout.extracted)
-
-    # Extract into a sibling tmp dir, then atomic-rename.
-    tmp_dir = Path(
-        tempfile.mkdtemp(
-            prefix="cache.tmp.",
-            dir=str(layout.base),
-        ),
-    )
-    try:
-        import tarfile
-
-        with tarfile.open(layout.snapshot, "r:gz") as tar:
-            # Python 3.12+ requires an extraction filter; older
-            # versions accept one. ``data`` is the safe choice.
-            try:
-                tar.extractall(tmp_dir, filter="data")
-            except TypeError:
-                tar.extractall(tmp_dir)
-        os.rename(tmp_dir, layout.extracted)
-    except Exception:
-        # Best-effort cleanup on failure; the next prime will
-        # retry.
+    digest = hashlib.sha256()
+    with open(layout.snapshot, "rb") as snapshot:
+        for block in iter(lambda: snapshot.read(1024 * 1024), b""):
+            digest.update(block)
+    generation = layout.base / f"cache-{digest.hexdigest()}"
+    marker = generation / _EXTRACTED_SENTINEL_NAME
+    if not marker.is_file():
+        if generation.exists():
+            # An interrupted, unpublished extraction cannot have readers.
+            shutil.rmtree(generation)
+        tmp_dir = Path(tempfile.mkdtemp(prefix="cache.tmp.", dir=str(layout.base)))
         try:
-            shutil.rmtree(tmp_dir)
-        except OSError:
-            pass
-        raise
+            import tarfile
 
-    # Drop the sentinel last, after the rename, so readers see a
-    # complete tree before they see "complete".
-    layout.extracted_sentinel.write_text(
-        f"extracted at {time.strftime('%Y-%m-%dT%H:%M:%S%z')}\n",
-        encoding="utf-8",
-    )
+            with tarfile.open(layout.snapshot, "r:gz") as tar:
+                try:
+                    tar.extractall(tmp_dir, filter="data")
+                except TypeError:
+                    tar.extractall(tmp_dir)
+            (tmp_dir / _EXTRACTED_SENTINEL_NAME).write_text(
+                "complete\n", encoding="utf-8",
+            )
+            os.rename(tmp_dir, generation)
+        except Exception:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
+
+    link_tmp = layout.base / f".cache-link-{os.getpid()}-{time.time_ns()}"
+    try:
+        link_tmp.symlink_to(generation.name, target_is_directory=True)
+        os.replace(link_tmp, layout.extracted)
+    finally:
+        link_tmp.unlink(missing_ok=True)
 
 
 def run_prime(
@@ -351,10 +367,9 @@ def run_prime(
       * tars the resulting cache directory deterministically into
         the snapshot path.
 
-    After the snapshot is written, extracts it into
-    ``layout.extracted`` so the compile action can use the
-    pre-extracted directory directly (skipping the per-action
-    tarball decompression).
+    After the snapshot is written, publishes an immutable extraction
+    and atomically points ``layout.extracted`` at it. Compiles use
+    the resolved generation path, skipping per-action decompression.
 
     The populate tool is invoked with ``workspace`` as its cwd so
     workspace-relative paths in the spec resolve correctly. Tool
@@ -374,7 +389,8 @@ def run_prime(
         if is_primed(layout) and is_extracted(layout):
             return time.monotonic() - start
 
-        if not is_primed(layout):
+        primed_now = not is_primed(layout)
+        if primed_now:
             # Build the populate-cache command. We deliberately
             # invoke the tool with the same wire shape
             # latex_document.bzl uses for the implicit-pipeline
@@ -436,10 +452,9 @@ def run_prime(
                 encoding="utf-8",
             )
 
-        # Always re-extract if either: (a) we just primed, or (b)
-        # the extracted tree is missing/incomplete. The extract is
-        # cheap (~50-150 ms) compared with the prime itself.
-        if not is_extracted(layout):
+        # A successful re-prime must publish its own generation even
+        # while the previous generation remains complete and readable.
+        if primed_now or not is_extracted(layout):
             _extract_snapshot(layout)
 
     elapsed = time.monotonic() - start
@@ -454,14 +469,14 @@ def invalidate_for_reprime(layout: CacheLayout) -> None:
     indicating the user added a new ``\\usepackage`` (or similar)
     whose resources aren't in the current snapshot.
 
-    We delete both the snapshot sentinel and the extracted-cache
-    sentinel but keep the underlying tarball + directory around so
-    any in-flight read (e.g. an extracting tectonic) doesn't blow
-    up. The next prime will overwrite both.
+    Hold the same lock as ``run_prime`` and remove only the snapshot
+    sentinel. The published extraction remains complete for in-flight
+    compiles; a new immutable generation replaces its pointer after
+    the next successful prime.
     """
-    for marker in (layout.sentinel, layout.extracted_sentinel):
+    with _exclusive_lock(layout.lock):
         try:
-            marker.unlink()
+            layout.sentinel.unlink()
         except FileNotFoundError:
             pass
 

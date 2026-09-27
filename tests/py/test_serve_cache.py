@@ -9,7 +9,7 @@ without actually invoking tectonic:
   * .gitignore auto-management (idempotent, non-fatal on failure).
   * Missing-resource heuristic (used to decide whether to auto-
     re-prime on build failure).
-  * Cache nonce computation (used as a build setting to invalidate
+  * Cache generation digest (used as a build setting to invalidate
     Bazel's action cache when the snapshot is re-primed).
   * Serve-time prime arguments for the pinned bundle and CTAN overlay.
 
@@ -21,11 +21,14 @@ Starlark analysis test and the example targets in CI.
 from __future__ import annotations
 
 import importlib.util
+import dataclasses
+from concurrent.futures import ThreadPoolExecutor
 import io
 import os
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -49,6 +52,40 @@ _SC = _load_module("serve_cache", _SERVE_CACHE_PATH)
 
 
 class TestPrimeConfiguration(unittest.TestCase):
+    def test_configuration_changes_select_distinct_cache_layouts(self):
+        with tempfile.TemporaryDirectory(prefix="serve_cache_config_test_") as directory:
+            workspace = Path(directory)
+            manifest = workspace / "manifest.txt"
+            manifest.write_text("bundle packages", encoding="utf-8")
+            spec = _SC.PrimeSpec(
+                tectonic=workspace / "tectonic",
+                populate_tool=workspace / "populate.py",
+                main="doc/main.tex",
+                srcs=("doc/main.tex",),
+                pkg_files=(),
+                biber=None,
+                use_system_biber=False,
+                bundle_url="https://example.invalid/2026.ttb",
+                ctan_packages=("example",),
+                bundle_manifest=manifest,
+            )
+            original = _SC.prime_config_key(spec)
+            self.assertEqual(original, _SC.prime_config_key(spec))
+            alternatives = (
+                dataclasses.replace(spec, bundle_url="https://example.invalid/2027.ttb"),
+                dataclasses.replace(spec, ctan_packages=("other",)),
+                dataclasses.replace(spec, srcs=("doc/main.tex", "doc/new.sty")),
+            )
+            for changed in alternatives:
+                self.assertNotEqual(original, _SC.prime_config_key(changed))
+            manifest.write_text("changed bundle packages", encoding="utf-8")
+            self.assertNotEqual(original, _SC.prime_config_key(spec))
+            before_layout = _SC.derive_cache_layout(workspace, "//doc:doc", original)
+            after_layout = _SC.derive_cache_layout(
+                workspace, "//doc:doc", _SC.prime_config_key(alternatives[0]),
+            )
+            self.assertNotEqual(before_layout.base, after_layout.base)
+
     def test_preview_prime_passes_bundle_and_ctan_options(self):
         with tempfile.TemporaryDirectory(prefix="serve_cache_prime_test_") as directory:
             workspace = Path(directory)
@@ -69,8 +106,10 @@ class TestPrimeConfiguration(unittest.TestCase):
 
             def fake_run(cmd, **_kwargs):
                 commands.append(cmd)
+                if len(commands) == 2:
+                    time.sleep(0.03)
                 with tarfile.open(layout.snapshot, "w:gz") as archive:
-                    content = b"cache fixture"
+                    content = f"cache fixture {len(commands)}".encode("ascii")
                     info = tarfile.TarInfo("cache/data")
                     info.size = len(content)
                     archive.addfile(info, io.BytesIO(content))
@@ -78,9 +117,27 @@ class TestPrimeConfiguration(unittest.TestCase):
 
             with patch.object(_SC.subprocess, "run", side_effect=fake_run):
                 _SC.run_prime(layout, spec, workspace, log=lambda _: None)
+                old_generation = layout.extracted.resolve()
+                _SC.invalidate_for_reprime(layout)
+                self.assertTrue(old_generation.is_dir())
+                barrier = threading.Barrier(2)
+
+                def reprime():
+                    barrier.wait()
+                    _SC.run_prime(layout, spec, workspace, log=lambda _: None)
+
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    futures = [pool.submit(reprime) for _ in range(2)]
+                    for future in futures:
+                        future.result()
+                layout.extracted.unlink()
+                _SC.run_prime(layout, spec, workspace, log=lambda _: None)
 
             self.assertTrue(_SC.is_extracted(layout))
-            self.assertEqual(len(commands), 1)
+            self.assertEqual(len(commands), 2)
+            self.assertNotEqual(layout.extracted.resolve(), old_generation)
+            self.assertEqual((old_generation / "cache" / "data").read_bytes(),
+                             b"cache fixture 1")
             cmd = commands[0]
             self.assertEqual(
                 cmd[cmd.index("--bundle-url") + 1], spec.bundle_url,
@@ -206,21 +263,19 @@ class TestPrimedSentinel(unittest.TestCase):
         self.layout.sentinel.write_text("ok\n", encoding="utf-8")
         self.assertTrue(_SC.is_primed(self.layout))
 
-    def test_invalidate_for_reprime_removes_both_sentinels(self):
-        # The prime + extract pair share an invalidation event:
-        # if we re-prime because of a missing resource, the
-        # extracted tree is also stale.
+    def test_invalidate_for_reprime_keeps_published_generation(self):
         self.layout.snapshot.write_bytes(b"\x1f\x8b\x08\x00fake")
         self.layout.sentinel.write_text("ok\n", encoding="utf-8")
-        self.layout.extracted.mkdir(parents=True, exist_ok=True)
+        generation = self.layout.base / "cache-old"
+        generation.mkdir()
+        self.layout.extracted.symlink_to(generation.name)
         self.layout.extracted_sentinel.write_text("ok\n", encoding="utf-8")
         _SC.invalidate_for_reprime(self.layout)
         self.assertFalse(self.layout.sentinel.exists())
-        self.assertFalse(self.layout.extracted_sentinel.exists())
-        # The snapshot tarball and extracted dir are left intact
-        # so any in-flight read doesn't blow up.
+        self.assertTrue(self.layout.extracted_sentinel.exists())
+        # An in-flight compile can still use the old immutable path.
         self.assertTrue(self.layout.snapshot.exists())
-        self.assertTrue(self.layout.extracted.exists())
+        self.assertTrue(generation.exists())
 
     def test_invalidate_is_idempotent_when_sentinel_absent(self):
         # Should not raise even if sentinels are already gone.
@@ -231,9 +286,8 @@ class TestPrimedSentinel(unittest.TestCase):
 class TestExtractedSentinel(unittest.TestCase):
     """The extracted cache directory has its own atomicity marker.
 
-    The compile action reads ``TECTONIC_CACHE_DIR`` straight from
-    ``layout.extracted`` (skipping the per-action tarball
-    decompression). A half-extracted tree must NOT be treated as
+    The compile action reads ``TECTONIC_CACHE_DIR`` from the resolved
+    immutable generation. A half-extracted tree must NOT be treated as
     ready-to-use.
     """
 
@@ -270,7 +324,9 @@ class TestExtractedSentinel(unittest.TestCase):
         self.assertFalse(_SC.is_extracted(self.layout))
 
     def test_both_present_is_extracted(self):
-        self.layout.extracted.mkdir(parents=True, exist_ok=True)
+        generation = self.layout.base / "cache-complete"
+        generation.mkdir()
+        self.layout.extracted.symlink_to(generation.name)
         self.layout.extracted_sentinel.write_text("ok\n", encoding="utf-8")
         self.assertTrue(_SC.is_extracted(self.layout))
 
@@ -312,24 +368,31 @@ class TestExtractSnapshot(unittest.TestCase):
             b"sub/b.txt",
         )
 
-    def test_replaces_existing_extracted_tree(self):
-        # A prior extract that touched different content should
-        # be cleanly replaced.
-        self.layout.extracted.mkdir(parents=True)
-        (self.layout.extracted / "stale.txt").write_text("old")
+    def test_reprime_publishes_new_generation_without_deleting_old(self):
         _SC._extract_snapshot(self.layout)
-        self.assertFalse(
-            (self.layout.extracted / "stale.txt").exists(),
-            "stale entry from prior extract must be cleaned up",
-        )
+        old_generation = self.layout.extracted.resolve()
+        with tarfile.open(self.layout.snapshot, "w:gz") as archive:
+            content = b"new content"
+            info = tarfile.TarInfo("a.txt")
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+        _SC._extract_snapshot(self.layout)
+        self.assertNotEqual(self.layout.extracted.resolve(), old_generation)
+        self.assertEqual((self.layout.extracted / "a.txt").read_bytes(), b"new content")
+        self.assertEqual((old_generation / "a.txt").read_bytes(), b"a.txt")
+        self.assertTrue((old_generation / "sub" / "b.txt").exists())
 
     def test_idempotent_when_re_run(self):
         _SC._extract_snapshot(self.layout)
+        first_generation = self.layout.extracted.resolve()
         first_sentinel = self.layout.extracted_sentinel.read_text(encoding="utf-8")
         _SC._extract_snapshot(self.layout)
-        # The sentinel is re-touched (its content includes a
-        # timestamp), but extraction itself remains consistent.
         self.assertTrue(_SC.is_extracted(self.layout))
+        self.assertEqual(self.layout.extracted.resolve(), first_generation)
+        self.assertEqual(
+            self.layout.extracted_sentinel.read_text(encoding="utf-8"),
+            first_sentinel,
+        )
         # File content unchanged.
         self.assertEqual(
             (self.layout.extracted / "a.txt").read_bytes(),
@@ -373,23 +436,27 @@ class TestCacheNonce(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
+    def _publish(self, content: bytes) -> None:
+        with tarfile.open(self.layout.snapshot, "w:gz") as archive:
+            info = tarfile.TarInfo("entry")
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+        _SC._extract_snapshot(self.layout)
+
     def test_missing_snapshot_returns_zero(self):
         self.assertEqual(_SC.cache_nonce(self.layout), "0")
 
-    def test_present_snapshot_returns_mtime_ns(self):
-        self.layout.snapshot.write_bytes(b"x")
+    def test_published_snapshot_returns_digest(self):
+        self._publish(b"x")
         nonce = _SC.cache_nonce(self.layout)
         self.assertNotEqual(nonce, "0")
-        # Sanity: integer-parseable, plausibly recent.
-        n = int(nonce)
-        self.assertGreater(n, 0)
+        self.assertEqual(len(nonce), 64)
+        int(nonce, 16)
 
-    def test_nonce_changes_when_snapshot_is_rewritten(self):
-        self.layout.snapshot.write_bytes(b"x")
+    def test_nonce_changes_when_snapshot_is_reprimed(self):
+        self._publish(b"x")
         first = _SC.cache_nonce(self.layout)
-        # Sleep enough to bump nanosecond mtime on slow filesystems.
-        time.sleep(0.01)
-        self.layout.snapshot.write_bytes(b"x2")
+        self._publish(b"x2")
         second = _SC.cache_nonce(self.layout)
         self.assertNotEqual(first, second)
 

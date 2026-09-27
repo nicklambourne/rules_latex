@@ -883,7 +883,8 @@ def run_bazel_build(
         "--noshow_progress",
     ]
     if cache_ctx is not None:
-        # Hand the compile action the *extracted* cache directory
+        cache_generation = cache_ctx.layout.extracted.resolve(strict=True)
+        # Hand the compile action the resolved immutable extraction
         # rather than the snapshot tarball: skips ~100-500 ms of
         # gzip-decompression + 300+ file writes per warm rebuild
         # on macOS. The compile action discriminates between the
@@ -891,12 +892,12 @@ def run_bazel_build(
         # directory). See latex/private/latex_document.bzl.
         cmd.append(
             "--@rules_latex//latex:_serve_cache_override={}".format(
-                cache_ctx.layout.extracted,
+                cache_generation,
             ),
         )
         cmd.append(
             "--@rules_latex//latex:_serve_cache_generation={}".format(
-                cache_ctx.module.cache_nonce(cache_ctx.layout),
+                cache_ctx.module.cache_nonce(cache_ctx.layout, cache_generation),
             ),
         )
     # When synctex is enabled the .synctex.gz file lives in a non-default
@@ -952,15 +953,18 @@ def run_bazel_build(
             )
         # Retry the build with the freshly-primed cache.
         cmd_retry = list(cmd)
-        # Update the nonce because run_prime bumped the snapshot's
-        # mtime, and we want the compile action's cache key to
-        # change so it actually re-runs.
+        cache_generation = cache_ctx.layout.extracted.resolve(strict=True)
+        # Update both the immutable path and its digest after re-prime
+        # so this retry cannot read the previous generation.
         for i, arg in enumerate(cmd_retry):
+            if arg.startswith("--@rules_latex//latex:_serve_cache_override="):
+                cmd_retry[i] = "--@rules_latex//latex:_serve_cache_override={}".format(
+                    cache_generation,
+                )
             if arg.startswith("--@rules_latex//latex:_serve_cache_generation="):
                 cmd_retry[i] = "--@rules_latex//latex:_serve_cache_generation={}".format(
-                    cache_ctx.module.cache_nonce(cache_ctx.layout),
+                    cache_ctx.module.cache_nonce(cache_ctx.layout, cache_generation),
                 )
-                break
         retry_start = time.monotonic()
         result = subprocess.run(
             cmd_retry,
@@ -2578,12 +2582,14 @@ def _build_cache_context(workspace: Path, runfiles: Path) -> ServeCacheContext |
         bundle_manifest=bundle_manifest_path,
     )
 
-    layout = serve_cache.derive_cache_layout(workspace, DOCUMENT_LABEL)
+    layout = serve_cache.derive_cache_layout(
+        workspace, DOCUMENT_LABEL, serve_cache.prime_config_key(prime_spec),
+    )
 
     # QoL: keep .cache/rules_latex out of users' git index.
     serve_cache.ensure_gitignore_excludes_cache(workspace)
 
-    if not serve_cache.is_primed(layout):
+    if not serve_cache.is_primed(layout) or not serve_cache.is_extracted(layout):
         try:
             serve_cache.run_prime(layout, prime_spec, workspace)
         except serve_cache.PrimeFailure as e:
