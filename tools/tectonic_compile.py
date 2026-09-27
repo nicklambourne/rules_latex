@@ -336,7 +336,8 @@ def run_tectonic(
         file=sys.stderr,
     )
     try:
-        # Capture tectonic's stdout and forward it to our stderr.
+        # Capture tectonic's stdout and stderr together and forward
+        # both to our stderr.
         # In persistent-worker mode our process stdout is the
         # worker protocol channel; any bytes tectonic writes
         # there would be parsed as a malformed WorkResponse and
@@ -356,6 +357,7 @@ def run_tectonic(
             cwd=main_in_workdir.parent,
             check=False,
             stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
         )
         if result.stdout:
             try:
@@ -381,6 +383,10 @@ def run_tectonic(
                 log_text = log_path.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 log_text = ""
+            if log_text:
+                # The staging directory is removed when the request
+                # exits, so include the useful tail in the response.
+                print("tectonic log (tail):\n" + log_text[-16384:], file=sys.stderr)
             m = _BIBLATEX_VERSION_ERROR_RE.search(log_text)
             if m is not None:
                 file = m.group("file")
@@ -589,6 +595,8 @@ def _worker_loop() -> int:
             except SystemExit as e:
                 # argparse-driven exit; surface stderr we captured.
                 exit_code = int(e.code) if isinstance(e.code, int) else 2
+                if not isinstance(e.code, int) and e.code is not None:
+                    stderr_buf.write(f"{e.code}\n")
                 _write_response(
                     exit_code=exit_code or 2,
                     output=stderr_buf.getvalue(),
@@ -600,6 +608,8 @@ def _worker_loop() -> int:
                 exit_code = 0
             except SystemExit as e:
                 exit_code = int(e.code) if isinstance(e.code, int) else 1
+                if not isinstance(e.code, int) and e.code is not None:
+                    stderr_buf.write(f"{e.code}\n")
             except Exception:
                 # Unexpected exception: report exception text so
                 # the user can see what blew up, but keep the
