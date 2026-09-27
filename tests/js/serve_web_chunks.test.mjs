@@ -3,6 +3,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { planRangeSegments } from "../../latex/private/serve_web_chunks.js";
 
 const R = (start, end, hash) => ({ start, end, hash });
@@ -51,4 +53,29 @@ test("chunks ending before begin are skipped", () => {
   assert.deepEqual(planRangeSegments([R(0, 10, "a"), R(10, 20, "b")], 12, 18), [
     { kind: "chunk", hash: "b", sliceStart: 2, sliceEnd: 8 },
   ]);
+});
+
+test("WebSocket manifest falls back after an evicted chunk is skipped", () => {
+  const client = readFileSync(
+    new URL("../../latex/private/serve_web.js", import.meta.url), "utf8"
+  );
+  const code = client.split("let _wsPendingManifest = null;")[1]
+    .split("async function _flushWsRender()")[0];
+  const cache = new Map();
+  for (let i = 1; i <= 1000; i++) cache.set(`chunk-${i}`, new Uint8Array());
+  let fallback;
+  let renders = 0;
+  const context = {
+    chunkCache: cache,
+    clearTimeout: () => {},
+    setTimeout: (callback) => { fallback = callback; return 1; },
+    _flushWsRender: () => { renders++; },
+  };
+  runInNewContext(`let _wsPendingManifest = null;${code}`, context);
+  const ranges = Array.from({ length: 1001 }, (_, i) => ({ hash: `chunk-${i}` }));
+  context._handleWsMessage({ data: JSON.stringify({ type: "manifest", ranges }) });
+  assert.equal(renders, 0);
+  assert.equal(typeof fallback, "function");
+  fallback();
+  assert.equal(renders, 1);
 });
