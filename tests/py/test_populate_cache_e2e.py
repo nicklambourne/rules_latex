@@ -210,7 +210,7 @@ class RunTectonicFailurePathTest(unittest.TestCase):
 class DownloadAndScanFlowTest(unittest.TestCase):
     """Verifies download_ctan_package + _scan_package_dependencies wire up.
 
-    Cant hit CTAN from tests, so we monkeypatch urlretrieve to drop a
+    Can't hit CTAN from tests, so we monkeypatch the downloader to drop a
     pre-built fake .zip on disk. The rest of download_ctan_package
     (extract, scan, normalise) runs for real, exercising the
     "per-package dep tracking" path that the proactive summary and
@@ -254,7 +254,7 @@ class DownloadAndScanFlowTest(unittest.TestCase):
             import shutil as _sh
             _sh.copyfile(fake_zip, archive)
 
-        with patch.object(tpc.urllib.request, "urlretrieve", fake_urlretrieve):
+        with patch.object(tpc, "_download_once", fake_urlretrieve):
             deps = tpc.download_ctan_package("fake-pkg", self.dest)
 
         self.assertEqual(deps, {"etoolbox", "xcolor", "tikz"})
@@ -269,7 +269,7 @@ class DownloadAndScanFlowTest(unittest.TestCase):
             import shutil as _sh
             _sh.copyfile(fake_zip, archive)
 
-        with patch.object(tpc.urllib.request, "urlretrieve", fake_urlretrieve):
+        with patch.object(tpc, "_download_once", fake_urlretrieve):
             deps = tpc.download_ctan_package("lonely", self.dest)
 
         self.assertEqual(deps, set())

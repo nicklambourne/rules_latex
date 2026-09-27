@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planRangeSegments } from "../../latex/private/serve_web_chunks.js";
+import { BoundedChunkCache, planRangeSegments } from "../../latex/private/serve_web_chunks.js";
 
 const R = (start, end, hash) => ({ start, end, hash });
 
@@ -51,4 +51,16 @@ test("chunks ending before begin are skipped", () => {
   assert.deepEqual(planRangeSegments([R(0, 10, "a"), R(10, 20, "b")], 12, 18), [
     { kind: "chunk", hash: "b", sliceStart: 2, sliceEnd: 8 },
   ]);
+});
+
+test("chunk cache evicts by bytes and handles replacement", () => {
+  const cache = new BoundedChunkCache(10, 8);
+  cache.remember("a", new Uint8Array(4));
+  cache.remember("b", new Uint8Array(4));
+  cache.remember("a", new Uint8Array(6));
+  assert.equal(cache.byteSize, 6);
+  assert.deepEqual([...cache.keys()], ["a"]);
+  cache.remember("large", new Uint8Array(9));
+  assert.equal(cache.has("large"), false);
+  assert.equal(cache.byteSize, 6);
 });

@@ -1,7 +1,7 @@
 """Unit tests for the retry/backoff helper in tectonic_populate_cache.
 
 Covers the _retry_urlretrieve helper:
-  * Succeeds on first attempt → urlretrieve called once, no sleeps.
+  * Succeeds on first attempt → bounded downloader called once, no sleeps.
   * Transient URLError → retried with exponential backoff.
   * 5xx HTTPError → retried (these are usually transient).
   * 4xx HTTPError → propagated immediately (genuine "not there").
@@ -14,10 +14,13 @@ at module import and substituted into the URL list.
 from __future__ import annotations
 
 import importlib.util
+import io
 import os
 import sys
+import tempfile
 import unittest
 import urllib.error
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -58,7 +61,7 @@ class RetryUrlretrieveTest(unittest.TestCase):
         def ok(url, dest):
             calls.append(url)
 
-        with patch.object(tpc.urllib.request, "urlretrieve", ok):
+        with patch.object(tpc, "_download_once", ok):
             tpc._retry_urlretrieve(
                 "https://example/foo.zip", Path("/tmp/x"), sleep=sleeper
             )
@@ -75,7 +78,7 @@ class RetryUrlretrieveTest(unittest.TestCase):
                 raise urllib.error.URLError("connection timed out")
             # third attempt succeeds
 
-        with patch.object(tpc.urllib.request, "urlretrieve", flaky):
+        with patch.object(tpc, "_download_once", flaky):
             tpc._retry_urlretrieve(
                 "https://example/foo.zip",
                 Path("/tmp/x"),
@@ -92,7 +95,7 @@ class RetryUrlretrieveTest(unittest.TestCase):
         def always_fail(url, dest):
             raise urllib.error.URLError("connection refused")
 
-        with patch.object(tpc.urllib.request, "urlretrieve", always_fail):
+        with patch.object(tpc, "_download_once", always_fail):
             with self.assertRaises(urllib.error.URLError):
                 tpc._retry_urlretrieve(
                     "https://example/foo.zip",
@@ -115,7 +118,7 @@ class RetryUrlretrieveTest(unittest.TestCase):
                     url, 503, "Service Unavailable", {}, None
                 )
 
-        with patch.object(tpc.urllib.request, "urlretrieve", flaky):
+        with patch.object(tpc, "_download_once", flaky):
             tpc._retry_urlretrieve(
                 "https://example/foo.zip",
                 Path("/tmp/x"),
@@ -137,7 +140,7 @@ class RetryUrlretrieveTest(unittest.TestCase):
             attempts[0] += 1
             raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
 
-        with patch.object(tpc.urllib.request, "urlretrieve", four_oh_four):
+        with patch.object(tpc, "_download_once", four_oh_four):
             with self.assertRaises(urllib.error.HTTPError) as cm:
                 tpc._retry_urlretrieve(
                     "https://example/foo.zip",
@@ -155,7 +158,7 @@ class RetryUrlretrieveTest(unittest.TestCase):
         def always_fail(url, dest):
             raise urllib.error.URLError("nope")
 
-        with patch.object(tpc.urllib.request, "urlretrieve", always_fail):
+        with patch.object(tpc, "_download_once", always_fail):
             with self.assertRaises(urllib.error.URLError):
                 tpc._retry_urlretrieve(
                     "https://example/foo.zip",
@@ -165,6 +168,44 @@ class RetryUrlretrieveTest(unittest.TestCase):
                     base_delay=1.0,
                 )
         self.assertEqual(sleeper.delays, [1.0, 2.0, 4.0])
+
+
+class DownloadBoundsTest(unittest.TestCase):
+    def test_expired_download_deadline_stops_read(self):
+        class Response(io.BytesIO):
+            headers = {}
+
+        with tempfile.TemporaryDirectory() as td:
+            dest = Path(td) / "archive.zip"
+            with patch.object(tpc.urllib.request, "urlopen", return_value=Response(b"x")), \
+                 patch.object(tpc, "_DOWNLOAD_DEADLINE_S", 0):
+                with self.assertRaises(TimeoutError):
+                    tpc._download_once("https://example/archive.zip", dest)
+            self.assertFalse(dest.exists())
+
+    def test_streaming_download_rejects_excess_bytes(self):
+        class Response(io.BytesIO):
+            headers = {}
+
+        with tempfile.TemporaryDirectory() as td:
+            dest = Path(td) / "archive.zip"
+            with patch.object(tpc.urllib.request, "urlopen", return_value=Response(b"x" * 64)), \
+                 patch.object(tpc, "_MAX_DOWNLOAD_BYTES", 32):
+                with self.assertRaisesRegex(tpc.DownloadLimitError, "exceeds"):
+                    tpc._download_once("https://example/archive.zip", dest)
+            self.assertFalse(dest.exists(), "partial archive must be removed")
+
+    def test_archive_expansion_rejected_before_extraction(self):
+        with tempfile.TemporaryDirectory() as td:
+            archive = Path(td) / "archive.zip"
+            out = Path(td) / "out"
+            out.mkdir()
+            with zipfile.ZipFile(archive, "w") as zf:
+                zf.writestr("large.tex", "x" * 64)
+            with patch.object(tpc, "_MAX_EXTRACTED_BYTES", 32):
+                with self.assertRaisesRegex(tpc.DownloadLimitError, "expands"):
+                    tpc._extract_archive_bounded(archive, out)
+            self.assertEqual(list(out.iterdir()), [])
 
 
 class CtanMirrorEnvOverrideTest(unittest.TestCase):

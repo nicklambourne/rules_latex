@@ -99,10 +99,27 @@ from typing import Optional
 MAX_PDF_SIZE = 256 * 1024 * 1024
 
 # Cap the compressed-xref-stream size we'll decompress. The
-# uncompressed result is roughly 5x larger; 4 MiB compressed means
-# up to ~20 MiB decompressed, which is enough for ~4 million xref
-# entries — far more than any sane document.
+# decompressed result is independently capped below because a
+# malicious Flate stream can expand far beyond a typical xref ratio.
 MAX_XREF_STREAM_SIZE = 4 * 1024 * 1024
+MAX_DECOMPRESSED_STREAM_SIZE = 64 * 1024 * 1024
+
+
+def _decompress_bounded(payload: bytes) -> bytes:
+    """Decode a PDF stream without allowing a tiny Flate bomb."""
+    try:
+        decoder = zlib.decompressobj()
+        data = decoder.decompress(payload, MAX_DECOMPRESSED_STREAM_SIZE + 1)
+        if len(data) > MAX_DECOMPRESSED_STREAM_SIZE or decoder.unconsumed_tail:
+            raise _ParseError("decompressed stream too large")
+        data += decoder.flush(MAX_DECOMPRESSED_STREAM_SIZE + 1 - len(data))
+        if len(data) > MAX_DECOMPRESSED_STREAM_SIZE:
+            raise _ParseError("decompressed stream too large")
+        if not decoder.eof:
+            raise _ParseError("incomplete compressed stream")
+        return data
+    except zlib.error as exc:
+        raise _ParseError(f"stream decompress failed: {exc}") from exc
 
 # Largest tail we'll scan for the startxref keyword. PDF spec says
 # the trailer is at the file end and shorter than this in practice
@@ -436,10 +453,7 @@ def _parse_xref_stream(data: bytes, obj_offset: int) -> list[tuple[int, int]]:
         filter_text = filter_match.group(1)
         if "FlateDecode" not in filter_text:
             raise _ParseError(f"unsupported xref stream filter: {filter_text}")
-        try:
-            decompressed = zlib.decompress(payload)
-        except zlib.error as e:
-            raise _ParseError(f"xref stream decompress failed: {e}")
+        decompressed = _decompress_bounded(payload)
     else:
         decompressed = payload
 
@@ -791,10 +805,7 @@ def _decode_stream(data, obj_offset, dict_text):
     if len(payload) > MAX_XREF_STREAM_SIZE:
         raise _ParseError("stream payload too large")
     if "/FlateDecode" in dict_text:
-        try:
-            return zlib.decompress(payload)
-        except zlib.error as e:
-            raise _ParseError("flate decompress failed: %s" % e)
+        return _decompress_bounded(payload)
     if "/Filter" in dict_text:
         raise _ParseError("unsupported stream filter")
     return payload
