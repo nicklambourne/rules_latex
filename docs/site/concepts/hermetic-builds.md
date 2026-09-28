@@ -126,9 +126,11 @@ the CTAN packages, and the compile action then runs fully offline.
 
 In all three supported modes:
 
-- The Tectonic binary, biber binary, and (when used) bundle are
-  content-addressed by SHA-256 and fetched via Bazel repository
-  rules.
+- The Tectonic and biber binaries are content-addressed by SHA-256.
+  The full bundle in mode (2) is also checked by Bazel against its
+  declared SHA-256. The implicit prime in mode (3) range-fetches
+  a bundle URL through Tectonic; that path does not verify the
+  full-bundle digest.
 - Compile actions run in Bazel's sandbox with a scrubbed environment.
 - The action's only inputs are declared in the build graph.
 
@@ -137,6 +139,15 @@ action in mode (3), and that's marked `requires-network = "1"` so a
 sandbox configured to refuse network access will refuse it correctly.
 After that one prime, modes (1) and (3) are indistinguishable from
 the engine's perspective.
+
+For strict repeatability across fresh machines, use a committed cache
+snapshot (mode 1) or the hash-verified full bundle (mode 2). An
+implicit prime is an online convenience: its URL is stable, but a
+server changing bytes at that URL would not change Bazel's action key.
+Likewise, CTAN packages are mutable unless you provide a
+[`ctan_lock`](../getting-started/ctan-packages.md#lock-ctan-downloads)
+or commit a snapshot. System fonts and `biber_strategy = "system"`
+remain host-dependent regardless of cache mode.
 
 See [DESIGN.md §4.4](https://github.com/nicklambourne/rules_latex/blob/master/DESIGN.md#44-network-policy)
 for the architectural rationale.

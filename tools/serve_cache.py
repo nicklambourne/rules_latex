@@ -249,6 +249,7 @@ class PrimeSpec:
     bundle_url: str
     ctan_packages: tuple[str, ...]
     bundle_manifest: Path | None
+    ctan_lock: Path | None = None
 
 
 def prime_config_key(spec: PrimeSpec) -> str:
@@ -273,6 +274,9 @@ def prime_config_key(spec: PrimeSpec) -> str:
     manifest_hash = None
     if spec.bundle_manifest is not None:
         manifest_hash = hashlib.sha256(spec.bundle_manifest.read_bytes()).hexdigest()
+    ctan_lock_hash = None
+    if spec.ctan_lock is not None:
+        ctan_lock_hash = hashlib.sha256(spec.ctan_lock.read_bytes()).hexdigest()
     payload = {
         "tectonic": identity(spec.tectonic),
         "populate_tool": identity(spec.populate_tool),
@@ -281,6 +285,7 @@ def prime_config_key(spec: PrimeSpec) -> str:
         "use_system_biber": spec.use_system_biber,
         "bundle_url": spec.bundle_url,
         "bundle_manifest": manifest_hash,
+        "ctan_lock": ctan_lock_hash,
         "ctan_packages": spec.ctan_packages,
         "main": spec.main,
         "srcs": spec.srcs,
@@ -420,6 +425,8 @@ def run_prime(
                 if spec.bundle_manifest is None:
                     raise ValueError("CTAN priming requires a bundle manifest")
                 cmd.extend(["--bundle-manifest", str(spec.bundle_manifest)])
+            if spec.ctan_lock is not None:
+                cmd.extend(["--ctan-lock", str(spec.ctan_lock)])
 
             env = os.environ.copy()
             env["LC_ALL"] = "C.UTF-8"

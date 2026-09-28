@@ -25,7 +25,7 @@ re-introspecting attributes.
 load("@rules_latex//latex:providers.bzl", "LatexDocumentInfo")
 
 LatexDocumentInfo(<a href="#LatexDocumentInfo-main">main</a>, <a href="#LatexDocumentInfo-tectonic">tectonic</a>, <a href="#LatexDocumentInfo-biber">biber</a>, <a href="#LatexDocumentInfo-use_system_biber">use_system_biber</a>, <a href="#LatexDocumentInfo-pkg_files">pkg_files</a>, <a href="#LatexDocumentInfo-populate_tool">populate_tool</a>, <a href="#LatexDocumentInfo-staging_lib">staging_lib</a>,
-                  <a href="#LatexDocumentInfo-bundle_url">bundle_url</a>, <a href="#LatexDocumentInfo-ctan_packages">ctan_packages</a>, <a href="#LatexDocumentInfo-bundle_manifest">bundle_manifest</a>)
+                  <a href="#LatexDocumentInfo-bundle_url">bundle_url</a>, <a href="#LatexDocumentInfo-ctan_packages">ctan_packages</a>, <a href="#LatexDocumentInfo-ctan_lock">ctan_lock</a>, <a href="#LatexDocumentInfo-bundle_manifest">bundle_manifest</a>)
 </pre>
 
 Compile-time inputs of a `latex_document` target. Exposed so live-preview rules can drive their own parallel tectonic invocations (in particular, a serve-startup cache prime) without re-introspecting the document's attributes.
@@ -43,6 +43,7 @@ Compile-time inputs of a `latex_document` target. Exposed so live-preview rules 
 | <a id="LatexDocumentInfo-staging_lib"></a>staging_lib |  File: the tools/staging.py library imported by populate_tool.    |
 | <a id="LatexDocumentInfo-bundle_url"></a>bundle_url |  string: pinned bundle identity used by the implicit prime.    |
 | <a id="LatexDocumentInfo-ctan_packages"></a>ctan_packages |  list[string]: CTAN packages requested by the document.    |
+| <a id="LatexDocumentInfo-ctan_lock"></a>ctan_lock |  File or None: exact URL and SHA-256 lock for CTAN packages.    |
 | <a id="LatexDocumentInfo-bundle_manifest"></a>bundle_manifest |  File: the pinned bundle package manifest for CTAN resolution.    |
 
 

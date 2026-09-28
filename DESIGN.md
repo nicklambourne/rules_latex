@@ -1127,12 +1127,12 @@ available if concrete user demand justifies them.
     4. Repeat until the queue is empty.
     5. Run tectonic exactly once against the resolved closure.
 
-    **Why no `ctan_lockfile` attribute.** The Bazel action cache
-    already gives us per-build stability: same `ctan_packages` list
-    → same action key → same cached output. The resolver runs once
-    when the action cache is cold; afterwards every build reuses
-    the cached closure. The action cache *is* the implicit
-    lockfile — no extra surface area on the rule.
+    **Optional `ctan_lock` attribute.** A checked-in JSON manifest
+    fixes each CTAN archive URL and SHA-256. In this mode the resolver
+    fetches only packages named in the manifest, without probing
+    CTAN for new transitive names. The action cache still avoids
+    repeated downloads, but it is not a substitute for the lock on
+    fresh machines.
 
     **Hermeticity trade-off.** Across cold caches (fresh CI
     runner, `bazel clean`, different machine), the resolved
@@ -1140,8 +1140,9 @@ available if concrete user demand justifies them.
     `biblatex-apa` upstream adds a new dep between two cold-cache
     builds, the closure differs. For 95% of users this is invisible
     (warm cache, same machine). For users who need cross-machine
-    or archival reproducibility, the existing
-    `latex_cache_snapshot` is the answer: it captures the resolved
+    or archival reproducibility, `ctan_lock` fixes CTAN archive
+    identities, while `latex_cache_snapshot` also captures the
+    range-fetched bundle inputs: it captures the resolved
     closure as a checked-in tarball and downstream builds see a
     frozen result. Auto-resolution just means the snapshot fully
     describes the build instead of requiring the user to manually

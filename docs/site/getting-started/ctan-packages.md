@@ -23,7 +23,7 @@ latex_document(
 )
 ```
 
-That's the entire API surface: list package names, get the packages.
+For ordinary development, listing package names is enough.
 If you attach `latex_live` to this document, its first serve-time cache
 prime uses the same TeX Live 2026 bundle and CTAN package list. The
 pre-extracted structured cache retains the `ctan_pkgs/` overlay for
@@ -316,11 +316,44 @@ strings), but **not the content of the downloaded packages**. If
 upstream updates a package, you might keep getting the old version
 from your action cache until you `bazel clean`.
 
-For development this is usually what you want — fast, "good enough"
-builds. For production (CI, paper submissions, archival) you have
-two options:
+For development this is usually convenient. For production (CI,
+paper submissions, archival), choose one of these paths:
 
-### Option 1: Pin via cache snapshot (recommended)
+### Lock CTAN downloads
+
+Create a checked-in JSON file with the exact archive URL and SHA-256
+for every package you want to fetch, including transitive packages:
+
+```json
+{
+  "version": 1,
+  "packages": {
+    "biblatex-apa": {
+      "url": "https://your-mirror.example/biblatex-apa.zip",
+      "sha256": "<64 lowercase hexadecimal characters>"
+    }
+  }
+}
+```
+
+Obtain each digest from the archive you have reviewed and intend to
+use, then replace the placeholder above. Add `ctan_lock =
+"ctan.lock.json"` to `latex_document`, `latex_test`, or
+`latex_cache_snapshot` alongside `ctan_packages`. The prime verifies
+each downloaded archive before extraction. In locked mode the resolver
+does not probe or fetch names absent from the lock; a missing real
+dependency must be added explicitly. Updating an archive requires a
+reviewed lock-file change.
+When a document or test consumes `cache = ...`, put the lock on the
+snapshot generation rule instead; a lock on that offline consumer is
+rejected because it would not be used.
+
+The lock covers CTAN archives only. The implicit TeX Live bundle is
+still range-fetched without a full-bundle digest check. For a strictly
+repeatable release build, commit a cache snapshot or use the
+hash-verified full bundle as described in [Hermetic builds](../concepts/hermetic-builds.md).
+
+### Pin via cache snapshot (recommended for releases)
 
 Once the document compiles cleanly, capture a snapshot:
 
@@ -358,7 +391,7 @@ The snapshot bundles both the tectonic cache *and* the extracted
 CTAN packages, so subsequent builds are fully offline and frozen at
 the package versions captured when you ran the snapshot.
 
-### Option 2: Tolerate drift
+### Tolerate drift
 
 If you don't need bit-for-bit reproducibility, just don't add `cache`
 and let CTAN updates flow through whenever you `bazel clean`. This

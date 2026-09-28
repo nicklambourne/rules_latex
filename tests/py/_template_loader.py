@@ -60,6 +60,7 @@ _PLACEHOLDERS = {
     "{{PORT}}": "8765",
     "{{PRIME_BIBER_RUNFILE}}": "",
     "{{PRIME_BUNDLE_MANIFEST_RUNFILE}}": "",
+    "{{PRIME_CTAN_LOCK_RUNFILE}}": "",
     "{{PRIME_BUNDLE_URL}}": "",
     "{{PRIME_CTAN_PACKAGES}}": "",
     "{{PRIME_MAIN_RUNFILE}}": "",
