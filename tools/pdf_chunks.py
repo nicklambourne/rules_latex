@@ -112,11 +112,12 @@ def _decompress_bounded(payload: bytes) -> bytes:
         data = decoder.decompress(payload, MAX_DECOMPRESSED_STREAM_SIZE + 1)
         if len(data) > MAX_DECOMPRESSED_STREAM_SIZE or decoder.unconsumed_tail:
             raise _ParseError("decompressed stream too large")
-        data += decoder.flush(MAX_DECOMPRESSED_STREAM_SIZE + 1 - len(data))
-        if len(data) > MAX_DECOMPRESSED_STREAM_SIZE:
-            raise _ParseError("decompressed stream too large")
         if not decoder.eof:
             raise _ParseError("incomplete compressed stream")
+        # Reaching EOF with no unconsumed tail means all output is already
+        # returned. flush(length) is an initial allocation size, not a cap:
+        # passing the remaining budget there allocated ~64 MiB even for a
+        # tiny xref. No flush is needed for a complete one-shot stream.
         return data
     except zlib.error as exc:
         raise _ParseError(f"stream decompress failed: {exc}") from exc
