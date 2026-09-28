@@ -386,12 +386,11 @@ A handful of further hot-path optimisations apply to *every*
   tectonic does not write back to its cache under `--only-cached`.
   Saves ~100-500 ms per warm rebuild on macOS APFS.
 
-* **Hardlink-or-symlink staging**. `staging.stage_sources`
-  materialises staged files via `os.link` (then `os.symlink`,
-  then `shutil.copyfile` fallback) instead of unconditional copy.
-  The per-action staging tmpdir is torn down at action end so the
-  "self-contained snapshot" rationale for copy doesn't apply.
-  Saves ~5-50 ms per `stage_sources` call.
+* **Isolated source staging**. `staging.stage_sources` copies each input
+  into the per-action working directory. Hardlinks and symlinks are not
+  safe here: Tectonic may write an output at a staged input path, which
+  would then modify the original source. Copying adds I/O for large
+  inputs, but preserves source integrity in direct and sandboxed builds.
 
 * **Direct `ctx.actions.run`**. The `TectonicCompile` and
   `TectonicPopulateCache` actions invoke pinned `rules_python`
