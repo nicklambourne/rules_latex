@@ -53,6 +53,37 @@ test("chunks ending before begin are skipped", () => {
   ]);
 });
 
+test("indexed lookup preserves every byte across chunk and gap boundaries", () => {
+  // Exhaustive small ranges exercise exact ends, empty requests, gaps,
+  // first/last objects, and requests past the final object.
+  const ranges = [R(3, 9, "a"), R(9, 12, "b"), R(17, 25, "c")];
+  for (let begin = 0; begin <= 30; begin++) {
+    for (let end = begin; end <= 30; end++) {
+      const bytes = [];
+      for (const segment of planRangeSegments(ranges, begin, end)) {
+        const chunk = ranges.find(r => r.hash === segment.hash);
+        const start = chunk ? chunk.start + segment.sliceStart : segment.begin;
+        const stop = chunk ? chunk.start + segment.sliceEnd : segment.end;
+        for (let offset = start; offset < stop; offset++) bytes.push(offset);
+      }
+      assert.deepEqual(bytes, Array.from({ length: end - begin }, (_, i) => begin + i));
+    }
+  }
+});
+
+test("lookup does not scan preceding objects in a large manifest", () => {
+  let reads = 0;
+  const ranges = Array.from({ length: 65536 }, (_, i) => ({
+    start: i * 10,
+    get end() { reads++; return (i + 1) * 10; },
+    hash: String(i),
+  }));
+  assert.deepEqual(planRangeSegments(ranges, 655350, 655360), [
+    { kind: "chunk", hash: "65535", sliceStart: 0, sliceEnd: 10 },
+  ]);
+  assert.ok(reads < 25, `expected logarithmic lookup, read ${reads} ends`);
+});
+
 test("chunk cache evicts by bytes and handles replacement", () => {
   const cache = new BoundedChunkCache(10, 8);
   cache.remember("a", new Uint8Array(4));
