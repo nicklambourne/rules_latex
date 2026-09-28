@@ -38,6 +38,7 @@ sh_test(
     args = ["tests/js/serve_web_chunks.test.mjs"],
     data = [
         "serve_web_chunks.test.mjs",
+        "//latex/private:serve_web.js",
         "//latex/private:serve_web_chunks.js",
     ],
 )
