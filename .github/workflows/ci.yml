@@ -39,10 +39,10 @@ jobs:
       USE_BAZEL_VERSION: ${{ matrix.bazel-version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Bazelisk
-        uses: bazel-contrib/setup-bazel@0.19.0
+        uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
         with:
           bazelisk-cache: true
           # Cache key includes the bazel version so 8.0 / 8.7 / 9.1
@@ -510,10 +510,10 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Bazelisk
-        uses: bazel-contrib/setup-bazel@0.19.0
+        uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
         with:
           bazelisk-cache: true
           disk-cache: ${{ github.workflow }}-python-consumers
@@ -535,10 +535,10 @@ jobs:
       USE_BAZEL_VERSION: "8.0.0"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Bazelisk
-        uses: bazel-contrib/setup-bazel@0.19.0
+        uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
         with:
           bazelisk-cache: true
           disk-cache: ${{ github.workflow }}-ubuntu-24.04-arm
@@ -578,10 +578,12 @@ jobs:
     name: buildifier
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install buildifier
         run: |
-          wget -qO /usr/local/bin/buildifier https://github.com/bazelbuild/buildtools/releases/latest/download/buildifier-linux-amd64
-          chmod +x /usr/local/bin/buildifier
+          curl -fsSL --retry 3 -o buildifier \
+            https://github.com/bazel-contrib/buildtools/releases/download/v10.1.0/buildifier-linux-amd64
+          echo '31b6a8aa1e5c746696788f428729701770ad91925873d8256cb885c60e12c77e  buildifier' | sha256sum -c -
+          sudo install -m 755 buildifier /usr/local/bin/buildifier
       - name: Lint
         run: buildifier --mode=check --lint=warn -r .
