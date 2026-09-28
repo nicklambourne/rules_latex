@@ -199,12 +199,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # contents are the real arguments, newline-separated. We
     # expand that here so downstream parsing sees the unfolded
     # form whether or not the caller used the response-file form.
-    return parser.parse_args(_expand_response_files(argv))
+    return parser.parse_args(_expand_response_files(
+        sys.argv[1:] if argv is None else argv,
+    ))
 
 
 def _expand_response_files(
-    argv: list[str] | None,
-) -> list[str] | None:
+    argv: list[str],
+) -> list[str]:
     """Expand any ``@<path>`` entry in ``argv`` by inlining the file's
     newline-separated contents.
 
@@ -214,12 +216,8 @@ def _expand_response_files(
     used per-request in worker mode when arguments overflow the
     command-line length limit.
 
-    Pass-through behaviour: if ``argv`` is ``None`` we return
-    ``None`` so argparse falls back to ``sys.argv[1:]``; if no
-    entry starts with ``@`` we return ``argv`` unchanged.
+    If no entry starts with ``@`` we return ``argv`` unchanged.
     """
-    if argv is None:
-        return None
     expanded: list[str] = []
     for token in argv:
         if token.startswith("@") and len(token) > 1:
