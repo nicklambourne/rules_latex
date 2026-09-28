@@ -1,5 +1,37 @@
 # Performance review and PR plan — 2026-09-28
 
+## Snapshot-retention follow-up
+
+The subsequent all-33-PR end-to-end audit found that immutable PDF snapshots
+were never collected. Keep the correctness fixes and streaming transport; bound
+published snapshots to 8 files / 128 MiB / five minutes, always retaining the
+current generation (an oversized current PDF is retained alone).
+
+Validation on the combined train plus retention fix, on the same local host:
+
+- All 39 Bazel test targets passed. Coverage includes restart cleanup, capacity
+  overriding grace, oversized current PDFs, unsupported/failed parsing, and an
+  HTTP reader completing with the original bytes after its snapshot is unlinked.
+- Real Chrome recovered from an injected `410` on a generation URL and rendered
+  the expected pixels. A separate 12 MiB image-PDF run passed 20 text edits and
+  an image-only edit; every edit changed the visible pixels. Snapshot storage
+  fell from 27 files / 324.4 MiB to one current PDF on startup, then plateaued
+  at 8 files / 96.1 MiB. All sampled current generations remained available.
+- 80 alternating paired post-build-hook measurements on that PDF: median
+  **19.04 → 19.54 ms (+0.50 ms / 2.6%)**. Cleanup itself took **0.35 ms** median,
+  **0.53 ms** p95. This is a small added cost, not a measured end-to-end speedup.
+  Both variants began each sample with eight snapshots; the baseline's history
+  was trimmed outside its timer. Warm chunk caches, no connected clients.
+- The 20-edit end-to-end run had a 1.75 s median edit-to-paint latency. It was
+  not a paired timing comparison and ran on a shared host. One previously
+  observed PDF.js startup cancellation warning recurred and recovered; the
+  retention change does not claim to resolve that separate diagnostic.
+
+No correctness fix was reverted and no PR was merged. When combining with
+#118, apply the server changes to `serve_web_runtime.py`, as validated locally.
+
+## Original performance review
+
 The review covered source staging, compilation and cache handling, PDF snapshot
 and chunk generation, HTTP transport, browser chunk loading/range planning,
 rendering, watcher/status polling, and CI. The five changes below remove measured
