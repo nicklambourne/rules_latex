@@ -24,7 +24,7 @@ re-introspecting attributes.
 <pre>
 load("@rules_latex//latex:providers.bzl", "LatexDocumentInfo")
 
-LatexDocumentInfo(<a href="#LatexDocumentInfo-main">main</a>, <a href="#LatexDocumentInfo-tectonic">tectonic</a>, <a href="#LatexDocumentInfo-biber">biber</a>, <a href="#LatexDocumentInfo-use_system_biber">use_system_biber</a>, <a href="#LatexDocumentInfo-pkg_files">pkg_files</a>, <a href="#LatexDocumentInfo-populate_tool">populate_tool</a>, <a href="#LatexDocumentInfo-staging_lib">staging_lib</a>,
+LatexDocumentInfo(<a href="#LatexDocumentInfo-main">main</a>, <a href="#LatexDocumentInfo-tectonic">tectonic</a>, <a href="#LatexDocumentInfo-tectonic_runfiles">tectonic_runfiles</a>, <a href="#LatexDocumentInfo-biber">biber</a>, <a href="#LatexDocumentInfo-biber_runfiles">biber_runfiles</a>, <a href="#LatexDocumentInfo-use_system_biber">use_system_biber</a>, <a href="#LatexDocumentInfo-pkg_files">pkg_files</a>, <a href="#LatexDocumentInfo-populate_tool">populate_tool</a>, <a href="#LatexDocumentInfo-staging_lib">staging_lib</a>,
                   <a href="#LatexDocumentInfo-bundle_url">bundle_url</a>, <a href="#LatexDocumentInfo-ctan_packages">ctan_packages</a>, <a href="#LatexDocumentInfo-ctan_lock">ctan_lock</a>, <a href="#LatexDocumentInfo-bundle_manifest">bundle_manifest</a>)
 </pre>
 
@@ -36,7 +36,9 @@ Compile-time inputs of a `latex_document` target. Exposed so live-preview rules 
 | :------------- | :------------- |
 | <a id="LatexDocumentInfo-main"></a>main |  File: the main .tex file passed to tectonic.    |
 | <a id="LatexDocumentInfo-tectonic"></a>tectonic |  File: the tectonic binary resolved from the toolchain.    |
+| <a id="LatexDocumentInfo-tectonic_runfiles"></a>tectonic_runfiles |  Runfiles: runtime files of the tectonic executable.    |
 | <a id="LatexDocumentInfo-biber"></a>biber |  File or None: the biber binary, if biber = True was set.    |
+| <a id="LatexDocumentInfo-biber_runfiles"></a>biber_runfiles |  Runfiles or None: runtime files of biber, if enabled.    |
 | <a id="LatexDocumentInfo-use_system_biber"></a>use_system_biber |  bool: True when biber_strategy = "system".    |
 | <a id="LatexDocumentInfo-pkg_files"></a>pkg_files |  list[(File, string)]: explicit staging overrides.    |
 | <a id="LatexDocumentInfo-populate_tool"></a>populate_tool |  File: the tools/tectonic_populate_cache.py script.    |
@@ -66,5 +68,4 @@ Information about a LaTeX source set or compiled document.
 | <a id="LatexInfo-srcs"></a>srcs |  depset[File]: transitive set of LaTeX source files (.tex, .sty, .cls, .bib, images, etc.) that documents depending on this target need to see.    |
 | <a id="LatexInfo-search_paths"></a>search_paths |  depset[string]: directories (relative to the Bazel execroot) that downstream tectonic invocations should add to TEXINPUTS/BIBINPUTS/BSTINPUTS.    |
 | <a id="LatexInfo-offline_strategy"></a>offline_strategy |  string: which offline-mode strategy the target resolved to. One of "user_cache" (explicit `cache = "..."` attr), "bundle" (toolchain-level tectonic.bundle()), or "implicit" (implicit populate-cache pipeline). Set only by `latex_document`; other rules that provide `LatexInfo` (`latex_library`, `latex_pkg`) leave it as the empty string. Consumed by `latex_live` to decide whether to interpose a persistent serve-time cache snapshot via the `//latex:_serve_cache_override` build setting.    |
-
 

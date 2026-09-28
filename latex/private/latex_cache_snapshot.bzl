@@ -157,6 +157,9 @@ exec {tool} \\
     if ctx.file.ctan_lock:
         runfiles_files.append(ctx.file.ctan_lock)
     runfiles = ctx.runfiles(files = runfiles_files).merge(tool_info.default_runfiles)
+    runfiles = runfiles.merge(toolchain.tectonic_runfiles)
+    if biber_file:
+        runfiles = runfiles.merge(toolchain.biber_runfiles)
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
 
 def _resolved_pkg_files(ctx):

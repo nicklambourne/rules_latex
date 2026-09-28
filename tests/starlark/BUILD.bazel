@@ -1,3 +1,6 @@
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("//latex:defs.bzl", "latex_live")
+load("//latex/toolchain:toolchain.bzl", "latex_toolchain")
 load(":latex_document_test.bzl", "latex_document_test_suite")
 
 latex_document_test_suite(name = "latex_document_tests")
@@ -9,4 +12,28 @@ platform(
         "@platforms//cpu:x86_64",
         "@platforms//os:linux",
     ],
+)
+
+sh_binary(
+    name = "tectonic_with_data",
+    srcs = ["fake_tectonic.sh"],
+    data = ["runtime_marker.txt"],
+)
+
+latex_toolchain(
+    name = "custom_toolchain_impl",
+    tectonic = ":tectonic_with_data",
+)
+
+toolchain(
+    name = "custom_toolchain",
+    toolchain = ":custom_toolchain_impl",
+    toolchain_type = "//latex/toolchain:toolchain_type",
+)
+
+latex_live(
+    name = "custom_live_probe",
+    document = ":_doc_implicit",
+    open_on_start = False,
+    tags = ["manual"],
 )
