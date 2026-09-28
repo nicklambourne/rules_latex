@@ -106,8 +106,11 @@ roughly 150–400 ms warm-rebuild saving.
 
 The watcher monitors every `.tex`, `.bib`, image, and other file in
 the document's `srcs` plus transitively via `deps`. Edits to the
-toolchain binary or the cache snapshot are picked up by Bazel's
-analysis layer, so they trigger correct rebuilds too.
+toolchain binary or cache configuration require restarting `latex_live`;
+the new launcher selects a separate persistent cache. A re-prime keeps
+older extracted generations so an in-flight compile can finish safely.
+After stopping all preview processes, remove `.cache/rules_latex/` in your
+workspace if you want to reclaim that storage.
 
 External-repo files (e.g. from a `latex_library` published in another
 Bazel module) are not watched. Edit those and re-run `bazel run

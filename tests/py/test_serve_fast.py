@@ -17,9 +17,11 @@ must behave exactly like the old `bazel build`-only watcher.
 from __future__ import annotations
 
 import tempfile
+import os
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tests.py._template_loader import load_template_module
 
@@ -44,6 +46,50 @@ class ParamsPathTest(unittest.TestCase):
             _M._params_path(ws),
             ws / "bazel-bin" / "test/doc.pdf-0.params",
         )
+
+
+class ServeCacheGenerationTest(unittest.TestCase):
+    def test_retry_uses_new_immutable_generation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            old = workspace / "cache-old"
+            new = workspace / "cache-new"
+            old.mkdir()
+            new.mkdir()
+            pointer = workspace / "cache"
+            pointer.symlink_to(old.name)
+            layout = types.SimpleNamespace(extracted=pointer)
+
+            def reprime(_layout, _spec, _workspace):
+                next_pointer = workspace / "cache-next"
+                next_pointer.symlink_to(new.name)
+                os.replace(next_pointer, pointer)
+
+            module = types.SimpleNamespace(
+                cache_nonce=lambda _layout, generation: generation.name,
+                looks_like_missing_resource=lambda _output: True,
+                invalidate_for_reprime=lambda _layout: None,
+                run_prime=reprime,
+            )
+            context = _M.ServeCacheContext(module=module, layout=layout, spec=None)
+            failed = types.SimpleNamespace(
+                returncode=1, stdout="", stderr="missing cache resource",
+            )
+            succeeded = types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+            with patch.object(_M.subprocess, "run", side_effect=[failed, succeeded]) as run:
+                result = _M.run_bazel_build(workspace, context)
+
+            self.assertTrue(result[0])
+            first, retry = [call.args[0] for call in run.call_args_list]
+            for args, generation in ((first, old), (retry, new)):
+                self.assertIn(
+                    f"--@rules_latex//latex:_serve_cache_override={generation.resolve()}",
+                    args,
+                )
+                self.assertIn(
+                    f"--@rules_latex//latex:_serve_cache_generation={generation.name}",
+                    args,
+                )
 
 
 class RebuildDispatchTest(unittest.TestCase):
