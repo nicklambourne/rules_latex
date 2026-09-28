@@ -1,4 +1,4 @@
-"""Unit tests for `BuildState.set_log` / `get_log` in serve_web.py.tpl.
+"""Unit tests for `BuildState.set_log` / `get_log` in serve_web_runtime.py.
 
 The build-log drawer (UI PR 5/7) caps server-retained output at
 `LOG_MAX_BYTES = 64 KiB`. The cap lives on the **tail** of the
@@ -17,9 +17,9 @@ from __future__ import annotations
 
 import unittest
 
-from tests.py._template_loader import load_template_module
+from tests.py._server_loader import load_server_module
 
-_M = load_template_module(name="serve_web_log_test")
+_M = load_server_module(name="serve_web_log_test")
 LOG_MAX_BYTES = _M.LOG_MAX_BYTES
 
 

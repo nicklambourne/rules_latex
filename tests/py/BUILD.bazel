@@ -4,7 +4,7 @@ load(":py_unittest.bzl", "py_unittest")
 
 # Sources the test modules load via __file__-relative paths.
 _TEST_DATA = [
-    "//latex/private:serve_web.py.tpl",
+    "//latex/private:serve_web_runtime.py",
     "//tools:pdf_chunks.py",
     "//tools:serve_cache.py",
     "//tools:staging.py",
@@ -16,13 +16,13 @@ _TEST_DATA = [
 py_unittest(
     name = "test_synctex_parser",
     data = _TEST_DATA,
-    extra_srcs = ["_template_loader.py"],
+    extra_srcs = ["_server_loader.py"],
 )
 
 py_unittest(
     name = "test_open_browser",
     data = _TEST_DATA,
-    extra_srcs = ["_template_loader.py"],
+    extra_srcs = ["_server_loader.py"],
 )
 
 py_unittest(
@@ -43,7 +43,7 @@ py_unittest(
 py_unittest(
     name = "test_watcher_debouncer",
     data = _TEST_DATA,
-    extra_srcs = ["_template_loader.py"],
+    extra_srcs = ["_server_loader.py"],
 )
 
 py_unittest(
@@ -54,13 +54,13 @@ py_unittest(
 py_unittest(
     name = "test_post_build_hook",
     data = _TEST_DATA,
-    extra_srcs = ["_template_loader.py"],
+    extra_srcs = ["_server_loader.py"],
 )
 
 py_unittest(
     name = "test_http_head",
     data = _TEST_DATA,
-    extra_srcs = ["_template_loader.py"],
+    extra_srcs = ["_server_loader.py"],
 )
 
 py_unittest(
@@ -93,36 +93,36 @@ py_unittest(
     data = [],
 )
 
-# These live-preview server tests import the shared template loader as Python
+# These live-preview server tests import the shared runtime loader as Python
 # source so rules_python places it on their import path.
 py_unittest(
     name = "test_combine_output",
     data = _TEST_DATA,
-    extra_srcs = ["_template_loader.py"],
+    extra_srcs = ["_server_loader.py"],
 )
 
 py_unittest(
     name = "test_build_state_log",
     data = _TEST_DATA,
-    extra_srcs = ["_template_loader.py"],
+    extra_srcs = ["_server_loader.py"],
 )
 
 py_unittest(
     name = "test_build_state_git",
     data = _TEST_DATA,
-    extra_srcs = ["_template_loader.py"],
+    extra_srcs = ["_server_loader.py"],
 )
 
 py_unittest(
     name = "test_build_state_ws",
     data = _TEST_DATA,
-    extra_srcs = ["_template_loader.py"],
+    extra_srcs = ["_server_loader.py"],
 )
 
 py_unittest(
     name = "test_serve_fast",
     data = _TEST_DATA,
-    extra_srcs = ["_template_loader.py"],
+    extra_srcs = ["_server_loader.py"],
 )
 
 test_suite(

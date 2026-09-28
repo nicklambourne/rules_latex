@@ -1,4 +1,4 @@
-"""Unit tests for the watcher post-build hook in serve_web.py.tpl.
+"""Unit tests for the watcher post-build hook in serve_web_runtime.py.
 
 After every successful build the watcher thread calls
 ``_compute_manifest_post_build`` to (1) parse the PDF into
@@ -8,7 +8,7 @@ current manifest after a min-age guard.
 
 The tests below exercise the integration of ``pdf_chunks`` (the
 real chunker) with the serve script's state plumbing. We
-deliberately load the template module rather than mocking out
+deliberately load the runtime module rather than mocking out
 ``pdf_chunks``, because the contract under test is exactly that
 the wiring matches: any drift between ``pdf_chunks.Manifest`` and
 what ``BuildState.update_manifest`` expects would only show up at
@@ -19,69 +19,17 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from tests.py._template_loader import _PLACEHOLDERS as _DEFAULT_PLACEHOLDERS
 import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
 
+from tests.py._server_loader import load_server_module
+
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-_TEMPLATE_PATH = _REPO_ROOT / "latex" / "private" / "serve_web.py.tpl"
 _PDF_CHUNKS_PATH = _REPO_ROOT / "tools" / "pdf_chunks.py"
-
-
-_PLACEHOLDERS = {
-    "{{DOCUMENT_LABEL}}": "//test:doc",
-    "{{PDF_RELPATH}}": "test/doc.pdf",
-    "{{SYNCTEX_RELPATH}}": "",
-    "{{WATCHED_PATHS}}": "test/doc.tex",
-    "{{POLL_INTERVAL}}": "80",
-    "{{DEBOUNCE_MS}}": "250",
-    "{{DEBOUNCE_MAX_MS}}": "1500",
-    "{{PORT}}": "8765",
-    "{{DOCUMENT_NAME}}": "doc",
-    "{{PDFJS_LIB_RUNFILE}}": "_pdfjs/pdf.mjs",
-    "{{PDFJS_WORKER_RUNFILE}}": "_pdfjs/pdf.worker.mjs",
-    "{{OPEN_ON_START}}": "0",
-    "{{PDF_CHUNKS_RUNFILE}}": "_tools/pdf_chunks.py",
-    "{{ENABLE_SERVE_CACHE}}": "",
-    "{{SERVE_CACHE_RUNFILE}}": "",
-    "{{PRIME_MAIN_RUNFILE}}": "",
-    "{{PRIME_TECTONIC_RUNFILE}}": "",
-    "{{PRIME_POPULATE_TOOL_RUNFILE}}": "",
-    "{{PRIME_STAGING_LIB_RUNFILE}}": "",
-    "{{PRIME_BIBER_RUNFILE}}": "",
-    "{{PRIME_USE_SYSTEM_BIBER}}": "",
-    "{{PRIME_BUNDLE_URL}}": "",
-    "{{PRIME_BUNDLE_MANIFEST_RUNFILE}}": "",
-    "{{PRIME_CTAN_LOCK_RUNFILE}}": "",
-    "{{PRIME_CTAN_PACKAGES}}": "",
-    "{{PRIME_SRCS}}": "",
-    "{{PRIME_PKG_FILES}}": "",
-}
-
-
-def _load_template_module():
-    source = _TEMPLATE_PATH.read_text()
-    for placeholder, replacement in {**_DEFAULT_PLACEHOLDERS, **_PLACEHOLDERS}.items():
-        source = source.replace(placeholder, json.dumps(replacement))
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".py", delete=False, encoding="utf-8",
-    )
-    try:
-        tmp.write(source)
-        tmp.close()
-        spec = importlib.util.spec_from_file_location(
-            "serve_web_test_module_chunks", tmp.name,
-        )
-        module = importlib.util.module_from_spec(spec)
-        sys.modules["serve_web_test_module_chunks"] = module
-        spec.loader.exec_module(module)
-        return module
-    finally:
-        Path(tmp.name).unlink()
 
 
 def _load_pdf_chunks():
@@ -94,7 +42,10 @@ def _load_pdf_chunks():
     return module
 
 
-_M = _load_template_module()
+_M = load_server_module(
+    "serve_web_test_module_chunks",
+    extra={"SYNCTEX_RELPATH": ""},
+)
 _PC = _load_pdf_chunks()
 
 

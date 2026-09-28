@@ -483,7 +483,7 @@ because most page-content streams don't shift when a single
 page is edited.
 
 See `tools/pdf_chunks.py` for the parser and
-`latex/private/serve_web.py.tpl` for the HTTP endpoints and
+`latex/private/serve_web_runtime.py` for the HTTP endpoints and
 client-side transport.
 
 `latex_live` vendors PDF.js into the rule set via the
@@ -596,7 +596,7 @@ document's `synctex` `OutputGroupInfo` and offers two affordances:
   because the editor is the one driving it.
 
 * **Server-side parser.** A minimal SyncTeX v1 parser in
-  [`serve_web.py.tpl`](./latex/private/serve_web.py.tpl) reads the
+  [`serve_web_runtime.py`](./latex/private/serve_web_runtime.py) reads the
   gzipped synctex file, builds an index of (file_id → path) plus a
   flat list of box records, and resolves clicks to the smallest
   enclosing box. Paths in the synctex file are sandbox-absolute (TeX
@@ -1074,7 +1074,7 @@ available if concrete user demand justifies them.
     constant alongside the output-set change. Tracked in
     [GitHub issue #11](https://github.com/nicklambourne/rules_latex/issues/11).
 11. **Python toolchain hermeticity.** **Shipped in v0.7.0.** Private tools,
-    generated live-preview servers, and Python tests run with a pinned Python
+    live-preview servers, and Python tests run with a pinned Python
     3.13 toolchain from `rules_python`; no action or launcher searches for a
     system `python3`. The scripts remain stdlib-only. Consumer fixtures verify
     coexistence with consumer-owned Python 3.11 and 3.14 toolchains and with
