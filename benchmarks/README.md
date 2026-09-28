@@ -118,6 +118,8 @@ bounds instead of noisy wall-clock expectations.
 Focused Python tests ran both directly and through Bazel's pinned Python.
 The combined local branch ran all 39 JavaScript unit tests and the real Chrome
 smoke: initial canvas render, source edit, successful rebuild, changed canvas
-pixels, no browser errors, source restored afterward. The full Bazel suite uses
-the repository's local CTAN fixture mirror, as CI does. GitHub matrix status is
+pixels, no browser errors, source restored afterward. All 34 Bazel test targets passed on the combined branch using
+the repository's local CTAN fixture mirror, as CI does. The first invocation
+omitted that fixture setup and failed its synthetic-package test; rerunning
+with the CI fixture environment passed the entire suite. GitHub matrix status is
 recorded on each PR and may still be running; no merge is part of this review.

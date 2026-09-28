@@ -392,6 +392,19 @@ class TestHeadRangeRequests(unittest.TestCase):
             status, hdrs, _ = _request(self.fixture.port, "GET", "/pdf", headers={"Range": value})
             self.assertEqual((status, hdrs["content-range"]), (416, "bytes */0"))
 
+    def test_short_read_or_io_error_closes_incomplete_response(self):
+        for failure in (b"", OSError("read failed")):
+            with self.fixture.pdf_path.open("rb") as source:
+                reader = mock.MagicMock(wraps=source)
+                reader.__enter__.return_value = reader
+                reader.__exit__.return_value = None
+                reader.read.side_effect = [b"first", failure]
+                with mock.patch.object(Path, "open", return_value=reader):
+                    with self.assertRaises(http.client.IncompleteRead) as raised:
+                        _request(self.fixture.port, "GET", "/pdf")
+                # No second HTTP error response is appended to the PDF.
+                self.assertEqual(raised.exception.partial, b"first")
+
     def test_old_manifest_ranges_remain_immutable_after_rebuild(self):
         original = self.fixture.pdf_path.read_bytes()
         _, old_hash = self.fixture.state.get_manifest_snapshot()
