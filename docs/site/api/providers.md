@@ -69,3 +69,4 @@ Information about a LaTeX source set or compiled document.
 | <a id="LatexInfo-search_paths"></a>search_paths |  depset[string]: retained for provider compatibility. Document compilation does not read this field or set TEXINPUTS/BIBINPUTS/BSTINPUTS; it stages source files by path instead. Use pkg_files to override a staged path.    |
 | <a id="LatexInfo-offline_strategy"></a>offline_strategy |  string: which offline-mode strategy the target resolved to. One of "user_cache" (explicit `cache = "..."` attr), "bundle" (toolchain-level tectonic.bundle()), or "implicit" (implicit populate-cache pipeline). Set only by `latex_document`; other rules that provide `LatexInfo` (`latex_library`, `latex_pkg`) leave it as the empty string. Consumed by `latex_live` to decide whether to interpose a persistent serve-time cache snapshot via the `//latex:_serve_cache_override` build setting.    |
 
+

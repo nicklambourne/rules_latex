@@ -95,11 +95,11 @@ class ServeCacheGenerationTest(unittest.TestCase):
 class TemplateLiteralTest(unittest.TestCase):
     def test_generated_python_preserves_special_characters(self):
         literal = 'quote " and apostrophe \' and backslash \\ and $() and `x`\ntriple """'
-        module = load_template_module(
+        module = load_server_module(
             name="serve_web_literal_test",
             extra={
-                "{{DOCUMENT_NAME}}": literal,
-                "{{WATCHED_PATHS}}": literal,
+                "DOCUMENT_NAME": literal,
+                "WATCHED_PATHS_RAW": literal,
             },
         )
         self.assertEqual(module.DOCUMENT_NAME, literal)
