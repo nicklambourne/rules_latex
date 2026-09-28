@@ -5,7 +5,7 @@
 
 // Plan how to assemble the byte range [begin, end) of the PDF from a list
 // of content-addressed chunk ranges (each `{ start, end, hash }`, sorted
-// by start), filling the gaps not covered by any chunk — the PDF
+// by start and non-overlapping), filling the gaps not covered by any chunk — the PDF
 // "skeleton" (header, xref, trailer) — with skeleton segments.
 //
 // Returns an ordered list of segment descriptors:
@@ -15,10 +15,15 @@
 export function planRangeSegments(sortedRanges, begin, end) {
   const segments = [];
   let cursor = begin;
-  // Skip chunks that end at or before `begin`.
+  // Find the first overlapping chunk in O(log n). PDF.js often requests
+  // ranges near the end of large manifests; don't scan from the header
+  // on every request. Non-overlapping ranges have monotonically rising ends.
   let i = 0;
-  while (i < sortedRanges.length && sortedRanges[i].end <= begin) {
-    i++;
+  let high = sortedRanges.length;
+  while (i < high) {
+    const mid = i + Math.floor((high - i) / 2);
+    if (sortedRanges[mid].end <= begin) i = mid + 1;
+    else high = mid;
   }
   while (cursor < end) {
     if (i < sortedRanges.length && sortedRanges[i].start < end) {
