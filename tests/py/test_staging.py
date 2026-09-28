@@ -71,6 +71,12 @@ class TestNormaliseShortPath(unittest.TestCase):
             Path("bazel-out/external/foo/file.tex"),
         )
 
+    def test_external_runfile_has_safe_logical_path(self):
+        self.assertEqual(
+            _S.normalise_short_path(Path("../+repo+pkg/asset.tex")),
+            Path("external/+repo+pkg/asset.tex"),
+        )
+
 
 class TestComputeStagedPath(unittest.TestCase):
     """Mapping from src path + main package to staged-relative path."""
@@ -229,6 +235,65 @@ class TestStageSources(unittest.TestCase):
             (self.work_dir / "sections" / "intro.tex").read_text(),
             "lib/refs.bib",
         )
+
+    def test_override_resolves_auto_placement_collision(self):
+        generated = Path("bazel-out/test/bin/pkg/sections/intro.tex")
+        generated.parent.mkdir(parents=True)
+        generated.write_text("generated")
+        _S.stage_sources(
+            Path("pkg/main.tex"),
+            [Path("pkg/sections/intro.tex"), generated],
+            [_S.PkgFile(src=generated, rel="generated/intro.tex")],
+            self.work_dir,
+        )
+        self.assertEqual(
+            (self.work_dir / "sections/intro.tex").read_text(),
+            "pkg/sections/intro.tex",
+        )
+        self.assertEqual(
+            (self.work_dir / "generated/intro.tex").read_text(),
+            "generated",
+        )
+
+    def test_two_overrides_of_one_destination_fail_before_copy(self):
+        with self.assertRaisesRegex(_S.StagingError, "two pkg_files inputs"):
+            _S.stage_sources(
+                Path("pkg/main.tex"), [],
+                [
+                    _S.PkgFile(src=Path("lib/refs.bib"), rel="same.bib"),
+                    _S.PkgFile(src=Path("pkg/sections/intro.tex"), rel="same.bib"),
+                ],
+                self.work_dir,
+            )
+        self.assertEqual(list(self.work_dir.iterdir()), [])
+
+    def test_file_directory_collision_fails_before_copy(self):
+        with self.assertRaisesRegex(_S.StagingError, "conflicts with nested"):
+            _S.stage_sources(
+                Path("pkg/main.tex"), [],
+                [
+                    _S.PkgFile(src=Path("lib/refs.bib"), rel="assets"),
+                    _S.PkgFile(src=Path("pkg/sections/intro.tex"), rel="assets/intro.tex"),
+                ],
+                self.work_dir,
+            )
+        self.assertEqual(list(self.work_dir.iterdir()), [])
+
+    def test_external_runfile_uses_physical_source_and_safe_destination(self):
+        external = self.workspace.parent / (self.workspace.name + "_external")
+        external.mkdir()
+        try:
+            (external / "asset.tex").write_text("external")
+            source = Path("..") / external.name / "asset.tex"
+            _S.stage_sources(
+                Path("pkg/main.tex"), [source], [], self.work_dir,
+            )
+            self.assertEqual(
+                (self.work_dir / "external" / external.name / "asset.tex").read_text(),
+                "external",
+            )
+        finally:
+            shutil.rmtree(external)
 
     def test_absolute_main_path_rejected(self):
         main_abs = self.workspace / "pkg" / "main.tex"

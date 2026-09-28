@@ -17,7 +17,7 @@ happen.
 """
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
-load("//latex:defs.bzl", "latex_document")
+load("//latex:defs.bzl", "latex_cache_snapshot", "latex_document")
 load("//latex/toolchain:toolchain.bzl", "latex_toolchain")
 
 # Mirror of `_EXPECTED_ACTION_SCHEMA` from
@@ -199,6 +199,19 @@ def _pkg_files_test_impl(ctx):
     return analysistest.end(env)
 
 pkg_files_test = analysistest.make(_pkg_files_test_impl)
+
+def _snapshot_pkg_runfiles_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    runfiles = target[DefaultInfo].default_runfiles.files.to_list()
+    asserts.true(
+        env,
+        "_pkg_files_bib.bib" in [f.basename for f in runfiles],
+        "pkg_files-only inputs must appear in snapshot launcher runfiles",
+    )
+    return analysistest.end(env)
+
+snapshot_pkg_runfiles_test = analysistest.make(_snapshot_pkg_runfiles_test_impl)
 
 # -----------------------------------------------------------------------------
 # Test: --@rules_latex//latex:_serve_cache_override short-circuits the
@@ -564,6 +577,14 @@ def latex_document_test_suite(name):
         pkg_files = {":_pkg_files_bib": "refs.bib"},
         tags = ["manual"],
     )
+    latex_cache_snapshot(
+        name = "_snapshot_pkg_only",
+        main = "_test_doc.tex",
+        srcs = [":_test_doc_tex"],
+        pkg_files = {":_pkg_files_bib": "refs.bib"},
+        output = "snapshot.tar.gz",
+        tags = ["manual"],
+    )
 
     # Canary target for the action-schema snapshot. synctex = True
     # so the .synctex.gz output is present; no cache attr so the
@@ -604,6 +625,10 @@ def latex_document_test_suite(name):
         name = "pkg_files_test",
         target_under_test = ":_doc_pkg_files",
     )
+    snapshot_pkg_runfiles_test(
+        name = "snapshot_pkg_runfiles_test",
+        target_under_test = ":_snapshot_pkg_only",
+    )
     serve_cache_override_test(
         name = "serve_cache_override_test",
         target_under_test = ":_doc_implicit",
@@ -630,6 +655,7 @@ def latex_document_test_suite(name):
             ":synctex_output_test",
             ":no_synctex_test",
             ":pkg_files_test",
+            ":snapshot_pkg_runfiles_test",
             ":serve_cache_override_test",
             ":serve_cache_override_dir_test",
             ":serve_cache_override_respects_user_cache_test",

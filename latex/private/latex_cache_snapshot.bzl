@@ -72,6 +72,7 @@ def _latex_cache_snapshot_impl(ctx):
     tool_info = ctx.attr._tool[DefaultInfo]
     tool = tool_info.files_to_run.executable
     launcher = ctx.actions.declare_file(ctx.label.name + ".sh")
+    pkg_files = _resolved_pkg_files(ctx)
 
     src_args = " \\\n        ".join([
         '--src "{}"'.format(s.short_path)
@@ -82,7 +83,7 @@ def _latex_cache_snapshot_impl(ctx):
             src = src.short_path,
             rel = rel,
         )
-        for src, rel in _resolved_pkg_files(ctx).items()
+        for src, rel in pkg_files.items()
     ])
     biber_arg = (
         '--biber "{}"'.format(biber_file.short_path) if biber_file else ""
@@ -144,7 +145,7 @@ exec "{tool}" \\
     )
     ctx.actions.write(launcher, script, is_executable = True)
 
-    runfiles_files = [tectonic] + all_srcs
+    runfiles_files = [tectonic] + all_srcs + list(pkg_files.keys())
     if biber_file:
         runfiles_files.append(biber_file)
     if ctx.attr.ctan_packages:
