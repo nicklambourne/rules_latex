@@ -1953,7 +1953,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             pdf_path = self.workspace / "bazel-bin" / PDF_RELPATH
         try:
-            file_size = pdf_path.stat().st_size
+            source = pdf_path.open("rb")
         except FileNotFoundError:
             self._send(
                 HTTPStatus.GONE if pdf_hash is not None else HTTPStatus.NOT_FOUND,
@@ -1961,65 +1961,62 @@ class Handler(BaseHTTPRequestHandler):
                 "text/plain; charset=utf-8",
             )
             return
-
-        range_header = self.headers.get("Range", "").strip()
-        if not range_header:
-            # No Range header: serve the whole PDF as before.
-            try:
-                body = pdf_path.read_bytes()
-            except OSError:
-                self._send(
-                    HTTPStatus.INTERNAL_SERVER_ERROR,
-                    b"PDF read error",
-                    "text/plain; charset=utf-8",
-                )
-                return
-            self._send(HTTPStatus.OK, body, "application/pdf")
-            return
-
-        # Parse a single byte-range "bytes=start-end". We don't
-        # support multipart ranges — PDF.js doesn't request them.
-        m = re.match(
-            r"^bytes=(\d+)-(\d*)$",
-            range_header,
-        )
-        if not m:
-            self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
-            self.send_header("Content-Range", f"bytes */{file_size}")
-            self.end_headers()
-            return
-        start = int(m.group(1))
-        end_str = m.group(2)
-        end = int(end_str) if end_str else (file_size - 1)
-        if start >= file_size or end < start:
-            self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
-            self.send_header("Content-Range", f"bytes */{file_size}")
-            self.end_headers()
-            return
-        end = min(end, file_size - 1)
-        length = end - start + 1
-        try:
-            with open(pdf_path, "rb") as fp:
-                fp.seek(start)
-                body = fp.read(length)
         except OSError:
-            self._send(
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-                b"PDF read error",
-                "text/plain; charset=utf-8",
-            )
+            self._send(HTTPStatus.INTERNAL_SERVER_ERROR, b"PDF read error", "text/plain")
             return
-        self.send_response(HTTPStatus.PARTIAL_CONTENT)
-        self.send_header("Content-Type", "application/pdf")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header(
-            "Content-Range",
-            f"bytes {start}-{end}/{file_size}",
-        )
-        self.send_header("Accept-Ranges", "bytes")
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+
+        # Stat and serve the same open file, even if a build or snapshot GC
+        # replaces/unlinks its path during this request.
+        with source:
+            try:
+                file_size = os.fstat(source.fileno()).st_size
+            except OSError:
+                self._send(HTTPStatus.INTERNAL_SERVER_ERROR, b"PDF read error", "text/plain")
+                return
+            range_header = self.headers.get("Range", "").strip()
+            start, end = 0, file_size - 1
+            if range_header:
+                # Single explicit/open-ended byte ranges; no multipart ranges.
+                match = re.fullmatch(r"bytes=(\d+)-(\d*)", range_header)
+                if match:
+                    start = int(match.group(1))
+                    end = int(match.group(2)) if match.group(2) else end
+                if not match or start >= file_size or end < start:
+                    self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                    self.send_header("Content-Range", f"bytes */{file_size}")
+                    self.end_headers()
+                    return
+                end = min(end, file_size - 1)
+            length = end - start + 1
+            try:
+                source.seek(start)
+            except OSError:
+                self._send(HTTPStatus.INTERNAL_SERVER_ERROR, b"PDF read error", "text/plain")
+                return
+            self.send_response(HTTPStatus.PARTIAL_CONTENT if range_header else HTTPStatus.OK)
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Length", str(length))
+            if range_header:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            if self._head_mode:
+                return
+            # Bound memory per response instead of buffering the entire PDF
+            # (or requested range). HEAD never reads the body at all.
+            try:
+                while length:
+                    block = source.read(min(length, 1024 * 1024))
+                    if not block:
+                        self.close_connection = True
+                        return
+                    self.wfile.write(block)
+                    length -= len(block)
+            except OSError:
+                # Headers are already on the wire. A truncated transfer must
+                # close, not append an error response to the PDF body.
+                self.close_connection = True
 
     def _serve_pdf_manifest(self) -> None:
         """Return the JSON content-addressed manifest for the
