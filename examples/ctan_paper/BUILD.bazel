@@ -13,7 +13,7 @@ five core biblatex styles), but biblatex-apa / -chicago / -ieee /
 -nature etc. need the overlay.
 """
 
-load("@rules_latex//latex:defs.bzl", "latex_document", "latex_test")
+load("@rules_latex//latex:defs.bzl", "latex_document", "latex_live", "latex_test")
 
 latex_document(
     name = "ctan_paper",
@@ -25,6 +25,13 @@ latex_document(
     ctan_packages = ["biblatex-apa"],
     main = "paper.tex",
     visibility = ["//visibility:public"],
+)
+
+# Live preview uses the same pinned bundle and CTAN package configuration
+# as the implicit cache action above.
+latex_live(
+    name = "ctan_paper_live",
+    document = ":ctan_paper",
 )
 
 latex_test(

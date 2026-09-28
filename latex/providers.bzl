@@ -47,5 +47,8 @@ LatexDocumentInfo = provider(
         "populate_tool": "File: the tools/tectonic_populate_cache.py script.",
         "staging_lib": "File: the tools/staging.py library imported by " +
                        "populate_tool.",
+        "bundle_url": "string: pinned bundle identity used by the implicit prime.",
+        "ctan_packages": "list[string]: CTAN packages requested by the document.",
+        "bundle_manifest": "File: the pinned bundle package manifest for CTAN resolution.",
     },
 )

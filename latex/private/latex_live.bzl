@@ -132,6 +132,9 @@ def _latex_live_impl(ctx):
     prime_staging_lib_path = ""
     prime_biber_path = ""
     prime_use_system_biber = ""
+    prime_bundle_url = ""
+    prime_ctan_packages_lines = []
+    prime_bundle_manifest_path = ""
 
     if enable_serve_cache:
         if LatexDocumentInfo not in ctx.attr.document:
@@ -199,6 +202,11 @@ def _latex_live_impl(ctx):
                 prime_biber_path = doc_info.biber.short_path
                 serve_cache_runfiles.append(doc_info.biber)
             prime_use_system_biber = "1" if doc_info.use_system_biber else ""
+            prime_bundle_url = doc_info.bundle_url
+            prime_ctan_packages_lines = doc_info.ctan_packages
+            if doc_info.ctan_packages:
+                prime_bundle_manifest_path = doc_info.bundle_manifest.short_path
+                serve_cache_runfiles.append(doc_info.bundle_manifest)
 
     # serve_fast (opt-in, default False): when set, the watcher replays
     # the TectonicCompile action's params file directly via
@@ -254,6 +262,9 @@ def _latex_live_impl(ctx):
             "{{PRIME_STAGING_LIB_RUNFILE}}": prime_staging_lib_path,
             "{{PRIME_BIBER_RUNFILE}}": prime_biber_path,
             "{{PRIME_USE_SYSTEM_BIBER}}": prime_use_system_biber,
+            "{{PRIME_BUNDLE_URL}}": prime_bundle_url,
+            "{{PRIME_CTAN_PACKAGES}}": "\n".join(prime_ctan_packages_lines),
+            "{{PRIME_BUNDLE_MANIFEST_RUNFILE}}": prime_bundle_manifest_path,
             "{{PRIME_SRCS}}": "\n".join(prime_srcs_lines),
             "{{PRIME_PKG_FILES}}": "\n".join(prime_pkg_files_lines),
             "{{SERVE_WEB_ASSETS}}": serve_web_assets_manifest,

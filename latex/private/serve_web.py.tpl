@@ -126,6 +126,10 @@ PRIME_POPULATE_TOOL_RUNFILE = "{{PRIME_POPULATE_TOOL_RUNFILE}}"
 PRIME_STAGING_LIB_RUNFILE = "{{PRIME_STAGING_LIB_RUNFILE}}"
 PRIME_BIBER_RUNFILE = "{{PRIME_BIBER_RUNFILE}}"
 PRIME_USE_SYSTEM_BIBER = bool("{{PRIME_USE_SYSTEM_BIBER}}")
+PRIME_BUNDLE_URL = "{{PRIME_BUNDLE_URL}}"
+PRIME_BUNDLE_MANIFEST_RUNFILE = "{{PRIME_BUNDLE_MANIFEST_RUNFILE}}"
+PRIME_CTAN_PACKAGES_RAW = """\
+{{PRIME_CTAN_PACKAGES}}"""
 PRIME_SRCS_RAW = """\
 {{PRIME_SRCS}}"""
 PRIME_PKG_FILES_RAW = """\
@@ -2686,6 +2690,10 @@ def _build_cache_context(workspace: Path, runfiles: Path) -> ServeCacheContext |
     tectonic_path = runfiles / PRIME_TECTONIC_RUNFILE
     populate_tool_path = runfiles / PRIME_POPULATE_TOOL_RUNFILE
     biber_path = runfiles / PRIME_BIBER_RUNFILE if PRIME_BIBER_RUNFILE else None
+    bundle_manifest_path = (
+        runfiles / PRIME_BUNDLE_MANIFEST_RUNFILE
+        if PRIME_BUNDLE_MANIFEST_RUNFILE else None
+    )
     # Document main path: the short_path for a source owned by the
     # main workspace is the same as the workspace-relative path.
     # (Cross-repo main files are filtered out at rule-analysis
@@ -2715,6 +2723,9 @@ def _build_cache_context(workspace: Path, runfiles: Path) -> ServeCacheContext |
         pkg_files=tuple(pkg_files),
         biber=biber_path,
         use_system_biber=PRIME_USE_SYSTEM_BIBER,
+        bundle_url=PRIME_BUNDLE_URL,
+        ctan_packages=tuple(PRIME_CTAN_PACKAGES_RAW.splitlines()),
+        bundle_manifest=bundle_manifest_path,
     )
 
     layout = serve_cache.derive_cache_layout(workspace, DOCUMENT_LABEL)

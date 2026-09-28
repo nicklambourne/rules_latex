@@ -524,6 +524,9 @@ def _latex_document_impl(ctx):
             pkg_files = pkg_files,
             populate_tool = populate_src,
             staging_lib = staging_lib,
+            bundle_url = DEFAULT_BUNDLE.url,
+            ctan_packages = ctan_packages,
+            bundle_manifest = bundle_manifest,
         ),
     ]
 

@@ -399,12 +399,8 @@ def run_tectonic(
         raise SystemExit(message)
 
 
-def _extract_cache(tarball: Path, cache_dir: Path) -> Path | None:
+def _extract_cache(tarball: Path, cache_dir: Path) -> None:
     """Extract a cache snapshot tarball into ``cache_dir``.
-
-    Detects structured format (cache/ + ctan_pkgs/ subdirectories) vs
-    legacy flat format. Returns the path to CTAN packages directory
-    if structured format detected, or None for legacy format.
     """
     with tarfile.open(tarball, "r:gz") as tar:
         # Python 3.12+ requires an extraction filter; 3.10/3.11 accept
@@ -414,12 +410,14 @@ def _extract_cache(tarball: Path, cache_dir: Path) -> Path | None:
         except TypeError:
             tar.extractall(cache_dir)
 
-    # Detect structured format (cache/ + ctan_pkgs/)
-    cache_subdir = cache_dir / "cache"
-    ctan_dir = cache_dir / "ctan_pkgs"
-    if cache_subdir.exists() and ctan_dir.exists():
-        return ctan_dir
-    return None
+
+def _cache_layout(root: Path) -> tuple[Path, Path | None]:
+    """Resolve both tarball extracts and pre-extracted directory caches."""
+    cache = root / "cache"
+    ctan = root / "ctan_pkgs"
+    if cache.is_dir() and ctan.is_dir():
+        return cache, ctan
+    return root, None
 
 
 def run_one(args: argparse.Namespace) -> int:
@@ -448,7 +446,6 @@ def run_one(args: argparse.Namespace) -> int:
         work_dir = tmp_path / "work"
         work_dir.mkdir()
 
-        ctan_dir = None
         if args.cache_dir is not None:
             # Fast path: hand tectonic a pre-extracted cache
             # directly. Skips the per-action gzip decompression +
@@ -465,7 +462,9 @@ def run_one(args: argparse.Namespace) -> int:
             cache_dir = tmp_path / "cache"
             cache_dir.mkdir()
             if args.cache_tarball is not None:
-                ctan_dir = _extract_cache(args.cache_tarball, cache_dir)
+                _extract_cache(args.cache_tarball, cache_dir)
+
+        tectonic_cache_dir, ctan_dir = _cache_layout(cache_dir)
 
         main_in_workdir = stage_sources(
             args.main, args.srcs, pkg_files, work_dir,
@@ -474,7 +473,7 @@ def run_one(args: argparse.Namespace) -> int:
         run_tectonic(
             tectonic=args.tectonic,
             main_in_workdir=main_in_workdir,
-            cache_dir=cache_dir / "cache" if ctan_dir else cache_dir,
+            cache_dir=tectonic_cache_dir,
             bundle=args.bundle,
             bundle_url=args.bundle_url,
             outfmt=args.outfmt,
