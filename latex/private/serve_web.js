@@ -20,7 +20,7 @@ import {
   recordRenderTiming,
   recordLongTask,
 } from "./serve_web_render.js";
-import { BoundedChunkCache, planRangeSegments } from "./serve_web_chunks.js";
+import { BoundedChunkCache, createChunkFetcher, planRangeSegments } from "./serve_web_chunks.js";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/_pdfjs/pdf.worker.mjs";
 
 const SYNCTEX_ENABLED = window.__SERVE_CONFIG__.synctexEnabled;
@@ -181,17 +181,13 @@ function rememberChunk(hash, bytes) {
   chunkCache.remember(hash, bytes);
 }
 
-async function fetchChunk(hash) {
-  const cached = chunkCache.get(hash);
-  if (cached) return cached;
+const fetchChunk = createChunkFetcher(chunkCache, async (hash) => {
   const resp = await fetch(`/chunk/${hash}`);
   if (!resp.ok) {
     throw new Error(`chunk ${hash} fetch failed: ${resp.status}`);
   }
-  const buf = new Uint8Array(await resp.arrayBuffer());
-  rememberChunk(hash, buf);
-  return buf;
-}
+  return new Uint8Array(await resp.arrayBuffer());
+});
 
 async function fetchPdfRange(begin, end) {
   // Fetch [begin, end) from /pdf using HTTP Range. Used for

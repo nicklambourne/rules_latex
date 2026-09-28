@@ -78,3 +78,22 @@ export class BoundedChunkCache extends Map {
     this.byteSize += bytes.byteLength;
   }
 }
+
+// PDF.js range requests and background prefetch can need the same object
+// concurrently. Share only the in-flight work; successful bytes still obey
+// the cache budget, and failed requests remain retryable.
+export function createChunkFetcher(cache, load) {
+  const pending = new Map();
+  return function fetchChunk(hash) {
+    const cached = cache.get(hash);
+    if (cached) return Promise.resolve(cached);
+    if (pending.has(hash)) return pending.get(hash);
+    const request = (async () => {
+      const bytes = await load(hash);
+      cache.remember(hash, bytes);
+      return bytes;
+    })().finally(() => pending.delete(hash));
+    pending.set(hash, request);
+    return request;
+  };
+}

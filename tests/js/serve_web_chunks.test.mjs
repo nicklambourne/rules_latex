@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BoundedChunkCache, planRangeSegments } from "../../latex/private/serve_web_chunks.js";
+import { BoundedChunkCache, createChunkFetcher, planRangeSegments } from "../../latex/private/serve_web_chunks.js";
 
 const R = (start, end, hash) => ({ start, end, hash });
 
@@ -94,4 +94,57 @@ test("chunk cache evicts by bytes and handles replacement", () => {
   cache.remember("large", new Uint8Array(9));
   assert.equal(cache.has("large"), false);
   assert.equal(cache.byteSize, 6);
+});
+
+test("overlapping consumers share one fetch and the retained bytes", async () => {
+  let calls = 0;
+  let finish;
+  const bytes = new Uint8Array([1, 2]);
+  const cache = new BoundedChunkCache(2, 8);
+  const fetch = createChunkFetcher(cache, () => {
+    calls++;
+    return new Promise(resolve => { finish = resolve; });
+  });
+  const requests = Array.from({ length: 8 }, () => fetch("a"));
+  assert.equal(calls, 1);
+  finish(bytes);
+  for (const result of await Promise.all(requests)) assert.equal(result, bytes);
+  assert.equal(await fetch("a"), bytes);
+  assert.equal(calls, 1);
+  assert.equal(cache.byteSize, 2);
+});
+
+test("failed loads are shared, cleared, and retryable", async () => {
+  for (const synchronous of [false, true]) {
+    let calls = 0;
+    const bytes = new Uint8Array([3]);
+    const fetch = createChunkFetcher(new BoundedChunkCache(2, 8), () => {
+      if (++calls === 1) {
+        if (synchronous) throw new Error("unavailable");
+        return Promise.reject(new Error("unavailable"));
+      }
+      return bytes;
+    });
+    const first = fetch("a");
+    const second = fetch("a");
+    await Promise.all([
+      assert.rejects(first, /unavailable/), assert.rejects(second, /unavailable/),
+    ]);
+    assert.equal(await fetch("a"), bytes);
+    assert.equal(calls, 2);
+  }
+});
+
+test("different hashes load independently and oversize bytes are not retained", async () => {
+  const calls = [];
+  const cache = new BoundedChunkCache(1, 1);
+  const fetch = createChunkFetcher(cache, async hash => {
+    calls.push(hash);
+    return new Uint8Array(2);
+  });
+  await Promise.all([fetch("a"), fetch("a"), fetch("b")]);
+  assert.deepEqual(calls, ["a", "b"]);
+  assert.equal(cache.size, 0);
+  await fetch("a");
+  assert.deepEqual(calls, ["a", "b", "a"]);
 });
