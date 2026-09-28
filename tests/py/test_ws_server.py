@@ -29,9 +29,11 @@ import socket
 import struct
 import sys
 import threading
+import time
 import unittest
 from pathlib import Path
 from typing import Optional
+from unittest import mock
 
 
 # Make tools/ importable without installing the package. Mirrors
@@ -391,6 +393,19 @@ class ConnectionTest(unittest.TestCase):
             conn.close()
             client.close()
 
+    def test_nonreading_peer_cannot_block_sender_indefinitely(self):
+        client, server = _socketpair()
+        conn = ws_server.WebSocketConnection(server)
+        try:
+            with mock.patch.object(ws_server, "SEND_TIMEOUT_SECONDS", 0.05):
+                start = time.monotonic()
+                with self.assertRaises(ws_server.WebSocketClosed):
+                    conn.send_binary(b"x" * (4 * 1024 * 1024))
+                self.assertLess(time.monotonic() - start, 1.0)
+        finally:
+            conn.close()
+            client.close()
+
     def test_concurrent_sends_dont_interleave(self):
         # Spam two threads sending text concurrently. The bytes on
         # the wire must parse back as exactly the same set of
@@ -410,11 +425,13 @@ class ConnectionTest(unittest.TestCase):
 
             ta = threading.Thread(target=push, args=(msgs_a,))
             tb = threading.Thread(target=push, args=(msgs_b,))
+            client.settimeout(5)
             ta.start()
             tb.start()
-            ta.join(timeout=5)
-            tb.join(timeout=5)
 
+            # Drain while writers run: a bounded sender correctly
+            # closes if a peer stops reading, and Linux socketpairs
+            # can fill before all 100 small frames are queued.
             # Read 2N frames off the client side. We don't care
             # about ordering between A and B — we only care that
             # each frame is intact.
@@ -424,6 +441,10 @@ class ConnectionTest(unittest.TestCase):
                 self.assertEqual(len(header), 2)
                 length = header[1] & 0x7F
                 received.append(client.recv(length))
+
+            ta.join(timeout=5)
+            tb.join(timeout=5)
+            self.assertFalse(ta.is_alive() or tb.is_alive())
 
             received_set = set(received)
             self.assertEqual(received_set, set(msgs_a) | set(msgs_b))
