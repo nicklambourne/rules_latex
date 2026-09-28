@@ -28,7 +28,8 @@ seconds.
   by design. CI runs the full test suite against Bazel 8.0.0, 8.7.0,
   and 9.1.0 on every push and PR, on both Linux x86_64 and macOS arm64.
 - An internet connection on first build (for the package prime).
-  Subsequent builds are fully offline.
+  Normal implicit builds can prime again after source or configuration changes.
+  Use a checked-in cache snapshot or full local bundle for offline compilation.
 
 A system Python installation is not required. Bazel downloads the pinned
 Python 3.13 runtime used by rules_latex's private build and live-preview tools.
@@ -89,8 +90,8 @@ You should end up with `bazel-bin/cv.pdf`.
 
 ## Optional: opt into the full pinned bundle
 
-By default, `rules_latex` uses its implicit cache pipeline (a one-time
-online prime per document, then offline forever). If you'd prefer the
+By default, `rules_latex` uses its implicit cache pipeline (an online prime
+cached by its declared inputs, then an offline compile). If you'd prefer the
 full ~1.78 GiB self-hosted bundle approach — useful for monorepos with many
 documents that share most of the same packages — add:
 

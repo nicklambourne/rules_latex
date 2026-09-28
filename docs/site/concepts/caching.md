@@ -28,17 +28,20 @@ Bazel itself caches the outputs of every action by content-hashing
 the action's inputs. This is the layer that makes the
 **implicit cache pipeline** (mode 3 in [hermetic
 builds](hermetic-builds.md)) practical: the online prime action's
-content-hash is stable as long as the `.tex` sources, the tectonic
-binary, and the bundle URL don't change.
+action key includes the source contents, toolchain, bundle URL, compile
+arguments, CTAN package list, and optional CTAN lock file. Unchanged declared
+inputs can reuse a prior result; changed bytes at an unlocked upstream URL
+are not themselves part of that key.
 
 When you run `bazel build //:cv` for the second time with unchanged
 sources, neither the prime action nor the compile action actually
 runs — Bazel notices the inputs are identical to a previous build and
 just copies the cached outputs out.
 
-When you share a remote cache (e.g. across a CI fleet), every machine
-gets the same benefit. The 30-second online prime happens once across
-your entire team.
+Normal builds can share these outputs through a remote cache when their
+action keys and execution configuration match. Live preview's persistent
+cache override is different: its compile actions use a host-local directory
+and are excluded from remote execution and remote cache reuse.
 
 ## How the two interact
 
@@ -46,7 +49,7 @@ A typical "compile a document" build executes two actions, in order:
 
 ```
 TectonicPopulateCache  (online, content-addressed)
-    │  inputs:  .tex sources × tectonic binary × bundle URL
+    │  inputs:  sources × toolchain × bundle URL × arguments × CTAN list/lock
     │  output:  _<name>_implicit_cache.tar.gz  (~10-100 MB)
     ▼
 TectonicCompile        (offline, --only-cached)
@@ -63,13 +66,26 @@ is what's checked into your repo when you opt into a manual
 
 ## When to invalidate
 
-| Change                          | What re-runs |
+For a normal build using the implicit pipeline (assuming no matching action
+cache entry already exists):
+
+| Change                          | What is invalidated |
 |---------------------------------|---------------------|
-| Edit a sentence in `cv.tex`     | `TectonicCompile` only (~3-5s) |
-| Add a new `\usepackage` line    | Both actions (one-time prime, ~30-80s) |
+| Edit a sentence in `cv.tex`     | The prime; compilation also depends on the edited source |
+| Add a new `\usepackage` line    | The prime and compilation |
 | Add/remove a `ctan_packages` entry | Both actions (re-fetches CTAN packages during prime) |
-| Bump rules_latex version        | Both actions (different tectonic binary) |
+| Change `ctan_lock` contents     | The prime; compilation consumes the resulting snapshot |
+| Update rules_latex or a toolchain | Actions whose tools, inputs, or command lines change; a version bump alone need not invalidate everything |
 | Move the document to a new dir  | Both actions (paths feed into the action key) |
+
+The prime uses the full source contents, not just package directives. Live
+preview avoids repeating that prime for ordinary edits by reusing a persistent
+cache. A missing cached resource triggers re-priming; toolchain, package-list,
+or lock changes require restarting preview and select a new configuration key.
+Re-priming publishes an immutable extraction and changes the compile action's
+generation key. Old extractions remain available to in-flight compiles; they
+are distinct from the bounded PDF history described in
+[Live preview](../getting-started/live-preview.md#websocket-push-transport).
 
 For the manual snapshot path (mode 1 in [hermetic
 builds](hermetic-builds.md)), the same trigger ("new `\usepackage`")

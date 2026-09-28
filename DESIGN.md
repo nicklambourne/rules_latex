@@ -1157,7 +1157,7 @@ available if concrete user demand justifies them.
     repeated downloads, but it is not a substitute for the lock on
     fresh machines.
 
-    **Hermeticity trade-off.** Across cold caches (fresh CI
+    **Hermeticity trade-off without a lock.** Across cold caches (fresh CI
     runner, `bazel clean`, different machine), the resolved
     closure depends on CTAN's state at that moment. If
     `biblatex-apa` upstream adds a new dep between two cold-cache
@@ -1219,21 +1219,27 @@ available if concrete user demand justifies them.
       a few packages, which (because they're bundle-resident
       anyway) usually still compiles fine — the shadowing risk is
       narrow.
-    - **No version pinning across cold caches.** Documented above;
-      users who care reach for `latex_cache_snapshot`.
+    - **Unlocked archives can drift across cold caches.** Use `ctan_lock`
+      to pin extra CTAN archive bytes. A cache snapshot also freezes the
+      range-fetched bundle inputs; a CTAN lock alone does not.
     - **Privacy/policy posture.** Auto-resolution makes silent
       network calls beyond what the user explicitly listed. For
       audit-conscious environments this is a regression in
       explicitness. The existing `RULES_LATEX_CTAN_MIRROR` env var
       lets such users point at a controlled mirror; the
       `latex_cache_snapshot` flow lets them ship a frozen,
-      auditable closure.
+      auditable closure. In locked mode, exact lock URLs replace mirror
+      discovery and unlisted transitive names are not probed or fetched.
 
     **What we explicitly do not do:**
 
-    - **No `ctan_lockfile` attribute.** The action cache plus
-      `latex_cache_snapshot` cover the same ground without
-      introducing a new file format and a new generator target.
+    - **No automatic lock generation or version solving.** The optional
+      `ctan_lock` is a manually maintained version-1 JSON map of package
+      names to archive URLs and SHA-256 digests, separate from Bazel's
+      module lockfile. It must cover downloaded transitive dependencies.
+      Consumers must retain the pinned archives and review updates; a
+      hash mismatch fails before extraction. Locks belong on the prime
+      or snapshot generator, not an offline snapshot/full-bundle consumer.
     - **No silent acceptance of failure to find a package.** If
       the compile still fails after auto-resolution, the existing
       targeted hint kicks in (the failure-path code from PR #22).

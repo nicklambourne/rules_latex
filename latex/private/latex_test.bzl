@@ -99,6 +99,8 @@ def _latex_test_impl(ctx):
     cache_snapshot = ctx.file.cache
     if ctx.file.ctan_lock and cache_snapshot:
         fail("ctan_lock on {} has no effect with cache; set it on the snapshot rule instead".format(ctx.label))
+    if ctx.file.ctan_lock and toolchain.bundle:
+        fail("ctan_lock has no effect with a toolchain bundle on {}; use the implicit cache pipeline or set it on the snapshot rule instead".format(ctx.label))
     cache_args = ""
     if cache_snapshot:
         cache_args = "--cache-tarball {}".format(shell.quote(cache_snapshot.short_path))
