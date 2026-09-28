@@ -50,6 +50,66 @@ CTAN_MIRROR = os.environ.get(
 # during a genuine outage.
 _RETRY_MAX_ATTEMPTS = 3
 _RETRY_BASE_DELAY_S = 1.0
+_DOWNLOAD_TIMEOUT_S = 10.0
+_DOWNLOAD_DEADLINE_S = 60.0
+_MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024
+_MAX_ARCHIVE_FILES = 10_000
+_MAX_EXTRACTED_BYTES = 512 * 1024 * 1024
+
+
+class DownloadLimitError(ValueError):
+    """A remote archive exceeded a declared resource budget."""
+
+
+def _download_once(url: str, dest: Path) -> None:
+    deadline = time.monotonic() + _DOWNLOAD_DEADLINE_S
+    try:
+        with urllib.request.urlopen(url, timeout=_DOWNLOAD_TIMEOUT_S) as response:
+            declared = response.headers.get("Content-Length")
+            if declared is not None:
+                try:
+                    declared_size = int(declared)
+                except ValueError as exc:
+                    raise DownloadLimitError(
+                        "CTAN download has invalid Content-Length"
+                    ) from exc
+                if declared_size > _MAX_DOWNLOAD_BYTES:
+                    raise DownloadLimitError("CTAN download exceeds 128 MiB")
+            total = 0
+            with dest.open("wb") as output:
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("CTAN download exceeded 60 seconds")
+                    # urllib does not expose a public per-read deadline.
+                    # Its HTTPResponse uses this socket in CPython; keep
+                    # each blocking read within the overall deadline.
+                    source_socket = getattr(
+                        getattr(getattr(response, "fp", None), "raw", None),
+                        "_sock", None,
+                    )
+                    if source_socket is not None:
+                        source_socket.settimeout(min(_DOWNLOAD_TIMEOUT_S, remaining))
+                    chunk = response.read(64 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > _MAX_DOWNLOAD_BYTES:
+                        raise DownloadLimitError("CTAN download exceeds 128 MiB")
+                    output.write(chunk)
+    except BaseException:
+        dest.unlink(missing_ok=True)
+        raise
+
+
+def _extract_archive_bounded(archive: Path, dest: Path) -> None:
+    with zipfile.ZipFile(archive, "r") as zf:
+        infos = zf.infolist()
+        if len(infos) > _MAX_ARCHIVE_FILES:
+            raise DownloadLimitError("CTAN archive has too many entries")
+        if sum(info.file_size for info in infos) > _MAX_EXTRACTED_BYTES:
+            raise DownloadLimitError("CTAN archive expands beyond 512 MiB")
+        zf.extractall(dest)
 
 
 def _retry_urlretrieve(
@@ -60,7 +120,7 @@ def _retry_urlretrieve(
     base_delay: float = _RETRY_BASE_DELAY_S,
     sleep=time.sleep,
 ) -> None:
-    """``urlretrieve`` with retries on transient errors.
+    """Bounded CTAN download with retries on transient errors.
 
     Retries up to ``max_attempts`` times on ``URLError`` (connection
     refused, timeout, DNS failure, TLS hiccup) and on ``HTTPError``
@@ -75,7 +135,7 @@ def _retry_urlretrieve(
     last_exc: Exception | None = None
     for attempt in range(1, max_attempts + 1):
         try:
-            urllib.request.urlretrieve(url, dest)
+            _download_once(url, dest)
             return
         except urllib.error.HTTPError as e:
             last_exc = e
@@ -89,7 +149,7 @@ def _retry_urlretrieve(
                 sleep(delay)
                 continue
             raise
-        except urllib.error.URLError as e:
+        except (urllib.error.URLError, TimeoutError) as e:
             last_exc = e
             if attempt < max_attempts:
                 delay = base_delay * (2 ** (attempt - 1))
@@ -264,16 +324,21 @@ def download_ctan_package(package: str, dest_dir: Path) -> set[str]:
             raise SystemExit(
                 f"HTTP {e.code} fetching CTAN package '{package}' from {url}: {e.reason}"
             )
-        except urllib.error.URLError as e:
+        except (urllib.error.URLError, TimeoutError) as e:
             # We retried inside _retry_urlretrieve and still failed.
             # Surface a one-liner instead of a 40-line urllib traceback.
             raise SystemExit(
                 f"Network error fetching CTAN package '{package}' from {url} "
-                f"(after {_RETRY_MAX_ATTEMPTS} attempts): {e.reason}. CTAN "
+                f"(after {_RETRY_MAX_ATTEMPTS} attempts): "
+                f"{getattr(e, 'reason', e)}. CTAN "
                 f"mirrors can be flaky; try again later, point "
                 f"RULES_LATEX_CTAN_MIRROR at a specific mirror, or check "
                 f"network/DNS."
             )
+        except DownloadLimitError as e:
+            raise SystemExit(
+                f"CTAN package '{package}' from {url}: {e}"
+            ) from e
     else:
         raise SystemExit(
             f"CTAN package '{package}' not found at any known URL. Tried:\n"
@@ -284,8 +349,10 @@ def download_ctan_package(package: str, dest_dir: Path) -> set[str]:
     # Extract to a staging area first
     extract_tmp = dest_dir / f"_{package}_extract"
     extract_tmp.mkdir()
-    with zipfile.ZipFile(archive, "r") as zf:
-        zf.extractall(extract_tmp)
+    try:
+        _extract_archive_bounded(archive, extract_tmp)
+    except DownloadLimitError as exc:
+        raise SystemExit(f"CTAN package '{package}': {exc}") from exc
 
     # Clean up the archive
     archive.unlink()
