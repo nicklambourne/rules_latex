@@ -24,8 +24,9 @@ re-introspecting attributes.
 <pre>
 load("@rules_latex//latex:providers.bzl", "LatexDocumentInfo")
 
-LatexDocumentInfo(<a href="#LatexDocumentInfo-main">main</a>, <a href="#LatexDocumentInfo-tectonic">tectonic</a>, <a href="#LatexDocumentInfo-tectonic_runfiles">tectonic_runfiles</a>, <a href="#LatexDocumentInfo-biber">biber</a>, <a href="#LatexDocumentInfo-biber_runfiles">biber_runfiles</a>, <a href="#LatexDocumentInfo-use_system_biber">use_system_biber</a>, <a href="#LatexDocumentInfo-pkg_files">pkg_files</a>, <a href="#LatexDocumentInfo-populate_tool">populate_tool</a>, <a href="#LatexDocumentInfo-staging_lib">staging_lib</a>,
-                  <a href="#LatexDocumentInfo-bundle_url">bundle_url</a>, <a href="#LatexDocumentInfo-ctan_packages">ctan_packages</a>, <a href="#LatexDocumentInfo-ctan_lock">ctan_lock</a>, <a href="#LatexDocumentInfo-bundle_manifest">bundle_manifest</a>)
+LatexDocumentInfo(<a href="#LatexDocumentInfo-main">main</a>, <a href="#LatexDocumentInfo-tectonic">tectonic</a>, <a href="#LatexDocumentInfo-tectonic_runfiles">tectonic_runfiles</a>, <a href="#LatexDocumentInfo-biber">biber</a>, <a href="#LatexDocumentInfo-biber_runfiles">biber_runfiles</a>, <a href="#LatexDocumentInfo-use_system_biber">use_system_biber</a>,
+                  <a href="#LatexDocumentInfo-pkg_files">pkg_files</a>, <a href="#LatexDocumentInfo-populate_tool">populate_tool</a>, <a href="#LatexDocumentInfo-staging_lib">staging_lib</a>, <a href="#LatexDocumentInfo-bundle_url">bundle_url</a>, <a href="#LatexDocumentInfo-ctan_packages">ctan_packages</a>, <a href="#LatexDocumentInfo-ctan_lock">ctan_lock</a>,
+                  <a href="#LatexDocumentInfo-bundle_manifest">bundle_manifest</a>)
 </pre>
 
 Compile-time inputs of a `latex_document` target. Exposed so live-preview rules can drive their own parallel tectonic invocations (in particular, a serve-startup cache prime) without re-introspecting the document's attributes.
