@@ -117,6 +117,11 @@ PDF and XDV, which produce a TeX log for its assertions. AUX does not
 produce a log. HTML is not currently supported: Tectonic's converter can
 emit multiple assets, while `latex_document` declares one output file.
 
+Files from `latex_library` and `latex_pkg` dependencies are staged into
+the document's work directory. Those rules do not set `TEXINPUTS`,
+`BIBINPUTS`, or `BSTINPUTS`; use `pkg_files` on `latex_document` if a
+file needs a different staged path.
+
 ## Iterate with the live preview
 
 In one terminal:
