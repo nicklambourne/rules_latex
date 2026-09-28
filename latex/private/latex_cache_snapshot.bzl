@@ -39,9 +39,7 @@ destination. It's a developer command, run on demand, much like
 load("@bazel_skylib//lib:shell.bzl", "shell")
 load("//latex:providers.bzl", "LatexInfo")
 load("//latex/private:bundles.bzl", "DEFAULT_BUNDLE")
-
-def _collect_transitive_srcs(deps):
-    return [dep[LatexInfo].srcs for dep in deps if LatexInfo in dep]
+load("//latex/private:resolved_inputs.bzl", "resolve_inputs")
 
 def _latex_cache_snapshot_impl(ctx):
     if ctx.file.ctan_lock and not ctx.attr.ctan_packages:
@@ -49,14 +47,9 @@ def _latex_cache_snapshot_impl(ctx):
     toolchain = ctx.toolchains["//latex/toolchain:toolchain_type"].latex_toolchain_info
     tectonic = toolchain.tectonic
 
-    main = ctx.file.main
-    if main not in ctx.files.srcs:
-        fail("`main` ({}) must also appear in `srcs`.".format(main.short_path))
-
-    all_srcs = depset(
-        direct = ctx.files.srcs,
-        transitive = _collect_transitive_srcs(ctx.attr.deps),
-    ).to_list()
+    inputs = resolve_inputs(ctx)
+    main = inputs.main
+    all_srcs = inputs.srcs.to_list()
 
     # Decide whether to include biber in the priming run. Snapshots
     # built without biber miss bibliography-related TeX Live files, so
@@ -75,7 +68,6 @@ def _latex_cache_snapshot_impl(ctx):
     tool_info = ctx.attr._tool[DefaultInfo]
     tool = tool_info.files_to_run.executable
     launcher = ctx.actions.declare_file(ctx.label.name + ".sh")
-    pkg_files = _resolved_pkg_files(ctx)
 
     src_args = " \\\n        ".join([
         "--src {}".format(shell.quote(s.short_path))
@@ -85,7 +77,7 @@ def _latex_cache_snapshot_impl(ctx):
         "--pkg-file {value}".format(
             value = shell.quote("{}={}".format(src.short_path, rel)),
         )
-        for src, rel in pkg_files.items()
+        for src, rel in inputs.pkg_files
     ])
     biber_arg = (
         "--biber {}".format(shell.quote(biber_file.short_path)) if biber_file else ""
@@ -149,7 +141,7 @@ exec {tool} \\
     )
     ctx.actions.write(launcher, script, is_executable = True)
 
-    runfiles_files = [tectonic] + all_srcs + list(pkg_files.keys())
+    runfiles_files = [tectonic] + all_srcs + list([src for src, _ in inputs.pkg_files])
     if biber_file:
         runfiles_files.append(biber_file)
     if ctx.attr.ctan_packages:
@@ -161,23 +153,6 @@ exec {tool} \\
     if biber_file:
         runfiles = runfiles.merge(toolchain.biber_runfiles)
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
-
-def _resolved_pkg_files(ctx):
-    """Resolve `pkg_files` to a {File: staged-path} dict.
-
-    Each label key must expand to exactly one file (typically a
-    `filegroup` with a single src, or a plain file label).
-    """
-    out = {}
-    for label, rel in ctx.attr.pkg_files.items():
-        files = label.files.to_list()
-        if len(files) != 1:
-            fail(
-                "pkg_files key {} expands to {} files; expected exactly one."
-                    .format(label, len(files)),
-            )
-        out[files[0]] = rel
-    return out
 
 latex_cache_snapshot = rule(
     implementation = _latex_cache_snapshot_impl,

@@ -858,6 +858,11 @@ as if main were the centre of its own universe.
   as a direct sibling of `main.tex` so the `\addbibresource` line
   reads `{refs.bib}` instead of `{study/llb/lib/references/refs.bib}`.
 
+The three public consumers resolve `main`, transitive sources, and
+`pkg_files` through one private analysis helper. They still choose their
+own cache, biber, output, and execution policies; the shared value keeps
+the source and placement contract identical without coupling those modes.
+
 #### Why staging at all
 
 The pre-v0.3 design had `TectonicCompile` run Tectonic from the Bazel
