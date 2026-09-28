@@ -115,6 +115,33 @@ jobs:
           ls -lh bazel-bin/hello/hello_offline.pdf
           file bazel-bin/hello/hello_offline.pdf | grep -q "PDF document"
 
+      - name: External and generated source contract
+        if: matrix.os == 'ubuntu-22.04' && matrix.bazel-version == '8.7.0'
+        working-directory: examples
+        run: |
+          # One input set through document, test, snapshot, and live rules.
+          bazel build //hello:contract_document //hello:contract_snapshot //hello:contract_live --config=ci
+          bazel test //hello:contract_test --config=ci --test_output=errors
+          pdftotext bazel-bin/hello/contract_document.pdf - | grep -q 'External source reached.'
+          pdftotext bazel-bin/hello/contract_document.pdf - | grep -q 'Generated source reached.'
+          runfiles=bazel-bin/hello/contract_snapshot.sh.runfiles
+          test -n "$(find "$runfiles" -name external.tex -print -quit)"
+          test -n "$(find "$runfiles" -name generated.tex -print -quit)"
+
+          bazel run //hello:contract_live > /tmp/contract-live.log 2>&1 &
+          live_pid=$!
+          trap 'kill "$live_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8771/status \
+                | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("last_success") else 1)' \
+                2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:8771/pdf | pdftotext - - | grep -q 'External source reached.'
+          curl -sf http://127.0.0.1:8771/pdf | pdftotext - - | grep -q 'Generated source reached.'
+
       - name: Build latex_live launcher and smoke-test endpoints
         working-directory: examples
         run: |
