@@ -87,6 +87,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import re
+import stat
 import struct
 import zlib
 from pathlib import Path
@@ -249,6 +250,9 @@ def compute_manifest(
 
     sorted_offsets = sorted(offsets, key=lambda x: x[1])
     chunks_list: list[Chunk] = []
+    # Hash/write object slices without allocating another copy of each
+    # stream (an embedded image can occupy most of the PDF).
+    data_view = memoryview(data)
     for i, (object_id, start) in enumerate(sorted_offsets):
         if i + 1 < len(sorted_offsets):
             end = sorted_offsets[i + 1][1]
@@ -257,7 +261,7 @@ def compute_manifest(
         if end <= start:
             # Pathological PDF — bail.
             return None
-        chunk_bytes = data[start:end]
+        chunk_bytes = data_view[start:end]
         h = hashlib.sha256(chunk_bytes).hexdigest()
         chunks_list.append(Chunk(
             object_id=object_id,
@@ -274,9 +278,15 @@ def compute_manifest(
         chunks_dir.mkdir(parents=True, exist_ok=True)
         for chunk in chunks_list:
             dest = chunks_dir / chunk.hash
-            if dest.is_file() and dest.stat().st_size == (chunk.end - chunk.start):
+            try:
+                existing = dest.stat()
+            except FileNotFoundError:
+                existing = None
+            if (existing is not None
+                    and stat.S_ISREG(existing.st_mode)
+                    and existing.st_size == chunk.end - chunk.start):
                 continue
-            _atomic_write_bytes(dest, data[chunk.start:chunk.end])
+            _atomic_write_bytes(dest, data_view[chunk.start:chunk.end])
     except OSError:
         return None
 
@@ -310,7 +320,7 @@ def compute_manifest(
     )
 
 
-def _atomic_write_bytes(dest: Path, data: bytes) -> None:
+def _atomic_write_bytes(dest: Path, data: bytes | memoryview) -> None:
     """Write ``data`` to ``dest`` via a same-directory tmpfile +
     atomic rename. Mirrors the pattern used by ``serve_cache.py``."""
     tmp = dest.with_name(dest.name + ".tmp")
