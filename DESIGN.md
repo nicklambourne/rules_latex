@@ -443,19 +443,19 @@ Mechanism:
   stable for the GC).
 
 * The server exposes:
-    - `GET /pdf-manifest` — JSON `{pdfSize, ranges, skeletonRanges}`.
+    - `GET /pdf-manifest` — JSON `{pdfSize, pdfHash, ranges, skeletonRanges}`.
     - `GET /chunk/<hash>` — raw chunk bytes with
       `Cache-Control: public, max-age=31536000, immutable`.
-    - `GET /pdf` (with HTTP `Range`) — for skeleton bytes (PDF
-      header, gaps between objects, trailer) and as a whole-PDF
-      fallback for pre-manifest clients.
+    - `GET /pdf/<pdfHash>` (with HTTP `Range`) — immutable PDF
+      generation for skeleton bytes (header, gaps, trailer).
+    - `GET /pdf` — whole-PDF fallback for pre-manifest clients.
 
 * The browser subclasses PDF.js's `PDFDataRangeTransport` to
   intercept the worker's byte-range fetches. For each requested
   range it walks the manifest's chunks: bytes inside a known
   chunk come from the in-memory hash cache (or a one-shot
   `/chunk/<hash>` fetch), bytes outside any chunk come from a
-  `/pdf` Range request. A small background prefetcher warms the
+  `/pdf/<pdfHash>` Range request. A small background prefetcher warms the
   cache after the initial render so subsequent page renders are
   wire-free.
 
@@ -464,6 +464,18 @@ Mechanism:
   five-minute floor preserves fast edit-undo round-trips: a
   chunk that vanished from the manifest on edit N is still
   available on edit N+1 if the user reverts within the window.
+
+* Immutable PDF snapshots have separate retention: startup and post-build
+  cleanup keeps the current generation plus the newest history within
+  **8 files / 128 MiB / five minutes**. Capacity limits override the grace
+  window. The current generation is pinned regardless of age/size; if it
+  exceeds the byte budget, all history is removed. One newly published
+  snapshot can temporarily exceed the budget before cleanup. Republishing
+  identical bytes atomically refreshes the retention timestamp. Cleanup
+  also runs when parsing falls back to whole-PDF transport. Already-open
+  POSIX file descriptors survive collection; later requests receive 410
+  and retry with the current manifest. Only hash-named regular PDF files
+  are collected; temporary files, directories, and symlinks are ignored.
 
 Falls back to whole-PDF transport (the pre-chunking behaviour)
 on any parse failure. The fallback is fully transparent: the

@@ -232,10 +232,20 @@ push burst as the chunk bytes.
 
 Each manifest names an immutable PDF copy under the preview cache.
 Skeleton byte ranges come from `/pdf/<pdfHash>`, so a rebuild cannot
-mix two PDF generations in one render. Keeping old copies lets an
-in-flight render finish; they consume cache disk space until the
-preview cache is cleared. Copying and hashing a 10 MiB PDF added
-about 9 ms per successful rebuild in a local macOS measurement.
+mix two PDF generations in one render. On startup and after builds,
+the server prunes each document's snapshot history to at most **8 PDFs / 128 MiB**,
+discarding history older than five minutes. Count and byte limits
+take precedence over that grace window. The current manifest's PDF
+is always retained, even when it exceeds 128 MiB; in that case no
+history is kept. Publishing can temporarily require one additional
+PDF's worth of disk space.
+
+Already-open responses finish reading their original file even if
+it is collected. Later requests for an expired generation return
+`410 Gone`, and the browser reloads the current manifest. Republishing
+an identical PDF refreshes its grace period. Copying and hashing a
+10 MiB PDF added about 9 ms per successful rebuild in a local macOS
+measurement; pruning only reads directory metadata, not PDF bodies.
 
 **Fallback.** If `/ws` can't connect (WS upgrade refused, no
 `ws_server` module on the server side, proxy in the way, etc.)

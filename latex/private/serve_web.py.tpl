@@ -37,6 +37,7 @@ import os
 import queue
 import re
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -2706,6 +2707,9 @@ def _build_pdf_chunks_context(
         )
         return None
 
+    # Clean persisted history even if the first build fails. No manifest
+    # has been published by this server yet, so nothing is pinned here.
+    _gc_pdf_snapshots(chunks_dir.parent / "pdfs", None)
     return PdfChunksContext(module=module, chunks_dir=chunks_dir)
 
 
@@ -2750,6 +2754,58 @@ def _load_ws_server_module(runfiles: Path) -> object | None:
 # the user undo a recent edit without re-fetching the body chunk
 # that just got removed from the manifest.
 _CHUNK_GC_MIN_AGE_SECONDS = 5 * 60
+
+
+def _gc_pdf_snapshots(
+    snapshots_dir: Path,
+    current_hash: str | None,
+    *,
+    max_age_seconds: float = 5 * 60,
+    max_count: int = 8,
+    max_bytes: int = 128 * 1024 * 1024,
+) -> int:
+    """Bound published PDF history; the current generation always survives.
+
+    Prefer recent generations within the five-minute grace window, but
+    count/byte limits override grace. An oversized current PDF is retained
+    alone. On supported POSIX hosts, already-open response descriptors keep
+    reading an unlinked snapshot; later requests get 410 and reload.
+    Cleanup is best-effort if the filesystem refuses a deletion.
+    """
+    history = []
+    retained_count = retained_bytes = 0
+    try:
+        for path in snapshots_dir.iterdir():
+            if not re.fullmatch(r"[0-9a-f]{64}\.pdf", path.name):
+                continue
+            try:
+                metadata = path.lstat()
+            except OSError:
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                continue
+            if path.stem == current_hash:
+                retained_count = 1
+                retained_bytes = metadata.st_size
+            else:
+                history.append((metadata.st_mtime_ns, path.name, metadata.st_size, path))
+    except OSError:
+        return 0
+
+    cutoff_ns = (time.time() - max_age_seconds) * 1_000_000_000
+    deleted = 0
+    for modified_ns, _, size, path in sorted(history, reverse=True):
+        if (modified_ns >= cutoff_ns and retained_count < max_count
+                and retained_bytes + size <= max_bytes):
+            retained_count += 1
+            retained_bytes += size
+            continue
+        try:
+            path.unlink()
+            deleted += 1
+        except OSError:
+            pass
+    return deleted
 
 
 def _gc_chunks(
@@ -2816,10 +2872,9 @@ def _snapshot_pdf(pdf_path: Path, snapshots_dir: Path) -> tuple[Path, str]:
             raise
     pdf_hash = digest.hexdigest()
     snapshot = snapshots_dir / f"{pdf_hash}.pdf"
-    if snapshot.exists():
-        temporary.unlink()
-    else:
-        os.replace(temporary, snapshot)
+    # Atomically republish identical bytes too: an undo/restart refreshes
+    # this generation's grace period without mutating an open reader's file.
+    os.replace(temporary, snapshot)
     return snapshot, pdf_hash
 
 
@@ -2844,14 +2899,16 @@ def _compute_manifest_post_build(
         # chunk manifest doesn't apply.
         state.update_manifest(None)
         return
+    snapshots_dir = pdf_chunks_ctx.chunks_dir.parent / "pdfs"
     try:
         snapshot, pdf_hash = _snapshot_pdf(
-            pdf_path, pdf_chunks_ctx.chunks_dir.parent / "pdfs",
+            pdf_path, snapshots_dir,
         )
         manifest = pdf_chunks_ctx.module.compute_manifest(
             snapshot,
             pdf_chunks_ctx.chunks_dir,
         )
+        state.update_manifest(manifest, pdf_hash if manifest is not None else None)
     except Exception as e:
         # The parser is designed never to raise — it returns None
         # on any parse failure. If we get here it's a real bug
@@ -2862,7 +2919,10 @@ def _compute_manifest_post_build(
         )
         state.update_manifest(None)
         return
-    state.update_manifest(manifest, pdf_hash if manifest is not None else None)
+    finally:
+        # Also bound snapshots of unsupported PDFs or failed parses. They
+        # have no published generation; whole-PDF fallback uses bazel-bin.
+        _gc_pdf_snapshots(snapshots_dir, state.get_manifest_snapshot()[1])
     if manifest is not None:
         keep = {c.hash for c in manifest.chunks}
         _gc_chunks(pdf_chunks_ctx.chunks_dir, keep)

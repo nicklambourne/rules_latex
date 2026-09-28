@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import http.client
 import importlib.util
+import json
 import socket
 import sys
 import tempfile
@@ -440,6 +441,54 @@ class TestHeadRangeRequests(unittest.TestCase):
             headers={"Range": "bytes=0-99"},
         )
         self.assertEqual(status, 410)
+
+    def test_collecting_generation_preserves_open_range_response(self):
+        original = self.fixture.pdf_path.read_bytes()
+        _, old_hash = self.fixture.state.get_manifest_snapshot()
+        old_path = self.fixture.chunks_dir.parent / "pdfs" / f"{old_hash}.pdf"
+        url = f"/pdf/{old_hash}"
+        opened = threading.Event()
+        resume = threading.Event()
+        end_headers = _M.Handler.end_headers
+
+        def pause_after_headers(handler):
+            end_headers(handler)
+            if handler.path == url and not opened.is_set():
+                opened.set()
+                resume.wait(timeout=5)
+
+        conn = http.client.HTTPConnection("127.0.0.1", self.fixture.port, timeout=5)
+        try:
+            with mock.patch.object(_M.Handler, "end_headers", pause_after_headers):
+                conn.request("GET", url, headers={"Range": f"bytes=0-{len(original) - 1}"})
+                response = conn.getresponse()
+                self.assertTrue(opened.wait(timeout=2))
+                try:
+                    self.fixture.pdf_path.write_bytes(original.replace(b"612 792", b"612 793"))
+                    _M._compute_manifest_post_build(
+                        self.fixture.state, self.fixture.workspace, self.fixture.pdf_chunks_ctx,
+                    )
+                    _, current_hash = self.fixture.state.get_manifest_snapshot()
+                    _M._gc_pdf_snapshots(old_path.parent, current_hash, max_count=1)
+                    self.assertFalse(old_path.exists())
+                finally:
+                    resume.set()
+                self.assertEqual(response.status, 206)
+                self.assertEqual(response.read(), original)
+        finally:
+            resume.set()
+            conn.close()
+
+        # The open reader finished; a later reader must reload the current
+        # manifest instead of receiving bytes from a different generation.
+        for method in ("GET", "HEAD"):
+            status, _, body = _request(self.fixture.port, method, url)
+            self.assertEqual(status, 410)
+            if method == "HEAD":
+                self.assertEqual(body, b"")
+        status, _, body = _request(self.fixture.port, "GET", "/pdf-manifest")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["pdfHash"], current_hash)
 
     def test_head_pdf_with_bad_range(self):
         # 416 Range Not Satisfiable on both GET and HEAD.

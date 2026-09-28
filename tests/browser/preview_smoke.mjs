@@ -29,9 +29,24 @@ class Cdp {
     this.nextId = 1;
     this.pending = new Map();
     this.errors = [];
+    this.expireNextRange = false;
+    this.expiredRangeUrl = null;
+    this.recoveredRange = false;
     this.socket.addEventListener("message", (event) => {
       const message = JSON.parse(event.data);
-      if (message.id) {
+      if (message.method === "Fetch.requestPaused") {
+        const { requestId, request } = message.params;
+        const expire = this.expireNextRange;
+        this.expireNextRange = false;
+        if (expire) this.expiredRangeUrl = request.url;
+        this.send(expire ? "Fetch.fulfillRequest" : "Fetch.continueRequest",
+          expire ? { requestId, responseCode: 410, body: "" } : { requestId }
+        ).catch((error) => this.errors.push(error.message));
+      } else if (message.method === "Network.responseReceived" &&
+                 message.params.response.url === this.expiredRangeUrl &&
+                 message.params.response.status === 206) {
+        this.recoveredRange = true;
+      } else if (message.id) {
         const pending = this.pending.get(message.id);
         if (!pending) return;
         this.pending.delete(message.id);
@@ -108,6 +123,7 @@ try {
   await cdp.ready();
   await Promise.all([
     cdp.send("Runtime.enable"), cdp.send("Log.enable"), cdp.send("Page.enable"),
+    cdp.send("Network.enable"),
   ]);
   await cdp.send("Page.navigate", { url });
 
@@ -161,7 +177,25 @@ try {
 
   assert.notEqual(second.pixels, first.pixels, "the edited PDF should repaint different pixels");
   assert.deepEqual(cdp.errors, [], `browser errors: ${cdp.errors.join("; ")}`);
-  console.log("PDF.js browser smoke passed", { first, second });
+
+  // A collected generation must trigger a manifest reload, not a stuck
+  // renderer or mixed-generation PDF. Expire exactly one real range request;
+  // the next request goes through to the actual server and must return 206.
+  cdp.expireNextRange = true;
+  await cdp.send("Fetch.enable", {
+    patterns: [{ urlPattern: `${url}pdf/*`, requestStage: "Request" }],
+  });
+  await cdp.send("Page.reload", { ignoreCache: true });
+  const recovered = await waitFor(async () => {
+    const current = await state();
+    return cdp.recoveredRange && current?.rendered && current.status === "ok" &&
+      current.pixels === second.pixels ? current : null;
+  }, "PDF.js recovery after generation expiry");
+  await cdp.send("Fetch.disable");
+  // The deliberately injected 410 is reported by Chrome and the transport;
+  // any unrelated console error still fails the smoke test.
+  assert.deepEqual(cdp.errors.filter((error) => !error.includes("410")), []);
+  console.log("PDF.js browser smoke passed", { first, second, recovered });
 } finally {
   await writeFile(sourcePath, original);
   cdp?.close();

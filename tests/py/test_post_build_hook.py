@@ -18,11 +18,13 @@ integration time.
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -212,6 +214,119 @@ class TestPostBuildHookIntegration(unittest.TestCase):
         _M._compute_manifest_post_build(state, self.workspace, self.ctx)
         second = [c.hash for c in state.get_manifest().chunks]
         self.assertEqual(first, second)
+
+    def test_repeated_builds_bound_snapshots_even_without_a_manifest(self):
+        state = _M.BuildState()
+        for i in range(20):
+            self.pdf_path.write_bytes(
+                _build_minimal_pdf().replace(b"612 792", f"612 {800 + i}".encode()),
+            )
+            _M._compute_manifest_post_build(state, self.workspace, self.ctx)
+        snapshots = self.chunks_dir.parent / "pdfs"
+        self.assertEqual(len(list(snapshots.glob("*.pdf"))), 8)
+        for i in range(20):
+            self.pdf_path.write_bytes(f"unsupported PDF {i}".encode())
+            _M._compute_manifest_post_build(state, self.workspace, self.ctx)
+        self.assertIsNone(state.get_manifest())
+        self.assertEqual(len(list(snapshots.glob("*.pdf"))), 8)
+
+        with mock.patch.object(_PC, "compute_manifest", side_effect=OSError("parse failed")), \
+                mock.patch("sys.stderr"):
+            for i in range(10):
+                self.pdf_path.write_bytes(f"failed parse {i}".encode())
+                _M._compute_manifest_post_build(state, self.workspace, self.ctx)
+        self.assertIsNone(state.get_manifest())
+        self.assertEqual(len(list(snapshots.glob("*.pdf"))), 8)
+
+    def test_republished_snapshot_gets_a_fresh_grace_period(self):
+        self.pdf_path.write_bytes(_build_minimal_pdf())
+        snapshots = self.chunks_dir.parent / "pdfs"
+        snapshot, first_hash = _M._snapshot_pdf(self.pdf_path, snapshots)
+        old = time.time() - 600
+        os.utime(snapshot, (old, old))
+        snapshot, second_hash = _M._snapshot_pdf(self.pdf_path, snapshots)
+        self.assertEqual(first_hash, second_hash)
+        self.assertEqual(snapshot.read_bytes(), self.pdf_path.read_bytes())
+        self.assertEqual(_M._gc_pdf_snapshots(snapshots, None), 0)
+        self.assertTrue(snapshot.exists())
+
+    def test_restart_cleans_history_before_the_initial_build(self):
+        runfiles = self.workspace / "runfiles"
+        library = runfiles / "_tools/pdf_chunks.py"
+        library.parent.mkdir(parents=True)
+        library.write_bytes(_PDF_CHUNKS_PATH.read_bytes())
+        context = _M._build_pdf_chunks_context(self.workspace, runfiles)
+        snapshots = context.chunks_dir.parent / "pdfs"
+        snapshots.mkdir()
+        old = snapshots / ("a" * 64 + ".pdf")
+        old.write_bytes(b"old")
+        past = time.time() - 600
+        os.utime(old, (past, past))
+        for i in range(12):
+            (snapshots / f"{i:064x}.pdf").write_bytes(b"recent")
+        # No build/post-build hook runs between cache creation and restart.
+        _M._build_pdf_chunks_context(self.workspace, runfiles)
+        self.assertFalse(old.exists())
+        self.assertEqual(len(list(snapshots.glob("*.pdf"))), 8)
+
+
+class TestPdfSnapshotGC(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="snapshot_gc_test_")
+        self.directory = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _snapshot(self, letter, size=4, age=0):
+        path = self.directory / (letter * 64 + ".pdf")
+        path.write_bytes(b"x" * size)
+        past = time.time() - age
+        os.utime(path, (past, past))
+        return path
+
+    def test_age_preserves_current_and_recent_but_expires_old_history(self):
+        current = self._snapshot("a", age=600)
+        old = self._snapshot("b", age=600)
+        recent = self._snapshot("c")
+        self.assertEqual(_M._gc_pdf_snapshots(self.directory, "a" * 64), 1)
+        self.assertTrue(current.exists())
+        self.assertTrue(recent.exists())
+        self.assertFalse(old.exists())
+
+    def test_count_and_byte_caps_override_grace_newest_history_wins(self):
+        for limits in ({"max_count": 2}, {"max_bytes": 8}):
+            with self.subTest(limits=limits):
+                current = self._snapshot("a", age=600)
+                older = self._snapshot("b", age=10)
+                newest = self._snapshot("c")
+                _M._gc_pdf_snapshots(self.directory, "a" * 64, **limits)
+                self.assertEqual(set(self.directory.iterdir()), {current, newest})
+                self.assertFalse(older.exists())
+
+    def test_oversized_current_is_kept_without_any_history(self):
+        current = self._snapshot("a", size=20)
+        self._snapshot("b")
+        _M._gc_pdf_snapshots(self.directory, "a" * 64, max_bytes=10)
+        self.assertEqual(list(self.directory.iterdir()), [current])
+
+    def test_only_regular_snapshot_files_are_collected(self):
+        unrelated = self.directory / "notes.pdf"
+        unrelated.write_bytes(b"leave alone")
+        temporary = self.directory / "snapshot.tmp"
+        temporary.write_bytes(b"in progress")
+        directory = self.directory / ("d" * 64 + ".pdf")
+        directory.mkdir()
+        symlink = self.directory / ("e" * 64 + ".pdf")
+        symlink.symlink_to(unrelated)
+        self.assertEqual(_M._gc_pdf_snapshots(self.directory, None, max_bytes=0), 0)
+        self.assertTrue(symlink.is_symlink())
+        self.assertEqual(unrelated.read_bytes(), b"leave alone")
+        self.assertTrue(temporary.exists())
+        self.assertTrue(directory.is_dir())
+
+    def test_missing_directory_is_harmless(self):
+        self.assertEqual(_M._gc_pdf_snapshots(self.directory / "absent", None), 0)
 
 
 class TestChunkGC(unittest.TestCase):
