@@ -443,7 +443,7 @@ function _rerenderCurrentDocument() {
 }
 
 // Per-page reconciliation state (option B): reuse a page's already-built
-// .page-wrap (and its painted canvas) across reloads when its content +
+// .page-wrap (and its painted canvas) only when the entire PDF and page
 // geometry are unchanged at the same zoom. _manifestPages is the latest
 // manifest's page index; _renderedPages is what the live DOM was built
 // from; _renderedScale guards against reusing canvases after a zoom.

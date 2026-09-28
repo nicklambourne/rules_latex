@@ -158,13 +158,12 @@ class PageInfo:
     """Per-page identity for incremental render reuse (DESIGN.md §5 #13,
     option B).
 
-    ``content_hash`` is the SHA-256 (hex) of the page's content-stream
-    object(s) — derived from the same content-addressed chunk hashes, so
-    a body edit that rewrites one page's content stream changes only that
-    page's ``content_hash``. ``width`` / ``height`` are the MediaBox
-    dimensions in PDF points (possibly inherited from an ancestor
-    ``/Pages`` node). The browser diffs ``content_hash`` across reloads to
-    skip re-rendering pages whose content is unchanged.
+    ``content_hash`` combines the page's content-stream hashes with the
+    whole PDF hash. A change to a shared font, image, inherited resource,
+    or page property therefore invalidates every page conservatively.
+    ``width`` / ``height`` are the MediaBox dimensions in PDF points
+    (possibly inherited from an ancestor ``/Pages`` node). Only an
+    identical PDF can reuse a previously painted page.
 
     Best-effort: ``Manifest.pages`` is empty when the page tree can't be
     resolved (e.g. an unsupported structure), and the client simply
@@ -301,14 +300,16 @@ def compute_manifest(
     if cursor < pdf_size:
         skeleton.append((cursor, pdf_size))
 
-    # Per-page content identity for incremental render reuse (option B,
-    # DESIGN.md §5 #13). Best-effort: any parse failure yields an empty
-    # page index, and the client falls back to re-rendering visible pages.
-    # Reuses the chunk hashes already computed, so a page's hash changes
-    # iff one of its content-stream objects changed.
+    # A page's rendering depends on more than /Contents: images, fonts,
+    # inherited resources, rotation, and crop boxes may all change while
+    # its content stream stays identical. Include the full PDF identity
+    # so reuse is safe; any changed PDF conservatively invalidates all
+    # painted pages. A parse failure also disables reuse.
     chunk_hash_by_objid = {c.object_id: c.hash for c in chunks_list}
     try:
-        pages = _compute_page_index(data, chunk_hash_by_objid)
+        pages = _compute_page_index(
+            data, chunk_hash_by_objid, hashlib.sha256(data).digest(),
+        )
     except _ParseError:
         pages = ()
 
@@ -566,7 +567,7 @@ def _parse_classic_xref(data: bytes, xref_offset: int) -> list[tuple[int, int]]:
 
 
 # -----------------------------------------------------------------------------
-# Page index (option B): resolve the page tree to a per-page content hash.
+# Page index (option B): resolve the page tree to a safe render identity.
 #
 # Walk /Root -> /Pages -> /Kids -> /Page, reading each dict from wherever
 # it lives: a directly-addressable (type-1) object, or a compressed object
@@ -582,7 +583,7 @@ _MAX_PAGE_TREE_DEPTH = 50
 _MAX_PAGES = 100000
 
 
-def _compute_page_index(data, chunk_hash_by_objid):
+def _compute_page_index(data, chunk_hash_by_objid, document_hash):
     """Return a tuple of PageInfo in document order, or () when there's no
     resolvable /Root (e.g. the synthetic test PDFs and classic PDFs that
     omit it)."""
@@ -638,7 +639,9 @@ def _compute_page_index(data, chunk_hash_by_objid):
             hashes.append(h)
         if box is None:
             raise _ParseError("page has no MediaBox")
-        content_hash = hashlib.sha256("".join(hashes).encode("ascii")).hexdigest()
+        content_hash = hashlib.sha256(
+            document_hash + "".join(hashes).encode("ascii")
+        ).hexdigest()
         width = abs(box[2] - box[0])
         height = abs(box[3] - box[1])
         pages.append(PageInfo(content_hash=content_hash, width=width, height=height))

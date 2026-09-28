@@ -77,7 +77,8 @@ handles the rest.
 
 For larger documents (multi-chapter thesis, paper with figures), the TeX
 compile itself usually dominates and rebuilds run in 2–5 s. The browser keeps
-canvas memory bounded to pages near the viewport, reuses unchanged pages, and
+canvas memory bounded to pages near the viewport, reuses painted pages only
+when the PDF bytes are identical, and
 limits concurrent raster, text-layer, and search-index work, so reload cost
 does not grow linearly with every page in the document.
 

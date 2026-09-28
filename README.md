@@ -146,7 +146,7 @@ bazel run //:cv_live   # http://127.0.0.1:8765/
   are preserved across reloads, so a 90-page thesis doesn't snap
   back to page 1 on every save.
 - **Bounded long-document rendering** — only pages near the viewport
-  retain canvas memory, unchanged pages are reused across reloads, and
+  retain canvas memory, identical PDFs can reuse painted pages, and
   raster, text-layer, and search work run through bounded queues. A
   dedicated OffscreenCanvas worker was prototyped but did not improve the
   measured bottleneck enough to justify its extra PDF.js lifecycle.
