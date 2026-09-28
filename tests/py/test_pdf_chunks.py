@@ -28,6 +28,7 @@ import hashlib
 import importlib.util
 import sys
 import tempfile
+import tracemalloc
 import unittest
 import zlib
 from pathlib import Path
@@ -344,6 +345,29 @@ class TestClassicXref(unittest.TestCase):
 
 
 class TestErrorPaths(unittest.TestCase):
+    def test_flate_complete_empty_and_exact_limit_streams(self):
+        with mock.patch.object(_PC, "MAX_DECOMPRESSED_STREAM_SIZE", 1024):
+            for data in (b"", b"small", b"x" * 1024):
+                self.assertEqual(_PC._decompress_bounded(zlib.compress(data)), data)
+
+    def test_flate_truncation_and_corruption_are_rejected(self):
+        compressed = zlib.compress(b"complete stream")
+        for data in (compressed[:-1], compressed[:3], b"not zlib"):
+            with self.assertRaises(_PC._ParseError):
+                _PC._decompress_bounded(data)
+
+    def test_small_flate_stream_does_not_allocate_the_entire_budget(self):
+        compressed = zlib.compress(b"small xref")
+        tracemalloc.start()
+        try:
+            self.assertEqual(_PC._decompress_bounded(compressed), b"small xref")
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        # A generous ceiling pins the 64 MiB regression without asserting
+        # a Python-version-specific allocator size.
+        self.assertLess(peak, 1024 * 1024)
+
     def test_flate_expansion_is_bounded(self):
         compressed = zlib.compress(b"x" * 4096)
         with mock.patch.object(_PC, "MAX_DECOMPRESSED_STREAM_SIZE", 1024):
