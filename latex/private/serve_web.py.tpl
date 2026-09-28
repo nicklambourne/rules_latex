@@ -8,8 +8,8 @@ What this is:
 
 * A tiny HTTP server (Python stdlib's http.server) running on
   localhost.
-* GET /          -> a single-page HTML wrapper that loads PDF.js from
-                    a CDN, renders the current PDF in a canvas, and
+* GET /          -> a single-page HTML wrapper that loads vendored PDF.js,
+                    renders the current PDF in a canvas, and
                     listens for reload events on /events.
 * GET /pdf       -> serves the bytes of bazel-bin/<doc>.pdf.
 * GET /events    -> Server-Sent Events stream; emits 'data: reload\\n\\n'

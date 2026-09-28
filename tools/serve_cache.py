@@ -489,10 +489,10 @@ class _exclusive_lock:
     """Context manager: hold an exclusive flock on ``path``.
 
     Creates the file if it doesn't exist. Releases the lock on
-    exit (even on exceptions). On platforms without ``flock`` --
-    in practice nothing we support, but we degrade gracefully --
-    becomes a no-op and concurrent primes are merely racy, not
-    broken (the populate tool writes atomically via a temp dir).
+    exit (even on exceptions). On unsupported filesystems without
+    ``flock``, the fallback below becomes a no-op and concurrent primes are
+    racy but cannot corrupt the atomically written snapshot. Supported local
+    filesystems provide this lock.
     """
 
     def __init__(self, path: Path) -> None:

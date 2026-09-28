@@ -55,9 +55,10 @@ jobs:
           # (.bazelversion = 8.0.0). For non-default matrix cells set
           # --lockfile_mode=off so a different version doesn't fail
           # with "lockfile out of date" or rewrite the file mid-run.
-          # The default 8.0.0 cell still enforces the lockfile
-          # (Bazel's default mode), so we catch the case where master
-          # diverges from the committed lockfile.
+          # Other Bazel versions have their own lock format and run
+          # without modifying the tracked root-module lockfile.
+          # The canonical 8.0.0 cell checks the root explicitly below;
+          # nested consumer/example modules keep their own lock policy.
           bazelrc: ${{ matrix.bazel-version == '8.0.0' && '' || 'common --lockfile_mode=off' }}
 
       - name: Install poppler-utils (for citation grep in biber smoke test)
@@ -74,7 +75,12 @@ jobs:
           command -v pdftotext || echo "pdftotext not installed; biber citation grep will be skipped"
 
       - name: Build rules_latex (root)
-        run: bazel build //... --config=ci
+        run: |
+          if [[ "${{ matrix.bazel-version }}" == "8.0.0" ]]; then
+            bazel build //... --config=ci --lockfile_mode=error
+          else
+            bazel build //... --config=ci
+          fi
 
       - name: Smoke test example/hello
         working-directory: examples
@@ -587,3 +593,9 @@ jobs:
           sudo install -m 755 buildifier /usr/local/bin/buildifier
       - name: Lint
         run: buildifier --mode=check --lint=warn -r .
+      - name: Check Python, JavaScript, and shell syntax
+        run: |
+          export PYTHONPYCACHEPREFIX="$RUNNER_TEMP/python-syntax-cache"
+          python3 -m compileall -q tools tests/py
+          rg --files latex tests -g '*.js' -g '*.mjs' | xargs -n1 node --check
+          rg --files . -g '*.sh' | xargs -n1 bash -n

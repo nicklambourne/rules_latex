@@ -9,10 +9,10 @@ on:
 permissions:
   contents: read
 
-# Allow only one concurrent deployment, but don't cancel in-progress
-# runs since we want CI to complete before publishing.
+# Keep PR validations independent so queued checks on unrelated PRs survive.
+# Production deployments still share one serial group.
 concurrency:
-  group: pages
+  group: ${{ github.event_name == 'pull_request' && format('docs-pr-{0}', github.event.pull_request.number) || 'pages' }}
   cancel-in-progress: false
 
 jobs:

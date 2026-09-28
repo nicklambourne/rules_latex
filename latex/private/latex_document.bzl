@@ -18,7 +18,8 @@ Three offline-mode strategies, in priority order:
    tar.gz. That tarball is then an input to TectonicCompile, which
    runs with --only-cached. Bazel's action cache means the
    PopulateCache result is reused across builds and shared via the
-   remote cache; only adding a new \\usepackage triggers a re-run.
+   remote cache; any source or configuration change that affects the
+   action key triggers a re-run.
 
 ### Staging contract (v0.3+)
 

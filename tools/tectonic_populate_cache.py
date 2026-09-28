@@ -755,13 +755,13 @@ def _format_missing_file_hint(
         more = f" (+{len(referencing) - 3} more)" if len(referencing) > 3 else ""
         return (
             f"hint: '{missing}' is required by {sample}{more} — one "
-            f"of your ctan_packages. It isn't in Tectonic's 2022 "
+            f"of your ctan_packages. It isn't in the configured "
             f"bundle. Add '{base}' to ctan_packages on this target "
             f"and rebuild."
         )
 
     return (
-        f"hint: '{missing}' isn't in Tectonic's 2022 bundle and isn't "
+        f"hint: '{missing}' isn't in the configured bundle and isn't "
         f"referenced by any of your ctan_packages. If '{base}' is a "
         f"CTAN package, add it to ctan_packages on this target. "
         f"Otherwise check for a typo in your .tex sources."
