@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 import tarfile
 import tempfile
 import unittest
+from contextlib import redirect_stderr
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -87,6 +90,51 @@ class TestCompileArguments(unittest.TestCase):
             self.assertEqual(parsed.tectonic, Path("tectonic"))
             self.assertEqual(parsed.main, Path("pkg/main.tex"))
             self.assertEqual(parsed.output, Path("out.pdf"))
+
+    def test_worker_reports_string_system_exit(self):
+        request = {
+            "requestId": 7,
+            "arguments": [
+                "--tectonic", "tectonic", "--main", "main.tex",
+                "--output", "out.pdf",
+            ],
+        }
+        response = StringIO()
+        with patch.object(sys, "stdin", StringIO(json.dumps(request) + "\n")):
+            with patch.object(sys, "stdout", response):
+                self.assertEqual(compile_tool._worker_loop(), 0)
+        result = json.loads(response.getvalue())
+        self.assertEqual(result["requestId"], 7)
+        self.assertEqual(result["exitCode"], 1)
+        self.assertIn("exactly one of --cache-tarball", result["output"])
+
+    def test_compiler_stderr_and_log_survive_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            main = work / "main.tex"
+            main.write_text("test", encoding="utf-8")
+            (work / "main.log").write_text("missing resource: foo.sty\n")
+            output = StringIO()
+            result = compile_tool.subprocess.CompletedProcess(
+                ["tectonic"], 1, stdout=b"compiler stderr: failed\n",
+            )
+            with patch.object(compile_tool.subprocess, "run", return_value=result) as run:
+                with redirect_stderr(output):
+                    with self.assertRaises(SystemExit):
+                        compile_tool.run_tectonic(
+                            tectonic=main,
+                            main_in_workdir=main,
+                            cache_dir=work,
+                            bundle=None,
+                            outfmt="pdf",
+                            synctex=False,
+                            reproducible=False,
+                            extra_args=[],
+                            biber=None,
+                        )
+            self.assertEqual(run.call_args.kwargs["stderr"], compile_tool.subprocess.STDOUT)
+            self.assertIn("compiler stderr: failed", output.getvalue())
+            self.assertIn("missing resource: foo.sty", output.getvalue())
 
 
 if __name__ == "__main__":
