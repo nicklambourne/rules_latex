@@ -16,11 +16,13 @@ _TEST_DATA = [
 py_unittest(
     name = "test_synctex_parser",
     data = _TEST_DATA,
+    extra_srcs = ["_template_loader.py"],
 )
 
 py_unittest(
     name = "test_open_browser",
     data = _TEST_DATA,
+    extra_srcs = ["_template_loader.py"],
 )
 
 py_unittest(
@@ -41,6 +43,7 @@ py_unittest(
 py_unittest(
     name = "test_watcher_debouncer",
     data = _TEST_DATA,
+    extra_srcs = ["_template_loader.py"],
 )
 
 py_unittest(
@@ -51,11 +54,13 @@ py_unittest(
 py_unittest(
     name = "test_post_build_hook",
     data = _TEST_DATA,
+    extra_srcs = ["_template_loader.py"],
 )
 
 py_unittest(
     name = "test_http_head",
     data = _TEST_DATA,
+    extra_srcs = ["_template_loader.py"],
 )
 
 py_unittest(

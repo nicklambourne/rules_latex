@@ -92,6 +92,20 @@ class ServeCacheGenerationTest(unittest.TestCase):
                 )
 
 
+class TemplateLiteralTest(unittest.TestCase):
+    def test_generated_python_preserves_special_characters(self):
+        literal = 'quote " and apostrophe \' and backslash \\ and $() and `x`\ntriple """'
+        module = load_template_module(
+            name="serve_web_literal_test",
+            extra={
+                "{{DOCUMENT_NAME}}": literal,
+                "{{WATCHED_PATHS}}": literal,
+            },
+        )
+        self.assertEqual(module.DOCUMENT_NAME, literal)
+        self.assertEqual(module.WATCHED_PATHS_RAW, literal)
+
+
 class RebuildDispatchTest(unittest.TestCase):
     def setUp(self):
         # Snapshot + restore the two functions rebuild() dispatches to.
