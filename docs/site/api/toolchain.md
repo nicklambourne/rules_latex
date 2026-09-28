@@ -49,7 +49,8 @@ Defines a tectonic-based LaTeX toolchain.
 <pre>
 load("@rules_latex//latex/toolchain:toolchain.bzl", "LatexToolchainInfo")
 
-LatexToolchainInfo(<a href="#LatexToolchainInfo-tectonic">tectonic</a>, <a href="#LatexToolchainInfo-tectonic_tool">tectonic_tool</a>, <a href="#LatexToolchainInfo-tectonic_runfiles">tectonic_runfiles</a>, <a href="#LatexToolchainInfo-bundle">bundle</a>, <a href="#LatexToolchainInfo-biber">biber</a>, <a href="#LatexToolchainInfo-biber_tool">biber_tool</a>, <a href="#LatexToolchainInfo-biber_runfiles">biber_runfiles</a>)
+LatexToolchainInfo(<a href="#LatexToolchainInfo-tectonic">tectonic</a>, <a href="#LatexToolchainInfo-tectonic_tool">tectonic_tool</a>, <a href="#LatexToolchainInfo-tectonic_runfiles">tectonic_runfiles</a>, <a href="#LatexToolchainInfo-bundle">bundle</a>, <a href="#LatexToolchainInfo-biber">biber</a>, <a href="#LatexToolchainInfo-biber_tool">biber_tool</a>,
+                   <a href="#LatexToolchainInfo-biber_runfiles">biber_runfiles</a>)
 </pre>
 
 Resolved tectonic toolchain.
@@ -65,4 +66,5 @@ Resolved tectonic toolchain.
 | <a id="LatexToolchainInfo-biber"></a>biber |  File\|None: a biber executable for bibliography processing, or None if biber isn't available for this platform.    |
 | <a id="LatexToolchainInfo-biber_tool"></a>biber_tool |  FilesToRunProvider\|None: biber plus its runtime files.    |
 | <a id="LatexToolchainInfo-biber_runfiles"></a>biber_runfiles |  Runfiles\|None: runtime files for biber launchers.    |
+
 
