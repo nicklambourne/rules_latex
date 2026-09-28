@@ -176,6 +176,7 @@ const canvasViewports = new WeakMap();
 // HTTP cache reduces wire transfer to ~0).
 const CHUNK_CACHE_MAX_ENTRIES = 1000;
 const chunkCache = new Map();
+const retriedPdfGenerations = new Set();
 
 function rememberChunk(hash, bytes) {
   if (chunkCache.size >= CHUNK_CACHE_MAX_ENTRIES) {
@@ -198,18 +199,24 @@ async function fetchChunk(hash) {
   return buf;
 }
 
-async function fetchPdfRange(begin, end) {
-  // Fetch [begin, end) from /pdf using HTTP Range. Used for
+async function fetchPdfRange(pdfHash, begin, end) {
+  // Fetch [begin, end) from the PDF generation named by the manifest. Used for
   // skeleton ranges (PDF header, gaps between objects, the
   // trailer) — anything not covered by a content-addressed
   // chunk.
-  const resp = await fetch("/pdf", {
+  const resp = await fetch(`/pdf/${pdfHash}`, {
     headers: { "Range": `bytes=${begin}-${end - 1}` },
   });
-  if (!(resp.status === 206 || resp.status === 200)) {
-    throw new Error(`/pdf range ${begin}-${end - 1} failed: ${resp.status}`);
+  if (resp.status !== 206) {
+    const error = new Error(`PDF generation ${pdfHash} range ${begin}-${end - 1} failed: ${resp.status}`);
+    error.generationExpired = resp.status === 410;
+    throw error;
   }
-  return new Uint8Array(await resp.arrayBuffer());
+  const bytes = new Uint8Array(await resp.arrayBuffer());
+  if (bytes.length !== end - begin) {
+    throw new Error(`PDF generation ${pdfHash} returned a short range`);
+  }
+  return bytes;
 }
 
 // Custom PDFDataRangeTransport that serves byte ranges from the
@@ -221,6 +228,7 @@ class ChunkedTransport extends pdfjsLib.PDFDataRangeTransport {
     // needs via requestDataRange.
     super(manifest.pdfSize, new Uint8Array(0));
     this.manifest = manifest;
+    this.onFailure = null;
     // Sort chunks by start offset for fast lookups; the server
     // emits them sorted but defending against a future change is
     // cheap.
@@ -244,9 +252,9 @@ class ChunkedTransport extends pdfjsLib.PDFDataRangeTransport {
       this.onDataRange(begin, bytes);
     } catch (err) {
       console.error("ChunkedTransport: range fetch failed", err);
-      // PDF.js retries on failure. Don't call onDataRange; the
-      // request just times out. Better than throwing here, which
-      // would break the worker.
+      // A missing/expired generation cannot complete. Destroy the
+      // loading task so the caller reports the failure immediately.
+      if (this.onFailure) this.onFailure(err);
     }
   }
 
@@ -260,7 +268,7 @@ class ChunkedTransport extends pdfjsLib.PDFDataRangeTransport {
         const chunkBytes = await fetchChunk(seg.hash);
         segments.push(chunkBytes.subarray(seg.sliceStart, seg.sliceEnd));
       } else {
-        segments.push(await fetchPdfRange(seg.begin, seg.end));
+        segments.push(await fetchPdfRange(this.manifest.pdfHash, seg.begin, seg.end));
       }
     }
     if (segments.length === 1) return segments[0];
@@ -273,6 +281,14 @@ class ChunkedTransport extends pdfjsLib.PDFDataRangeTransport {
       off += seg.length;
     }
     return out;
+  }
+}
+
+function failPdfGeneration(manifest, loadingTask, error) {
+  loadingTask.destroy();
+  if (error.generationExpired && !retriedPdfGenerations.has(manifest.pdfHash)) {
+    retriedPdfGenerations.add(manifest.pdfHash);
+    queueMicrotask(() => renderDocument());
   }
 }
 
@@ -336,6 +352,7 @@ async function renderDocument() {
       // (with HTTP-Range fallback for skeleton bytes).
       const transport = new ChunkedTransport(manifest);
       loadingTask = pdfjsLib.getDocument({ range: transport });
+      transport.onFailure = (error) => failPdfGeneration(manifest, loadingTask, error);
       _activeLoadingTask = loadingTask;
       pdf = await loadingTask.promise;
       // Kick off prefetch in the background; don't await.
@@ -1082,6 +1099,7 @@ async function _flushWsRender() {
   try {
     const transport = new ChunkedTransport(manifest);
     loadingTask = pdfjsLib.getDocument({ range: transport });
+    transport.onFailure = (error) => failPdfGeneration(manifest, loadingTask, error);
     _activeLoadingTask = loadingTask;
     pdf = await loadingTask.promise;
     if (_activeLoadingTask === loadingTask) _activeLoadingTask = null;
