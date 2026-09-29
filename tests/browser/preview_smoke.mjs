@@ -153,6 +153,31 @@ try {
     return current?.rendered && current.status === "ok" ? current : null;
   }, "initial PDF.js canvas render");
 
+  // Hold one completed HTTP range across a newer WebSocket render. Ignore
+  // cancellation only in this test's fetch wrapper: bytes can already be in
+  // flight when PDF.js tears down the old reader. Releasing them must be safe.
+  const gateScript = await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `(() => {
+      const fetch = window.fetch.bind(window);
+      const gate = window.__serveWebRangeGate = { claimed: false, release: null };
+      window.fetch = async (input, options) => {
+        const pathname = new URL(input, location.href).pathname;
+        if (gate.claimed || !/^\\/pdf\\/[0-9a-f]{64}$/.test(pathname)) {
+          return fetch(input, options);
+        }
+        gate.claimed = true;
+        const response = await fetch(input, { ...options, signal: undefined });
+        const bytes = await response.arrayBuffer();
+        await new Promise(resolve => { gate.release = resolve; });
+        return new Response(bytes, { status: response.status, headers: response.headers });
+      };
+    })();`,
+  });
+  await cdp.send("Page.reload", { ignoreCache: true });
+  await waitFor(() => cdp.evaluate(
+    "typeof window.__serveWebRangeGate?.release === 'function'"
+  ), "held range from the initial PDF load");
+
   const before = await fetch(`${url}status`).then((response) => response.json());
   assert.equal(before.last_success, true);
   assert.match(original, /\\end\{document\}/);
@@ -169,13 +194,21 @@ try {
     lastStatus = status;
     lastState = current;
     return status.last_success && status.build_count > before.build_count &&
-      current?.rendered && current.renders > first.renders ? current : null;
+      current?.rendered && current.status === "ok" && current.pixels !== first.pixels ? current : null;
   }, "PDF.js render after a source edit", 60000).catch((error) => {
     throw new Error(`${error.message}; status=${JSON.stringify(lastStatus)}; ` +
       `browser=${JSON.stringify(lastState)}; errors=${cdp.errors.join("; ")}`);
   });
 
   assert.notEqual(second.pixels, first.pixels, "the edited PDF should repaint different pixels");
+  assert.deepEqual(cdp.errors, [], "no browser errors before releasing obsolete bytes");
+
+  await cdp.send("Runtime.evaluate", {
+    expression: "new Promise(resolve => { window.__serveWebRangeGate.release(); setTimeout(resolve, 250); })",
+    awaitPromise: true,
+  });
+  await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: gateScript.identifier });
+  assert.equal((await state()).pixels, second.pixels, "late bytes must not replace the current render");
   assert.deepEqual(cdp.errors, [], `browser errors: ${cdp.errors.join("; ")}`);
 
   // A collected generation must trigger a manifest reload, not a stuck
