@@ -31,6 +31,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -339,6 +340,70 @@ class TestHeadRangeRequests(unittest.TestCase):
         # GET delivers 100 bytes; HEAD delivers zero.
         self.assertEqual(len(g_body), 100)
         self.assertEqual(h_body, b"")
+
+    def test_large_pdf_and_range_cross_buffer_boundaries(self):
+        data = bytes(range(256)) * 13000
+        self.fixture.pdf_path.write_bytes(data)
+        for headers, expected, status in (
+            ({}, data, 200),
+            ({"Range": "bytes=123-2345678"}, data[123:2345679], 206),
+            ({"Range": "bytes=2345678-"}, data[2345678:], 206),
+            ({"Range": "bytes=3000000-9999999"}, data[3000000:], 206),
+        ):
+            actual, hdrs, body = _request(self.fixture.port, "GET", "/pdf", headers=headers)
+            self.assertEqual(actual, status)
+            self.assertEqual(int(hdrs["content-length"]), len(expected))
+            self.assertEqual(body, expected)
+
+    def test_head_never_reads_pdf_bytes_and_get_bounds_read_size(self):
+        # Exercise the actual endpoint while tracking only PDF reads.
+        original_open = Path.open
+        reads = []
+        class TrackedFile:
+            def __init__(self, source):
+                self.source = source
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                self.source.close()
+            def __getattr__(self, name):
+                return getattr(self.source, name)
+            def read(self, size=-1):
+                reads.append(size)
+                return self.source.read(size)
+        def tracked_open(path, *args, **kwargs):
+            source = original_open(path, *args, **kwargs)
+            return TrackedFile(source) if path == self.fixture.pdf_path else source
+        self.fixture.pdf_path.write_bytes(b"x" * (3 * 1024 * 1024 + 7))
+        with mock.patch.object(Path, "open", tracked_open):
+            for headers in ({}, {"Range": "bytes=5-"}):
+                _, _, body = _request(self.fixture.port, "HEAD", "/pdf", headers=headers)
+                self.assertEqual(body, b"")
+            self.assertEqual(reads, [])
+            _request(self.fixture.port, "GET", "/pdf")
+        self.assertGreater(len(reads), 1)
+        self.assertTrue(all(0 < size <= 1024 * 1024 for size in reads))
+
+    def test_empty_pdf_and_invalid_ranges(self):
+        self.fixture.pdf_path.write_bytes(b"")
+        status, hdrs, body = _request(self.fixture.port, "GET", "/pdf")
+        self.assertEqual((status, hdrs["content-length"], body), (200, "0", b""))
+        for value in ("bytes=0-", "bytes=-2", "bytes=3-2", "bytes=0-1,3-4"):
+            status, hdrs, _ = _request(self.fixture.port, "GET", "/pdf", headers={"Range": value})
+            self.assertEqual((status, hdrs["content-range"]), (416, "bytes */0"))
+
+    def test_short_read_or_io_error_closes_incomplete_response(self):
+        for failure in (b"", OSError("read failed")):
+            with self.fixture.pdf_path.open("rb") as source:
+                reader = mock.MagicMock(wraps=source)
+                reader.__enter__.return_value = reader
+                reader.__exit__.return_value = None
+                reader.read.side_effect = [b"first", failure]
+                with mock.patch.object(Path, "open", return_value=reader):
+                    with self.assertRaises(http.client.IncompleteRead) as raised:
+                        _request(self.fixture.port, "GET", "/pdf")
+                # No second HTTP error response is appended to the PDF.
+                self.assertEqual(raised.exception.partial, b"first")
 
     def test_old_manifest_ranges_remain_immutable_after_rebuild(self):
         original = self.fixture.pdf_path.read_bytes()
