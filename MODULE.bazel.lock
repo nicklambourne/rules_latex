@@ -149,7 +149,7 @@
   "moduleExtensions": {
     "//latex/toolchain:extensions.bzl%tectonic": {
       "general": {
-        "bzlTransitiveDigest": "LIuCvmeFf7Anl4lGIe0SK2TP8GXiX5giopahT8VwOoM=",
+        "bzlTransitiveDigest": "CokxM/Y7y2cpiaeijvjIlYYX6qwwGuMaZAhvkmswtVo=",
         "usagesDigest": "TJ5n1HSUCJ2d6mfdttK1PpTgOm7vvMDdBG40E1YGr5Q=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

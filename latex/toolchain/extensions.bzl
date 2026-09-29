@@ -87,10 +87,6 @@ toolchain(
         "{os}",
         "{cpu}",
     ],
-    target_compatible_with = [
-        "{os}",
-        "{cpu}",
-    ],
     toolchain = "@rules_latex_tectonic_{name}//:toolchain",
     toolchain_type = "@rules_latex//latex/toolchain:toolchain_type",
 )
