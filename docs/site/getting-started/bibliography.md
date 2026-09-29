@@ -114,7 +114,7 @@ page for the full version-coupling discussion.
 > styles. It was **removed** in v0.6.0 — the rebuilt bundle ships the
 > modern stack natively. Delete that argument from your `MODULE.bazel`.
 
-## Platform support
+## Biber binary availability
 
 | Platform        | Toolchain biber? | Note |
 |-----------------|------------------|------|
@@ -122,12 +122,12 @@ page for the full version-coupling discussion.
 | Linux aarch64   | :material-check: | Prebuilt biber 2.21 (CTAN) |
 | macOS x86_64    | :material-check: | Universal binary |
 | macOS aarch64   | :material-check: | Universal binary |
-| Windows x86_64  | :material-check: | |
+| Windows x86_64  | Binary available | Native rules_latex workflows are not yet supported or CI-tested. |
 
 ### Unsupported platforms
 
-biber 2.21 is vendored for every platform above, including Linux
-arm64 (a prebuilt binary from CTAN's `biber-linux-aarch64` package,
+biber 2.21 is vendored for the supported Linux and macOS platforms above,
+including Linux arm64 (a prebuilt binary from CTAN's `biber-linux-aarch64` package,
 new in v0.6.0). If you're on a platform without a vendored binary,
 install biber via your distro (`apt-get install biber`) and fall back
 to the system binary on `PATH`:
