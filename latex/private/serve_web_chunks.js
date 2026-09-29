@@ -44,3 +44,32 @@ export function planRangeSegments(sortedRanges, begin, end) {
   }
   return segments;
 }
+
+// In-memory chunks need a byte ceiling as well as an entry ceiling: a
+// handful of large PDF objects can otherwise retain most of a PDF.
+export class BoundedChunkCache extends Map {
+  constructor(maxEntries, maxBytes) {
+    super();
+    this.maxEntries = maxEntries;
+    this.maxBytes = maxBytes;
+    this.byteSize = 0;
+  }
+
+  remember(hash, bytes) {
+    const previous = this.get(hash);
+    if (previous) {
+      this.byteSize -= previous.byteLength;
+      this.delete(hash);
+    }
+    if (bytes.byteLength > this.maxBytes) return;
+    while (this.size &&
+           (this.size >= this.maxEntries ||
+            this.byteSize + bytes.byteLength > this.maxBytes)) {
+      const oldest = this.keys().next().value;
+      this.byteSize -= this.get(oldest).byteLength;
+      this.delete(oldest);
+    }
+    this.set(hash, bytes);
+    this.byteSize += bytes.byteLength;
+  }
+}

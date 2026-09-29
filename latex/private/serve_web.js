@@ -20,7 +20,7 @@ import {
   recordRenderTiming,
   recordLongTask,
 } from "./serve_web_render.js";
-import { planRangeSegments } from "./serve_web_chunks.js";
+import { BoundedChunkCache, planRangeSegments } from "./serve_web_chunks.js";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/_pdfjs/pdf.worker.mjs";
 
 const SYNCTEX_ENABLED = window.__SERVE_CONFIG__.synctexEnabled;
@@ -169,22 +169,17 @@ const canvasViewports = new WeakMap();
 // immutable` headers, so the second fetch comes from the
 // browser's HTTP cache and is nearly free.
 //
-// Cap the cache at a modest number of entries to bound memory
-// usage. LRU eviction would be ideal but is overkill: the bound
-// here is loose, and chunks evicted from this Map can still be
-// re-fetched (the server keeps them on disk and the browser's
-// HTTP cache reduces wire transfer to ~0).
+// Bound both entry count and retained bytes. Chunks larger than the
+// byte budget remain fetchable on demand but are not retained here.
 const CHUNK_CACHE_MAX_ENTRIES = 1000;
-const chunkCache = new Map();
+const CHUNK_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+const chunkCache = new BoundedChunkCache(
+  CHUNK_CACHE_MAX_ENTRIES, CHUNK_CACHE_MAX_BYTES,
+);
 const retriedPdfGenerations = new Set();
 
 function rememberChunk(hash, bytes) {
-  if (chunkCache.size >= CHUNK_CACHE_MAX_ENTRIES) {
-    // Evict the oldest entry (Map preserves insertion order).
-    const oldestKey = chunkCache.keys().next().value;
-    if (oldestKey !== undefined) chunkCache.delete(oldestKey);
-  }
-  chunkCache.set(hash, bytes);
+  chunkCache.remember(hash, bytes);
 }
 
 async function fetchChunk(hash) {

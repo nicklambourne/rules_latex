@@ -31,6 +31,7 @@ import tempfile
 import unittest
 import zlib
 from pathlib import Path
+from unittest import mock
 
 
 _TOOLS_DIR = Path(__file__).resolve().parent.parent.parent / "tools"
@@ -343,6 +344,12 @@ class TestClassicXref(unittest.TestCase):
 
 
 class TestErrorPaths(unittest.TestCase):
+    def test_flate_expansion_is_bounded(self):
+        compressed = zlib.compress(b"x" * 4096)
+        with mock.patch.object(_PC, "MAX_DECOMPRESSED_STREAM_SIZE", 1024):
+            with self.assertRaisesRegex(_PC._ParseError, "too large"):
+                _PC._decompress_bounded(compressed)
+
     """Malformed PDFs and edge cases: ``compute_manifest`` must
     return None so the server falls back to whole-PDF transport.
     Crashing here would take down the live-preview HTTP handler."""
