@@ -336,16 +336,19 @@ compiles into 30-90 s per-edit hangs — unacceptable.
 
 `latex_live` works around this without changing the
 implicit-pipeline semantics: on startup it primes a persistent
-cache snapshot at
-`$BUILD_WORKSPACE_DIRECTORY/.cache/rules_latex/<doc-slug>/cache.tar.gz`,
-then passes its absolute path via the private build setting
+cache snapshot under
+`$BUILD_WORKSPACE_DIRECTORY/.cache/rules_latex/<doc-slug>/<config-key>/`,
+then passes the resolved immutable extraction path via the private build setting
 `--@rules_latex//latex:_serve_cache_override=<path>` on every
 `bazel build` it invokes. `latex_document` consults the flag and,
 when set, uses the snapshot as its cache source — bypassing the
 implicit pipeline entirely. The serve cache lives outside Bazel's
 input graph; the private `_serve_cache_generation` build setting
-puts the cache generation in the compile action's explicit environment,
-so re-priming changes its action key. Serve-only compiles are marked
+puts the cache generation digest in the compile action's explicit environment,
+so re-priming changes its action key. A configuration fingerprint prevents
+bundle/package/tool changes from reusing an old prime. Re-priming publishes
+a new extraction and atomically switches a `cache` symlink; prior
+generations remain for in-flight compiles. Serve-only compiles are marked
 `no-remote` because that directory exists only on the serving host.
 Documents with `cache=` or a toolchain bundle (already hermetic
 and fast) ignore the override.
@@ -384,7 +387,7 @@ A handful of further hot-path optimisations apply to *every*
   `_serve_cache_override` points at a directory (vs a tarball),
   `tectonic_compile.py --cache-dir` skips the per-action gzip
   decompression + 300-file extract into a tmpdir and uses the
-  directory as `TECTONIC_CACHE_DIR` directly. Verified safe:
+  resolved immutable generation as `TECTONIC_CACHE_DIR` directly. Verified safe:
   tectonic does not write back to its cache under `--only-cached`.
   Saves ~100-500 ms per warm rebuild on macOS APFS.
 
