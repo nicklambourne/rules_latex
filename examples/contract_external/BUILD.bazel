@@ -1,0 +1,12 @@
+load("@rules_latex//latex:defs.bzl", "latex_library")
+
+exports_files(
+    ["external.tex"],
+    visibility = ["//visibility:public"],
+)
+
+latex_library(
+    name = "external_fragment",
+    srcs = ["external.tex"],
+    visibility = ["//visibility:public"],
+)

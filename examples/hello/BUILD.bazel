@@ -104,3 +104,62 @@ latex_test(
     main = "hello.tex",
     deps = [":preamble"],
 )
+
+# One input set through all four public consumers: an external module's
+# latex_library plus a generated source staged at explicit paths.
+genrule(
+    name = "generated_fragment",
+    outs = ["generated.tex"],
+    cmd = "echo 'Generated source reached.' > $@",
+)
+
+latex_library(
+    name = "generated_library",
+    srcs = [":generated_fragment"],
+)
+
+_CONTRACT_SRCS = ["contract.tex"]
+
+_CONTRACT_DEPS = [
+    ":generated_library",
+    "@rules_latex_contract_fixture//:external_fragment",
+]
+
+_CONTRACT_PKG_FILES = {
+    ":generated_fragment": "generated.tex",
+    "@rules_latex_contract_fixture//:external.tex": "external.tex",
+}
+
+latex_document(
+    name = "contract_document",
+    srcs = _CONTRACT_SRCS,
+    cache = "hello_cache.tar.gz",
+    main = "contract.tex",
+    pkg_files = _CONTRACT_PKG_FILES,
+    deps = _CONTRACT_DEPS,
+)
+
+latex_test(
+    name = "contract_test",
+    srcs = _CONTRACT_SRCS,
+    cache = "hello_cache.tar.gz",
+    main = "contract.tex",
+    pkg_files = _CONTRACT_PKG_FILES,
+    deps = _CONTRACT_DEPS,
+)
+
+latex_cache_snapshot(
+    name = "contract_snapshot",
+    srcs = _CONTRACT_SRCS,
+    main = "contract.tex",
+    output = "hello/contract_cache.tar.gz",
+    pkg_files = _CONTRACT_PKG_FILES,
+    deps = _CONTRACT_DEPS,
+)
+
+latex_live(
+    name = "contract_live",
+    document = ":contract_document",
+    open_on_start = False,
+    port = 8771,
+)
