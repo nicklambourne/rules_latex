@@ -432,6 +432,12 @@ class TestErrorPaths(unittest.TestCase):
 
 
 class TestAtomicWrite(unittest.TestCase):
+    def test_atomic_write_accepts_buffer_slice(self):
+        with tempfile.TemporaryDirectory() as td:
+            dest = Path(td) / "chunk"
+            _PC._atomic_write_bytes(dest, memoryview(b"before-payload-after")[7:14])
+            self.assertEqual(dest.read_bytes(), b"payload")
+
     def test_atomic_write_creates_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / "x"
