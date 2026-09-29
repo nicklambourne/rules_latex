@@ -116,6 +116,7 @@ def _populate_cache_action(
         output_tarball,
         tool,
         ctan_packages,
+        ctan_lock,
         bundle_manifest):
     """Schedule an online tectonic compile that captures its cache.
 
@@ -142,6 +143,8 @@ def _populate_cache_action(
         args.add("--biber", biber_file.path)
     for pkg in ctan_packages:
         args.add("--ctan-package", pkg)
+    if ctan_lock:
+        args.add("--ctan-lock", ctan_lock.path)
     if ctan_packages:
         # The manifest is the auto-resolver's filter for "this
         # name is in the bundle, don't fetch it". Always passed
@@ -154,6 +157,7 @@ def _populate_cache_action(
             [main_in, tectonic] +
             ([biber_file] if biber_file else []) +
             ([bundle_manifest] if ctan_packages else []) +
+            ([ctan_lock] if ctan_lock else []) +
             [f for (f, _) in pkg_files]
         ),
         transitive = [srcs_depset],
@@ -394,6 +398,9 @@ def _latex_document_impl(ctx):
         )
 
     ctan_packages = ctx.attr.ctan_packages
+    ctan_lock = ctx.file.ctan_lock
+    if ctan_lock and not ctan_packages:
+        fail("ctan_lock requires ctan_packages on {}".format(ctx.label))
 
     all_srcs = depset(
         direct = ctx.files.srcs,
@@ -413,6 +420,8 @@ def _latex_document_impl(ctx):
     tectonic = toolchain.tectonic
     biber_file, use_system_biber = _resolve_biber(ctx, toolchain)
     user_cache = ctx.file.cache
+    if ctan_lock and user_cache:
+        fail("ctan_lock on {} has no effect with cache; set it on the snapshot rule instead".format(ctx.label))
     pkg_files = _resolved_pkg_files(ctx)
 
     # Validate ctan_packages compatibility with offline mode.
@@ -481,6 +490,7 @@ def _latex_document_impl(ctx):
             output_tarball = offline_source,
             tool = populate_tool,
             ctan_packages = ctan_packages,
+            ctan_lock = ctan_lock,
             bundle_manifest = bundle_manifest,
         )
 
@@ -538,6 +548,7 @@ def _latex_document_impl(ctx):
             staging_lib = staging_lib,
             bundle_url = DEFAULT_BUNDLE.url,
             ctan_packages = ctan_packages,
+            ctan_lock = ctan_lock,
             bundle_manifest = bundle_manifest,
         ),
     ]
@@ -611,6 +622,12 @@ latex_document = rule(
                   "supported when `tectonic.bundle()` is active (the toolchain-level " +
                   "bundle does not support on-demand CTAN package fetching).",
             default = [],
+        ),
+        "ctan_lock": attr.label(
+            doc = "Optional version-1 JSON lock with exact URL and SHA-256 " +
+                  "for each CTAN package. Also locks automatically resolved " +
+                  "transitive packages; undeclared names are not fetched.",
+            allow_single_file = True,
         ),
         "biber": attr.bool(
             doc = "Enable biber bibliography processing. When True, " +

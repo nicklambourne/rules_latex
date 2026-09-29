@@ -49,6 +49,7 @@ LatexDocumentInfo = provider(
                        "populate_tool.",
         "bundle_url": "string: pinned bundle identity used by the implicit prime.",
         "ctan_packages": "list[string]: CTAN packages requested by the document.",
+        "ctan_lock": "File or None: exact URL and SHA-256 lock for CTAN packages.",
         "bundle_manifest": "File: the pinned bundle package manifest for CTAN resolution.",
     },
 )

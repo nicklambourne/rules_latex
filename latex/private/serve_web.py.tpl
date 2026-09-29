@@ -128,6 +128,7 @@ PRIME_BIBER_RUNFILE = "{{PRIME_BIBER_RUNFILE}}"
 PRIME_USE_SYSTEM_BIBER = bool("{{PRIME_USE_SYSTEM_BIBER}}")
 PRIME_BUNDLE_URL = "{{PRIME_BUNDLE_URL}}"
 PRIME_BUNDLE_MANIFEST_RUNFILE = "{{PRIME_BUNDLE_MANIFEST_RUNFILE}}"
+PRIME_CTAN_LOCK_RUNFILE = "{{PRIME_CTAN_LOCK_RUNFILE}}"
 PRIME_CTAN_PACKAGES_RAW = """\
 {{PRIME_CTAN_PACKAGES}}"""
 PRIME_SRCS_RAW = """\
@@ -2696,6 +2697,10 @@ def _build_cache_context(workspace: Path, runfiles: Path) -> ServeCacheContext |
         runfiles / PRIME_BUNDLE_MANIFEST_RUNFILE
         if PRIME_BUNDLE_MANIFEST_RUNFILE else None
     )
+    ctan_lock_path = (
+        runfiles / PRIME_CTAN_LOCK_RUNFILE
+        if PRIME_CTAN_LOCK_RUNFILE else None
+    )
     # Document main path: the short_path for a source owned by the
     # main workspace is the same as the workspace-relative path.
     # (Cross-repo main files are filtered out at rule-analysis
@@ -2728,6 +2733,7 @@ def _build_cache_context(workspace: Path, runfiles: Path) -> ServeCacheContext |
         bundle_url=PRIME_BUNDLE_URL,
         ctan_packages=tuple(PRIME_CTAN_PACKAGES_RAW.splitlines()),
         bundle_manifest=bundle_manifest_path,
+        ctan_lock=ctan_lock_path,
     )
 
     layout = serve_cache.derive_cache_layout(
