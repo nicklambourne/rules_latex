@@ -9,7 +9,7 @@ without actually invoking tectonic:
   * .gitignore auto-management (idempotent, non-fatal on failure).
   * Missing-resource heuristic (used to decide whether to auto-
     re-prime on build failure).
-  * Cache nonce computation (used as an --action_env to invalidate
+  * Cache nonce computation (used as a build setting to invalidate
     Bazel's action cache when the snapshot is re-primed).
   * Serve-time prime arguments for the pinned bundle and CTAN overlay.
 
