@@ -995,6 +995,17 @@ let _wsConn = null;     // WebSocket | null
 // just overwrite — the latest manifest wins.
 let _wsPendingManifest = null;
 let _wsPendingHashes = new Set();
+let _wsPendingTimer = null;
+
+function _scheduleWsFallback(manifest) {
+  clearTimeout(_wsPendingTimer);
+  // The server remembers chunks it has sent, but the browser may have
+  // evicted them since then. Never wait indefinitely for a skipped frame:
+  // ChunkedTransport can fetch any missing chunk over HTTP on demand.
+  _wsPendingTimer = setTimeout(() => {
+    if (_wsPendingManifest === manifest) _flushWsRender();
+  }, 1500);
+}
 
 function _hexFromBytes(bytes) {
   // Hot path during chunk delivery — avoid the array+join allocation
@@ -1024,6 +1035,8 @@ function _handleWsMessage(ev) {
       }
       if (_wsPendingHashes.size === 0) {
         _flushWsRender();
+      } else {
+        _scheduleWsFallback(msg);
       }
     } else if (msg.type === "build-failed") {
       // The status banner will flash red via refreshStatus.
@@ -1049,10 +1062,14 @@ function _handleWsMessage(ev) {
   _wsPendingHashes.delete(hash);
   if (_wsPendingHashes.size === 0 && _wsPendingManifest) {
     _flushWsRender();
+  } else if (_wsPendingManifest) {
+    _scheduleWsFallback(_wsPendingManifest);
   }
 }
 
 async function _flushWsRender() {
+  clearTimeout(_wsPendingTimer);
+  _wsPendingTimer = null;
   const manifest = _wsPendingManifest;
   _wsPendingManifest = null;
   _wsPendingHashes = new Set();
@@ -1122,6 +1139,7 @@ function _startWebSocket() {
 
   ws.addEventListener("close", () => {
     _wsConn = null;
+    if (_wsPendingManifest) _flushWsRender();
     if (!opened) {
       // Never connected — fall back to SSE so live-reload still
       // works. Status banner only flips on if SSE also fails.
