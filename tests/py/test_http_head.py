@@ -38,6 +38,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _TEMPLATE_PATH = _REPO_ROOT / "latex" / "private" / "serve_web.py.tpl"
 _PDF_CHUNKS_PATH = _REPO_ROOT / "tools" / "pdf_chunks.py"
+_WS_SERVER_PATH = _REPO_ROOT / "tools" / "ws_server.py"
 
 
 _PLACEHOLDERS = {
@@ -100,6 +101,17 @@ def _load_pdf_chunks():
 
 _M = _load_template_module()
 _PC = _load_pdf_chunks()
+
+
+def _load_ws_server():
+    spec = importlib.util.spec_from_file_location("ws_server", _WS_SERVER_PATH)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["ws_server"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_WS = _load_ws_server()
 
 
 def _free_port() -> int:
@@ -189,6 +201,7 @@ class _ServerFixture:
         _M.Handler.pdfjs_lib_bytes = b"// pdf.mjs stub"
         _M.Handler.pdfjs_worker_bytes = b"// pdf.worker stub"
         _M.Handler.pdf_chunks_ctx = self.pdf_chunks_ctx
+        _M.Handler.ws_server_mod = _WS
 
         self.port = _free_port()
         self._server = _M.ThreadingHTTPServer(
@@ -531,6 +544,59 @@ class TestPostUnchanged(unittest.TestCase):
         self.assertEqual(h_status, 404)
         self.assertEqual(g_status, 404)
         self.assertEqual(h_body, b"")
+
+
+class TestLocalOriginPolicy(unittest.TestCase):
+    def setUp(self) -> None:
+        self._fixture_ctx = _ServerFixture()
+        self.fixture = self._fixture_ctx.__enter__()
+
+    def tearDown(self) -> None:
+        self._fixture_ctx.__exit__(None, None, None)
+
+    def test_foreign_host_cannot_read_pdf(self):
+        status, _, body = _request(
+            self.fixture.port, "GET", "/pdf",
+            headers={"Host": f"attacker.example:{self.fixture.port}"},
+        )
+        self.assertEqual(status, 403)
+        self.assertNotIn(b"%PDF", body)
+
+    def test_foreign_origin_cannot_post(self):
+        status, _, _ = _request(
+            self.fixture.port, "POST", "/sync/reverse",
+            headers={"Origin": "https://attacker.example"},
+        )
+        self.assertEqual(status, 403)
+
+    def test_websocket_requires_exact_local_origin(self):
+        port = self.fixture.port
+        upgrade = {
+            "Connection": "Upgrade",
+            "Upgrade": "websocket",
+            "Sec-WebSocket-Version": "13",
+            "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+        }
+        for origin in (None, "null", "https://attacker.example"):
+            with self.subTest(origin=origin):
+                headers = dict(upgrade)
+                if origin is not None:
+                    headers["Origin"] = origin
+                status, _, body = _request(port, "GET", "/ws", headers=headers)
+                self.assertEqual(status, 403)
+                self.assertNotIn(b"%PDF", body)
+
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+            sock.sendall((
+                "GET /ws HTTP/1.1\r\n"
+                f"Host: 127.0.0.1:{port}\r\n"
+                f"Origin: http://127.0.0.1:{port}\r\n"
+                "Connection: Upgrade\r\n"
+                "Upgrade: websocket\r\n"
+                "Sec-WebSocket-Version: 13\r\n"
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+            ).encode("ascii"))
+            self.assertIn(b"101 Switching Protocols", sock.recv(4096))
 
 
 if __name__ == "__main__":
