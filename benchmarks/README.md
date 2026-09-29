@@ -2,6 +2,13 @@
 
 ## Snapshot-retention follow-up
 
+Historical sequence: the measurements below preceded the transport-cancellation
+fix (#127). That follow-up adds a delayed-response regression and real-browser
+coverage for deliveries to retired PDF.js readers. The integration resolutions
+have now been published as an ordered train through #127; the earlier branching
+merge order and local-only integration notes below describe the original plan.
+No PR is merged by these validation steps.
+
 The subsequent all-33-PR end-to-end audit found that immutable PDF snapshots
 were never collected. Keep the correctness fixes and streaming transport; bound
 published snapshots to 8 files / 128 MiB / five minutes, always retaining the
@@ -29,6 +36,56 @@ Validation on the combined train plus retention fix, on the same local host:
 
 No correctness fix was reverted and no PR was merged. When combining with
 #118, apply the server changes to `serve_web_runtime.py`, as validated locally.
+
+## Combined end-to-end results
+
+The complete original 33-PR train (#93–125) was compared with v0.7.0 on
+28 September 2026: Apple M4, macOS 26.6.2, Bazel 8.0.0, pinned Python 3.13,
+and headless Chrome. Dependencies, filesystem caches, and document snapshots
+were warm. The host was shared, so these are observations rather than
+statistically established speedups or regressions; no per-PR attribution was
+measured. The later retention/cancellation fixes were validated separately.
+
+Seven alternating matched source variants per document in the tighter build
+confirmation batch gave these median **complete Bazel build** times:
+
+| Workload | v0.7.0 | Combined train | Change |
+| --- | ---: | ---: | ---: |
+| One page | 0.747 s | 0.739 s | -1.0% |
+| 100 pages | 0.847 s | 0.852 s | +0.6% |
+| 4 pages / 12 MiB images | 1.197 s | 1.225 s | +2.4% |
+| 7-page thesis / Biber | 3.252 s | 3.230 s | -0.7% |
+
+Preserve safe source copies despite the observed image-heavy cost (about
+29 ms using the unrounded medians). The association with copying is plausible,
+not isolated by an ablation. Across initial and confirmation batches, all
+124 matched before/after output pairs were byte-identical. No-change cache
+hits were about 60–63 ms and are not comparable to edited-source builds.
+
+Real-browser **source-save to first visible repaint** includes polling,
+debounce, compilation, transfer, and rendering. Two default-preview sessions
+per side produced 12 matched edits for the small fixture and 14 for each other
+fixture; fast mode used ten edits per side:
+
+| Workload | Default: release → train | Fast: release → train |
+| --- | ---: | ---: |
+| One page | 1.284 → 1.446 s | 1.144 → 1.154 s |
+| 100 pages | 2.460 → 2.048 s | 1.253 → 1.240 s |
+| 4 pages / 12 MiB images | 2.159 → 2.179 s | 1.628 → 1.637 s |
+| 7-page thesis / Biber | 3.854 → 3.833 s | Not measured |
+
+All 86 paired edit canvas checksums matched. Image-only edits rendered stale
+pixels in the release (2/2) and correct pixels in the train (2/2). Conservative
+PDF invalidation fixes that error while viewport gating keeps rendering bounded.
+Do not interpret the variable default-preview percentages as established
+performance changes, or component allocation savings as lower total server RSS.
+
+Bibliography measurements used the same ARM64 slice of the pinned Biber binary
+on both sides to work around this host's universal-launcher failure. Network-cold
+downloads, other OS/Bazel combinations, remote execution, concurrent preview
+clients, and long-duration memory stress were not performance-tested. The
+bounded-retention follow-up's extra 0.50 ms median hook cost is reported above;
+its unpaired edit timings are not a new before/after comparison.
 
 ## Original performance review
 

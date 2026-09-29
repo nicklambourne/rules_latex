@@ -6,6 +6,52 @@ that, expect breaking changes in any v0.x release.
 
 ## [Unreleased]
 
+### Added
+
+- Optional `ctan_lock` manifests pin extra CTAN archives by exact URL and
+  SHA-256 for documents, tests, snapshot generation, and live-preview priming.
+  They are manually maintained and separate from `MODULE.bazel.lock`; they
+  do not pin the implicit bundle's range-fetched contents.
+- Browser smoke coverage, external/generated-source contract fixtures, a
+  security reporting policy, and dependency maintenance guidance.
+
+### Fixed
+
+- Live preview validates Host/Origin and bounds clients, sync requests, PDF
+  parsing, archive extraction, and browser cache payloads.
+- Source staging makes independent copies so compiler output cannot overwrite
+  inputs. Snapshot runfiles preserve explicit package-file placements.
+- Non-worker compiles expand response files; worker failures retain compiler
+  diagnostics. Generated launchers and configurations preserve literal values.
+- Live-preview priming matches the document's bundle and CTAN settings.
+  Persistent caches use configuration keys and immutable generations; their
+  host-local compile actions cannot use remote execution or remote caches.
+- PDF manifests and range responses refer to immutable generations. Evicted
+  content recovers through the current manifest, and obsolete transports
+  cancel their requests without delivering into retired PDF.js readers.
+- Image/font/resource edits invalidate painted pages even when page content
+  streams are unchanged. Canvas reuse now requires an identical PDF and zoom.
+- PDF snapshot history is pruned on startup and after builds to 8 files /
+  128 MiB / five minutes, with the current generation always retained.
+- Toolchains resolve for the execution platform and preserve executable
+  runfiles. Documents explicitly support PDF/XDV/AUX; tests support PDF/XDV.
+- `latex_test` rejects CTAN locks that a full toolchain bundle would ignore;
+  locks on snapshot consumers must instead be set on the snapshot generator.
+
+### Changed
+
+- Stream PDF responses, avoid HEAD body reads, reduce PDF parsing allocations,
+  index range lookups, and coalesce overlapping chunk downloads. Combined
+  measurements show broadly similar total build latency, not an overall
+  speedup. Safe copying retained an observed 2.4% / 29 ms image-heavy build
+  cost; snapshot cleanup added 0.50 ms median to the measured post-build hook.
+- The live-preview server is an importable module with generated JSON
+  configuration; document, test, and snapshot rules share input resolution.
+- CI/release dependencies are pinned, CI checks the root Bazel lockfile, and
+  Docs concurrency is isolated per PR to prevent unrelated check cancellation.
+- Documentation clarifies Linux/macOS support (native Windows workflows are
+  unsupported), staged-source semantics, cache invalidation, and lock limits.
+
 ## [0.7.0] - 2026-09-01
 
 ### Changed

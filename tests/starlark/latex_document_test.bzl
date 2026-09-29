@@ -83,6 +83,19 @@ def _ctan_lock_test_impl(ctx):
 
 ctan_lock_test = analysistest.make(_ctan_lock_test_impl)
 
+def _ctan_lock_bundle_rejected_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "ctan_lock has no effect with a toolchain bundle")
+    return analysistest.end(env)
+
+ctan_lock_bundle_rejected_test = analysistest.make(
+    _ctan_lock_bundle_rejected_test_impl,
+    expect_failure = True,
+    config_settings = {
+        "//command_line_option:extra_toolchains": ["//tests/starlark:_registered_ttb_toolchain"],
+    },
+)
+
 # -----------------------------------------------------------------------------
 # Test: cache = "foo.tar.gz" -> only Compile, no PopulateCache
 # -----------------------------------------------------------------------------
@@ -578,6 +591,12 @@ def latex_document_test_suite(name):
         bundle = ":_fake_bundle",
         tags = ["manual"],
     )
+    native.toolchain(
+        name = "_registered_ttb_toolchain",
+        toolchain = ":_toolchain_with_ttb_bundle",
+        toolchain_type = "//latex/toolchain:toolchain_type",
+        tags = ["manual"],
+    )
 
     # --- target_under_test instances ----------------------------------
 
@@ -597,6 +616,14 @@ def latex_document_test_suite(name):
     )
     latex_document(
         name = "_doc_ctan_lock",
+        main = "_test_doc.tex",
+        srcs = [":_test_doc_tex"],
+        ctan_packages = ["example"],
+        ctan_lock = ":_fake_ctan_lock",
+        tags = ["manual"],
+    )
+    latex_test(
+        name = "_test_ctan_lock",
         main = "_test_doc.tex",
         srcs = [":_test_doc_tex"],
         ctan_packages = ["example"],
@@ -685,6 +712,10 @@ def latex_document_test_suite(name):
         name = "ctan_lock_test",
         target_under_test = ":_doc_ctan_lock",
     )
+    ctan_lock_bundle_rejected_test(
+        name = "ctan_lock_bundle_rejected_test",
+        target_under_test = ":_test_ctan_lock",
+    )
     ttb_toolchain_bundle_test(
         name = "ttb_toolchain_bundle_test",
         target_under_test = ":_toolchain_with_ttb_bundle",
@@ -736,6 +767,7 @@ def latex_document_test_suite(name):
             ":implicit_pipeline_test",
             ":checked_in_cache_test",
             ":ctan_lock_test",
+            ":ctan_lock_bundle_rejected_test",
             ":ttb_toolchain_bundle_test",
             ":synctex_output_test",
             ":no_synctex_test",

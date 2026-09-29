@@ -19,8 +19,8 @@ matters.
     rather than ship a viewer-specific workaround. If you
     prefer a native PDF viewer, point a reload-aware one (Skim,
     Sioyek, Zathura, PDF Expert) at
-    `bazel-bin/.../<doc>.pdf` directly — `bazel build` keeps
-    that path fresh on every save.
+    `bazel-bin/.../<doc>.pdf` directly and run `bazel build` after edits
+    to update it; a one-shot build does not watch for saves.
 
 ## `latex_live` — in-browser preview
 
@@ -69,14 +69,22 @@ Open the URL in your browser. The page:
 
 ## How fast is the loop?
 
-For a small document (single-page CV, hello-world) paired with a
-cache snapshot, steady-state rebuilds complete in **200–400 ms**.
-First build is slower (the online prime takes ~30 s) but happens
-exactly once per content-hash of the inputs — Bazel's action cache
-handles the rest.
+Distinguish compiler/build time from **source-save to visible repaint**.
+The latter also includes filesystem polling (80 ms by default), debounce
+(250 ms), transport, and PDF.js rendering. Cached no-change builds are a
+different workload again. A first online prime can take tens of seconds;
+live preview then reuses its persistent cache for ordinary edits.
 
-For larger documents (multi-chapter thesis, paper with figures), the TeX
-compile itself usually dominates and rebuilds run in 2–5 s. The browser keeps
+In the September 2026 combined-change experiment on a shared Apple Silicon
+Mac, median save-to-repaint times with warmed cache snapshots ranged from
+**1.45 s for one page to 3.83 s for a Biber thesis** on the default path.
+The opt-in fast path measured **1.15–1.64 s** for the small, 100-page, and
+image-heavy fixtures. These are workload-specific observations, not latency
+guarantees or proof of an overall speedup. See the
+[performance record](https://github.com/nicklambourne/rules_latex/blob/master/benchmarks/README.md#combined-end-to-end-results)
+for the comparison, accepted costs, and measurement limitations.
+
+For larger documents, the TeX compile often dominates. The browser keeps
 canvas memory bounded to pages near the viewport, reuses painted pages only
 when the PDF bytes are identical, and
 limits concurrent raster, text-layer, and search-index work, so reload cost
@@ -99,8 +107,23 @@ The first build still uses `bazel build`. The watcher also falls back to Bazel
 when inputs change structurally or the direct compile reports a missing cached
 resource. The direct path runs outside Bazel's sandbox, but it stages only the
 document's declared inputs and replays the same pinned compile tool. Keep the
-default `False` when exact command-path parity with CI matters more than the
-roughly 150–400 ms warm-rebuild saving.
+default `False` when exact command-path parity with CI matters more than
+avoiding that overhead; the benefit varies by document and machine.
+
+## Local access and security
+
+Use the printed URL, `http://127.0.0.1:<port>/`. Requests must carry that exact
+Host, and a supplied Origin must match it. WebSocket connections must include
+the matching Origin. The server rejects `localhost` aliases, foreign browser
+origins, and proxy hostnames with **403**, even if they resolve to loopback.
+The checks protect against cross-origin browser access and DNS rebinding;
+they do not authenticate local processes or make preview a public server.
+
+Editor integrations using `curl` can omit Origin but must use the printed
+host and port. Do not expose the service through a public reverse proxy.
+HTTP connections and WebSocket/SSE clients are bounded, slow clients have
+timeouts, and sync request bodies are limited to 64 KiB. These bounds can
+reject excess requests rather than allowing unbounded server resource use.
 
 ## What gets watched?
 
@@ -250,6 +273,11 @@ it is collected. Later requests for an expired generation return
 an identical PDF refreshes its grace period. Copying and hashing a
 10 MiB PDF added about 9 ms per successful rebuild in a local macOS
 measurement; pruning only reads directory metadata, not PDF bodies.
+
+When a render is superseded, its transport cancels skeleton requests and
+discards late responses. Shared chunk downloads remain usable by the new
+render. This prevents deliveries into retired PDF.js readers without
+disabling recovery from errors on the active render.
 
 **Fallback.** If `/ws` can't connect (WS upgrade refused, no
 `ws_server` module on the server side, proxy in the way, etc.)

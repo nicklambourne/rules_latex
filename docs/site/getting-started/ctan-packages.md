@@ -184,7 +184,10 @@ bazel build //:thesis \
     --action_env=RULES_LATEX_CTAN_MIRROR=https://mirror.your-org.com/CTAN
 ```
 
-The value is used as a URL prefix in place of `https://mirrors.ctan.org`.
+The value is used as a URL prefix in place of `https://mirrors.ctan.org`
+for unlocked downloads. A `ctan_lock` uses its exact archive URLs instead;
+change the lock to select another mirror. A mirror override alone does not
+pin archive contents.
 The same env var is what CI uses to point at a local fixture server
 (see `tests/ctan/fixtures/`) and avoid depending on real CTAN
 availability for the integration tests.
@@ -194,7 +197,11 @@ availability for the integration tests.
 You only need to list the **entry-point** packages your document
 actually `\usepackage{}`s. If a fetched package transitively requires
 another package outside the bundle, the populate step walks the
-dependency graph and auto-fetches what's needed:
+dependency graph and auto-fetches what's needed.
+
+With [`ctan_lock`](#lock-ctan-downloads), this traversal downloads only
+packages present in the lock. The automatic discovery described below is
+the default, unlocked behaviour.
 
 ```python
 latex_document(
@@ -313,16 +320,23 @@ compatible.
 CTAN is a mutable mirror network. The Bazel action cache key for
 `TectonicPopulateCache` includes the `ctan_packages` list (as
 strings), but **not the content of the downloaded packages**. If
-upstream updates a package, you might keep getting the old version
-from your action cache until you `bazel clean`.
+upstream updates a package, an existing cache can retain the old version
+while a fresh machine downloads the new one. Cache eviction or changes to
+declared inputs can trigger another download; the action cache is not a lock.
 
 For development this is usually convenient. For production (CI,
 paper submissions, archival), choose one of these paths:
 
 ### Lock CTAN downloads
 
+!!! note "Availability"
+    `ctan_lock` is not available in v0.7.0 or earlier. These instructions
+    describe the subsequent development changes.
+
+This is optional: consumers without `ctan_lock` keep the existing behaviour.
 Create a checked-in JSON file with the exact archive URL and SHA-256
-for every package you want to fetch, including transitive packages:
+for every package you want to fetch, including transitive packages outside
+the TeX Live bundle. The following URL and digest are placeholders:
 
 ```json
 {
@@ -336,22 +350,54 @@ for every package you want to fetch, including transitive packages:
 }
 ```
 
-Obtain each digest from the archive you have reviewed and intend to
-use, then replace the placeholder above. Add `ctan_lock =
-"ctan.lock.json"` to `latex_document`, `latex_test`, or
-`latex_cache_snapshot` alongside `ctan_packages`. The prime verifies
-each downloaded archive before extraction. In locked mode the resolver
-does not probe or fetch names absent from the lock; a missing real
-dependency must be added explicitly. Updating an archive requires a
-reviewed lock-file change.
+`version` identifies the JSON schema, not a package version. There is no
+lockfile generator or version solver: obtain and review each archive, calculate
+its SHA-256 (for example, `shasum -a 256 biblatex-apa.zip`), and replace the
+placeholders. Retain those exact archives at stable URLs; an ordinary CTAN
+URL can change or stop serving the pinned version. Even repacking identical
+sources into a different ZIP changes the digest. A hash verifies your chosen
+bytes, not whether those bytes are trustworthy.
+
+Reference the file explicitly; its name has no automatic meaning:
+
+```python
+latex_document(
+    name = "paper",
+    main = "paper.tex",
+    srcs = ["paper.tex", "references.bib"],
+    biber = True,
+    ctan_packages = ["biblatex-apa"],
+    ctan_lock = "ctan.lock.json",
+)
+```
+
+The same attribute is available on `latex_test` and `latex_cache_snapshot`.
+It requires a nonempty `ctan_packages` list. Each requested package must have
+a lock entry, and every downloaded archive is verified **before extraction**;
+a mismatch fails without falling back to an unlocked download. The resolver
+does not probe or fetch unlisted transitive names. Some scanner references are
+not real packages, so they are skipped; a genuinely missing dependency fails
+at compile time and must be added to the lock. Dependencies supplied by the
+bundle do not need CTAN entries. Unused lock entries are not automatically fetched.
+
+The lock is a declared Bazel input, so editing it invalidates the prime's
+action cache. `latex_live` inherits the document's lock and includes its
+contents in the persistent-cache key; restart preview after changing the lock.
+Different targets can share a lock or choose their own. This does not alter
+`MODULE.bazel.lock`, Bazel module versions, or another target's packages.
+
 When a document or test consumes `cache = ...`, put the lock on the
-snapshot generation rule instead; a lock on that offline consumer is
-rejected because it would not be used.
+`latex_cache_snapshot` rule that creates it. A lock on that offline consumer
+is rejected because it would not be used. Direct locked CTAN acquisition is
+also incompatible with a toolchain-level full bundle: use the implicit prime,
+or generate a locked snapshot and consume that instead.
 
 The lock covers CTAN archives only. The implicit TeX Live bundle is
 still range-fetched without a full-bundle digest check. For a strictly
 repeatable release build, commit a cache snapshot or use the
-hash-verified full bundle as described in [Hermetic builds](../concepts/hermetic-builds.md).
+hash-verified full bundle when no extra CTAN downloads are needed, as described
+in [Hermetic builds](../concepts/hermetic-builds.md). A lock alone neither
+provides offline availability nor pins system fonts or a system Biber install.
 
 ### Pin via cache snapshot (recommended for releases)
 
@@ -365,6 +411,7 @@ latex_cache_snapshot(
     main = "thesis.tex",
     srcs = ["thesis.tex", "references.bib"],
     ctan_packages = ["biblatex-apa"],
+    # ctan_lock = "ctan.lock.json",  # optional: pin archives during generation
     output = "thesis_cache.tar.gz",
     biber = True,
 )
@@ -393,10 +440,8 @@ the package versions captured when you ran the snapshot.
 
 ### Tolerate drift
 
-If you don't need bit-for-bit reproducibility, just don't add `cache`
-and let CTAN updates flow through whenever you `bazel clean`. This
-matches how most package managers (pip, npm) treat unpinned
-dependencies.
+If you do not need to pin CTAN archives, omit both `cache` and `ctan_lock`.
+Downloads may change whenever priming executes with a cold action cache.
 
 ## Bundle mode is incompatible
 
@@ -413,9 +458,10 @@ pipeline (default) or a cache snapshot generated with matching
 ctan_packages. See DESIGN.md for details.
 ```
 
-If you need both, generate a per-document snapshot via Option 1
-above. Snapshots work everywhere bundle mode does and don't share
-the limitation.
+`latex_test` also rejects a `ctan_lock` when a toolchain bundle would bypass
+the prime. If you need extra CTAN packages, generate a per-document snapshot
+as described above. It can be generated with a lock and consumed without one;
+an explicit `cache` takes precedence over the toolchain bundle.
 
 ## Comparison with alternatives
 
