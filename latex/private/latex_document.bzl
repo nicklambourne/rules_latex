@@ -151,6 +151,8 @@ def _populate_cache_action(
         # when there's anything to resolve so transitive deps get
         # picked up automatically (no user opt-in).
         args.add("--bundle-manifest", bundle_manifest.path)
+    for extra in ctx.attr.tectonic_args:
+        args.add("--tectonic-arg={}".format(extra))
 
     inputs = depset(
         direct = (
@@ -286,7 +288,7 @@ def _compile_action(
     if synctex_output:
         args.add("--synctex-output", synctex_output.path)
     for extra in ctx.attr.tectonic_args:
-        args.add("--tectonic-arg", extra)
+        args.add("--tectonic-arg={}".format(extra))
 
     for src in srcs_depset.to_list():
         args.add("--src", src.path)

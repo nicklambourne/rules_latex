@@ -19,6 +19,10 @@ _TOOL = Path(__file__).resolve().parent.parent.parent / "tools" / "tectonic_comp
 spec = importlib.util.spec_from_file_location("tectonic_compile_test", _TOOL)
 compile_tool = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(compile_tool)
+_POPULATE_TOOL = _TOOL.with_name("tectonic_populate_cache.py")
+populate_spec = importlib.util.spec_from_file_location("tectonic_populate_test", _POPULATE_TOOL)
+populate_tool = importlib.util.module_from_spec(populate_spec)
+populate_spec.loader.exec_module(populate_tool)
 
 
 class TestCompileArguments(unittest.TestCase):
@@ -135,6 +139,26 @@ class TestCompileArguments(unittest.TestCase):
             self.assertEqual(run.call_args.kwargs["stderr"], compile_tool.subprocess.STDOUT)
             self.assertIn("compiler stderr: failed", output.getvalue())
             self.assertIn("missing resource: foo.sty", output.getvalue())
+
+    def test_dash_prefixed_argument_survives_both_parsers(self):
+        compile_args = [
+            "--tectonic", "tectonic", "--main", "main.tex",
+            "--output", "out.pdf", "--tectonic-arg=--keep-intermediates",
+        ]
+        self.assertEqual(
+            compile_tool.parse_args(compile_args).tectonic_args,
+            ["--keep-intermediates"],
+        )
+        populate_args = [
+            "tectonic_populate_cache.py", "--tectonic", "tectonic",
+            "--main", "main.tex", "--output", "cache.tar.gz",
+            "--tectonic-arg=--keep-intermediates",
+        ]
+        with patch.object(sys, "argv", populate_args):
+            self.assertEqual(
+                populate_tool.parse_args().tectonic_args,
+                ["--keep-intermediates"],
+            )
 
 
 if __name__ == "__main__":
