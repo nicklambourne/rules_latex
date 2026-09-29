@@ -109,6 +109,14 @@ bazel build //:cv
 First run takes ~30 seconds (tectonic prime + compile); subsequent
 builds are <5 seconds. The PDF lives at `bazel-bin/cv.pdf`.
 
+`latex_document(outfmt = "xdv")` produces an XDV file and
+`latex_document(outfmt = "aux")` produces the auxiliary file instead.
+These are single-file outputs; see the offline `hello_xdv` and
+`hello_aux` targets in `examples/hello/BUILD.bazel`. `latex_test` supports
+PDF and XDV, which produce a TeX log for its assertions. AUX does not
+produce a log. HTML is not currently supported: Tectonic's converter can
+emit multiple assets, while `latex_document` declares one output file.
+
 ## Iterate with the live preview
 
 In one terminal:

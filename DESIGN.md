@@ -89,14 +89,14 @@ Internally it runs `tools/tectonic_compile.py`, which:
    as a basename:
 
        tectonic -X compile \
-           --outfmt <pdf|html|xdv|aux> \
+           --outfmt <pdf|xdv|aux> \
            --outdir <work> \
            [--bundle <bundle.tar> --only-cached | --only-cached] \
            --keep-logs \
            [user-supplied tectonic_args ...] \
            <main.basename>
 
-3. Copies the produced PDF (and optional `.synctex.gz`) to the
+3. Copies the produced single-file output (and optional `.synctex.gz`) to the
    Bazel-declared output paths.
 
 The same wrapper drives the `TectonicCompile` action in

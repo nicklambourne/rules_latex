@@ -17,7 +17,7 @@ happen.
 """
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
-load("//latex:defs.bzl", "latex_cache_snapshot", "latex_document")
+load("//latex:defs.bzl", "latex_cache_snapshot", "latex_document", "latex_test")
 load("//latex:providers.bzl", "LatexDocumentInfo")
 load("//latex/toolchain:toolchain.bzl", "latex_toolchain")
 
@@ -501,6 +501,26 @@ def _action_schema_canary_test_impl(ctx):
 
 action_schema_canary_test = analysistest.make(_action_schema_canary_test_impl)
 
+def _unsupported_document_html_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "HTML assets")
+    return analysistest.end(env)
+
+unsupported_document_html_test = analysistest.make(
+    _unsupported_document_html_test_impl,
+    expect_failure = True,
+)
+
+def _unsupported_test_aux_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "does not produce a log")
+    return analysistest.end(env)
+
+unsupported_test_aux_test = analysistest.make(
+    _unsupported_test_aux_test_impl,
+    expect_failure = True,
+)
+
 # -----------------------------------------------------------------------------
 # Suite definition
 # -----------------------------------------------------------------------------
@@ -635,6 +655,22 @@ def latex_document_test_suite(name):
         tags = ["manual"],
     )
 
+    latex_document(
+        name = "_doc_html_rejected",
+        main = "_test_doc.tex",
+        srcs = [":_test_doc_tex"],
+        outfmt = "html",
+        tags = ["manual"],
+    )
+
+    latex_test(
+        name = "_test_aux_rejected",
+        main = "_test_doc.tex",
+        srcs = [":_test_doc_tex"],
+        outfmt = "aux",
+        tags = ["manual"],
+    )
+
     # --- analysistest cases -------------------------------------------
 
     implicit_pipeline_test(
@@ -685,6 +721,14 @@ def latex_document_test_suite(name):
         name = "action_schema_canary_test",
         target_under_test = ":_doc_synctex_canary",
     )
+    unsupported_document_html_test(
+        name = "unsupported_document_html_test",
+        target_under_test = ":_doc_html_rejected",
+    )
+    unsupported_test_aux_test(
+        name = "unsupported_test_aux_test",
+        target_under_test = ":_test_aux_rejected",
+    )
 
     native.test_suite(
         name = name,
@@ -701,5 +745,7 @@ def latex_document_test_suite(name):
             ":serve_cache_override_dir_test",
             ":serve_cache_override_respects_user_cache_test",
             ":action_schema_canary_test",
+            ":unsupported_document_html_test",
+            ":unsupported_test_aux_test",
         ],
     )

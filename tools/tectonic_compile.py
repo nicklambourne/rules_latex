@@ -152,8 +152,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "file) --bundle. See DESIGN.md §4.10.",
     )
     parser.add_argument(
-        "--outfmt", default="pdf",
-        help="Output format (pdf|xdv|html|aux). Default: pdf.",
+        "--outfmt", default="pdf", choices=("pdf", "xdv", "aux"),
+        help="Single-file output format (pdf|xdv|aux). Default: pdf.",
     )
     parser.add_argument(
         "--output", required=True, type=Path,
@@ -518,12 +518,11 @@ def run_one(args: argparse.Namespace) -> int:
                 args.log_output.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(log_src, args.log_output)
             else:
-                # No log produced (e.g. extremely early failure) is
-                # unusual but not necessarily fatal; emit an empty file
-                # so latex_test's downstream grep sees something
-                # deterministic.
-                args.log_output.parent.mkdir(parents=True, exist_ok=True)
-                args.log_output.write_bytes(b"")
+                raise SystemExit(
+                    f"expected tectonic to produce {log_src} for log "
+                    "assertions, but it did not. Use outfmt=\"pdf\" or "
+                    "outfmt=\"xdv\" for latex_test."
+                )
 
     return 0
 

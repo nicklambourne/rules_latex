@@ -411,7 +411,8 @@ jobs:
         working-directory: examples
         run: |
           # Uses the checked-in cache snapshot, so this is hermetic.
-          bazel test //hello:hello_compiles --config=ci
+          bazel build //hello:hello_xdv //hello:hello_aux --config=ci
+          bazel test //hello:hello_compiles //hello:hello_xdv_compiles --config=ci
 
       - name: Build biblatex-using document via implicit cache pipeline
         working-directory: examples
