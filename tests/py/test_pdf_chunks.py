@@ -560,7 +560,7 @@ def _build_objstm_pdf(
 
 
 class TestPageIndex(unittest.TestCase):
-    """Per-page content index for incremental render reuse (option B)."""
+    """Safe page render identity for incremental reuse (option B)."""
 
     _TWO_PAGE = [
         b"<</Type/Catalog/Pages 2 0 R>>",
@@ -588,16 +588,41 @@ class TestPageIndex(unittest.TestCase):
             "pages with different content streams must hash differently",
         )
 
-    def test_edit_isolates_to_one_page(self):
+    def test_content_edit_invalidates_all_pages(self):
         before = self._pages(self._TWO_PAGE, root=1)
         edited = list(self._TWO_PAGE)
         edited[4] = b"<</Length 4>>stream\npX\nendstream"
         after = self._pages(edited, root=1)
         self.assertNotEqual(after[0].content_hash, before[0].content_hash)
-        self.assertEqual(
-            after[1].content_hash, before[1].content_hash,
-            "an untouched page's hash must stay stable",
+        self.assertNotEqual(after[1].content_hash, before[1].content_hash)
+
+    def test_resource_and_page_property_edits_invalidate_render(self):
+        payloads = list(self._TWO_PAGE) + [
+            b"<</Type/XObject/Subtype/Image/Width 1/Height 1"
+            b"/ColorSpace/DeviceRGB/BitsPerComponent 8/Length 3>>"
+            b"stream\n\xff\x00\x00\nendstream",
+            b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
+        ]
+        payloads[2] = (
+            b"<</Type/Page/Parent 2 0 R/Contents 5 0 R"
+            b"/Resources<</XObject<</Im1 7 0 R>>/Font<</F1 8 0 R>>>>>>"
         )
+        before = self._pages(payloads, root=1)
+        self.assertEqual(before, self._pages(payloads, root=1))
+        edits = {
+            "image": (6, payloads[6].replace(b"\xff\x00\x00", b"\x00\x00\xff")),
+            "font": (7, payloads[7].replace(b"Helvetica", b"Courier")),
+            "rotation": (2, payloads[2].replace(b"/Contents", b"/Rotate 90/Contents")),
+            "crop": (2, payloads[2].replace(b"/Contents", b"/CropBox[0 0 300 400]/Contents")),
+        }
+        for name, (index, replacement) in edits.items():
+            with self.subTest(name=name):
+                changed = list(payloads)
+                changed[index] = replacement
+                after = self._pages(changed, root=1)
+                self.assertEqual(len(after), 2)
+                for old_page, new_page in zip(before, after):
+                    self.assertNotEqual(old_page.content_hash, new_page.content_hash)
 
     def test_no_root_yields_empty_index(self):
         # Without /Root the page tree is unreachable; degrade gracefully

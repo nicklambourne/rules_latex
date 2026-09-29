@@ -190,13 +190,14 @@ const fetchChunk = createChunkFetcher(chunkCache, async (hash) => {
   return new Uint8Array(await resp.arrayBuffer());
 });
 
-async function fetchPdfRange(pdfHash, begin, end) {
+async function fetchPdfRange(pdfHash, begin, end, signal) {
   // Fetch [begin, end) from the PDF generation named by the manifest. Used for
   // skeleton ranges (PDF header, gaps between objects, the
   // trailer) — anything not covered by a content-addressed
   // chunk.
   const resp = await fetch(`/pdf/${pdfHash}`, {
     headers: { "Range": `bytes=${begin}-${end - 1}` },
+    signal,
   });
   if (resp.status !== 206) {
     const error = new Error(`PDF generation ${pdfHash} range ${begin}-${end - 1} failed: ${resp.status}`);
@@ -220,6 +221,7 @@ class ChunkedTransport extends pdfjsLib.PDFDataRangeTransport {
     super(manifest.pdfSize, new Uint8Array(0));
     this.manifest = manifest;
     this.onFailure = null;
+    this._abortController = new AbortController();
     // Sort chunks by start offset for fast lookups; the server
     // emits them sorted but defending against a future change is
     // cheap.
@@ -229,7 +231,15 @@ class ChunkedTransport extends pdfjsLib.PDFDataRangeTransport {
     queueMicrotask(() => this.transportReady());
   }
 
+  abort() {
+    // PDF.js removes its range readers when the loading task is destroyed.
+    // Cancel owned skeleton requests, but not shared content-addressed chunks
+    // that a newer transport/prefetch may still need.
+    this._abortController.abort();
+  }
+
   async requestDataRange(begin, end) {
+    if (this._abortController.signal.aborted) return;
     // PDF.js's API has end inclusive in some places and exclusive
     // in others; the spec the worker sends here is half-open
     // [begin, end). Clamp to pdfSize for safety.
@@ -240,8 +250,11 @@ class ChunkedTransport extends pdfjsLib.PDFDataRangeTransport {
     }
     try {
       const bytes = await this._assemble(begin, end);
-      this.onDataRange(begin, bytes);
+      // Cached/shared work can finish even after abort; never deliver it to
+      // a reader that PDF.js has already torn down.
+      if (!this._abortController.signal.aborted) this.onDataRange(begin, bytes);
     } catch (err) {
+      if (this._abortController.signal.aborted) return;
       console.error("ChunkedTransport: range fetch failed", err);
       // A missing/expired generation cannot complete. Destroy the
       // loading task so the caller reports the failure immediately.
@@ -255,11 +268,14 @@ class ChunkedTransport extends pdfjsLib.PDFDataRangeTransport {
     // (header/xref/trailer) from /pdf via HTTP Range. Concatenate.
     const segments = [];
     for (const seg of planRangeSegments(this.sortedRanges, begin, end)) {
+      this._abortController.signal.throwIfAborted();
       if (seg.kind === "chunk") {
         const chunkBytes = await fetchChunk(seg.hash);
         segments.push(chunkBytes.subarray(seg.sliceStart, seg.sliceEnd));
       } else {
-        segments.push(await fetchPdfRange(this.manifest.pdfHash, seg.begin, seg.end));
+        segments.push(await fetchPdfRange(
+          this.manifest.pdfHash, seg.begin, seg.end, this._abortController.signal,
+        ));
       }
     }
     if (segments.length === 1) return segments[0];
@@ -443,7 +459,7 @@ function _rerenderCurrentDocument() {
 }
 
 // Per-page reconciliation state (option B): reuse a page's already-built
-// .page-wrap (and its painted canvas) across reloads when its content +
+// .page-wrap (and its painted canvas) only when the entire PDF and page
 // geometry are unchanged at the same zoom. _manifestPages is the latest
 // manifest's page index; _renderedPages is what the live DOM was built
 // from; _renderedScale guards against reusing canvases after a zoom.

@@ -459,6 +459,12 @@ Mechanism:
   cache after the initial render so subsequent page renders are
   wire-free.
 
+* Cancelling a PDF.js loading task aborts that transport's skeleton HTTP
+  requests and prevents late bytes/errors from reaching its retired readers.
+  Shared content-addressed chunk fetches remain usable by other transports
+  and prefetch; obsolete assembly stops before fetching another segment.
+  Errors on an active transport still use the existing failure/reload path.
+
 * GC: chunks no longer in the current manifest *and* older than
   five minutes are deleted after each successful build. The
   five-minute floor preserves fast edit-undo round-trips: a
@@ -1259,19 +1265,18 @@ available if concrete user demand justifies them.
       paints from overwriting newer output. Superseded PDF.js loading
       tasks and documents are cancelled or destroyed after hand-off.
 
-    - **Reuse unchanged pages across reloads (option B).** The
+    - **Reuse identical PDFs across reloads (option B).** The
       manifest carries a per-page `{contentHash, width, height}`
       (`PageInfo`), computed server-side by walking the PDF page tree
       — including the compressed object stream (`/ObjStm`) tectonic
-      emits — and reusing the chunk hashes, so a page's hash changes
-      iff its content stream did (`pdf_chunks.py`). On reload the
-      client (`planPageReconciliation`) diffs the page index by
-      position and moves the unchanged `.page-wrap`s over instead of
-      rebuilding them, keeping their painted canvases; a zoom (scale
-      change) or any parse failure falls back to a full re-render. So
-      after an edit, only the changed page(s) re-rasterize.
-      Index-based, so page insertions/removals re-render the shifted
-      tail.
+      emits — and combining the content-stream hashes with a hash of
+      the whole PDF (`pdf_chunks.py`). On reload the client
+      (`planPageReconciliation`) reuses painted `.page-wrap`s only
+      when the PDF bytes and zoom are unchanged. Any PDF edit or page
+      index parse failure re-renders visible pages; this is deliberate
+      because images, fonts, inherited resources, and page properties
+      can change without changing a page's content stream. Canvas
+      memory remains bounded to the visible/nearby working set.
 
     - **Viewport-bounded canvas memory.** Page placeholders keep only
       CSS dimensions; their intrinsic HiDPI backing stores are allocated
