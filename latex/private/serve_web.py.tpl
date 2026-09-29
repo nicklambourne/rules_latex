@@ -51,30 +51,29 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 # Filled in by `latex_live`:
-DOCUMENT_LABEL = "{{DOCUMENT_LABEL}}"
-PDF_RELPATH = "{{PDF_RELPATH}}"
-SYNCTEX_RELPATH = "{{SYNCTEX_RELPATH}}"
-WATCHED_PATHS_RAW = """\
-{{WATCHED_PATHS}}"""
-POLL_INTERVAL_MS = int("{{POLL_INTERVAL}}")
-DEBOUNCE_MS = int("{{DEBOUNCE_MS}}")
-DEBOUNCE_MAX_MS = int("{{DEBOUNCE_MAX_MS}}")
-PORT = int("{{PORT}}")
-DOCUMENT_NAME = "{{DOCUMENT_NAME}}"
-OPEN_ON_START = bool(int("{{OPEN_ON_START}}"))
+DOCUMENT_LABEL = {{DOCUMENT_LABEL}}
+PDF_RELPATH = {{PDF_RELPATH}}
+SYNCTEX_RELPATH = {{SYNCTEX_RELPATH}}
+WATCHED_PATHS_RAW = {{WATCHED_PATHS}}
+POLL_INTERVAL_MS = int({{POLL_INTERVAL}})
+DEBOUNCE_MS = int({{DEBOUNCE_MS}})
+DEBOUNCE_MAX_MS = int({{DEBOUNCE_MAX_MS}})
+PORT = int({{PORT}})
+DOCUMENT_NAME = {{DOCUMENT_NAME}}
+OPEN_ON_START = bool(int({{OPEN_ON_START}}))
 
 # Paths to the vendored PDF.js files within the launcher's runfiles
 # tree. The server reads them once on startup and serves the bytes at
 # /_pdfjs/pdf.mjs and /_pdfjs/pdf.worker.mjs.
-PDFJS_LIB_RUNFILE = "{{PDFJS_LIB_RUNFILE}}"
-PDFJS_WORKER_RUNFILE = "{{PDFJS_WORKER_RUNFILE}}"
+PDFJS_LIB_RUNFILE = {{PDFJS_LIB_RUNFILE}}
+PDFJS_WORKER_RUNFILE = {{PDFJS_WORKER_RUNFILE}}
 
 # Live-preview client assets (serve_web.js / serve_web.css and the
 # pure-logic modules they import), extracted from this template so they
 # can be unit-tested with `node --test` (see tests/js/). Newline-
 # separated "<name>=<runfile_path>" pairs; the server loads them once
 # at startup and serves each at /_assets/<name>.
-SERVE_WEB_ASSETS = """{{SERVE_WEB_ASSETS}}"""
+SERVE_WEB_ASSETS = {{SERVE_WEB_ASSETS}}
 
 # How long (seconds) to cache the git branch/dirty/sha lookup
 # behind /status. The UI duration ticker polls /status once per
@@ -97,7 +96,7 @@ MAX_HTTP_CONNECTIONS = 64
 # manifest for incremental PDF transfer. See tools/pdf_chunks.py
 # for the parser, and the do_GET branches for /pdf-manifest and
 # /chunk/<hash> below for the wire shape consumed by the browser.
-PDF_CHUNKS_RUNFILE = "{{PDF_CHUNKS_RUNFILE}}"
+PDF_CHUNKS_RUNFILE = {{PDF_CHUNKS_RUNFILE}}
 
 # Path (within runfiles) to the stdlib WebSocket server module
 # (tools/ws_server.py). Used by the /ws endpoint to push the
@@ -105,7 +104,7 @@ PDF_CHUNKS_RUNFILE = "{{PDF_CHUNKS_RUNFILE}}"
 # saving the round-trip a pure-SSE flow would need. SSE remains
 # wired up at /events as a fallback for clients that can't
 # upgrade (CORS proxies, etc).
-WS_SERVER_RUNFILE = "{{WS_SERVER_RUNFILE}}"
+WS_SERVER_RUNFILE = {{WS_SERVER_RUNFILE}}
 
 # Path (within runfiles) to the project logo SVG. Read once at
 # startup and served from /_assets/logo.svg as both the browser-
@@ -113,36 +112,33 @@ WS_SERVER_RUNFILE = "{{WS_SERVER_RUNFILE}}"
 # ~70 KB — too large for a data-URI favicon (browsers cap URI
 # length around 64 KB) — so we serve it as a real static asset
 # instead.
-LOGO_RUNFILE = "{{LOGO_RUNFILE}}"
+LOGO_RUNFILE = {{LOGO_RUNFILE}}
 
 # Serve-time cache management. Non-empty only when the document
 # takes the implicit-pipeline path; see latex/private/latex_live.bzl
 # and tools/serve_cache.py for the full design.
-ENABLE_SERVE_CACHE = bool("{{ENABLE_SERVE_CACHE}}")
-SERVE_CACHE_RUNFILE = "{{SERVE_CACHE_RUNFILE}}"
-PRIME_MAIN_RUNFILE = "{{PRIME_MAIN_RUNFILE}}"
-PRIME_TECTONIC_RUNFILE = "{{PRIME_TECTONIC_RUNFILE}}"
-PRIME_POPULATE_TOOL_RUNFILE = "{{PRIME_POPULATE_TOOL_RUNFILE}}"
-PRIME_STAGING_LIB_RUNFILE = "{{PRIME_STAGING_LIB_RUNFILE}}"
-PRIME_BIBER_RUNFILE = "{{PRIME_BIBER_RUNFILE}}"
-PRIME_USE_SYSTEM_BIBER = bool("{{PRIME_USE_SYSTEM_BIBER}}")
-PRIME_BUNDLE_URL = "{{PRIME_BUNDLE_URL}}"
-PRIME_BUNDLE_MANIFEST_RUNFILE = "{{PRIME_BUNDLE_MANIFEST_RUNFILE}}"
-PRIME_CTAN_LOCK_RUNFILE = "{{PRIME_CTAN_LOCK_RUNFILE}}"
-PRIME_CTAN_PACKAGES_RAW = """\
-{{PRIME_CTAN_PACKAGES}}"""
-PRIME_SRCS_RAW = """\
-{{PRIME_SRCS}}"""
-PRIME_PKG_FILES_RAW = """\
-{{PRIME_PKG_FILES}}"""
+ENABLE_SERVE_CACHE = bool({{ENABLE_SERVE_CACHE}})
+SERVE_CACHE_RUNFILE = {{SERVE_CACHE_RUNFILE}}
+PRIME_MAIN_RUNFILE = {{PRIME_MAIN_RUNFILE}}
+PRIME_TECTONIC_RUNFILE = {{PRIME_TECTONIC_RUNFILE}}
+PRIME_POPULATE_TOOL_RUNFILE = {{PRIME_POPULATE_TOOL_RUNFILE}}
+PRIME_STAGING_LIB_RUNFILE = {{PRIME_STAGING_LIB_RUNFILE}}
+PRIME_BIBER_RUNFILE = {{PRIME_BIBER_RUNFILE}}
+PRIME_USE_SYSTEM_BIBER = bool({{PRIME_USE_SYSTEM_BIBER}})
+PRIME_BUNDLE_URL = {{PRIME_BUNDLE_URL}}
+PRIME_BUNDLE_MANIFEST_RUNFILE = {{PRIME_BUNDLE_MANIFEST_RUNFILE}}
+PRIME_CTAN_LOCK_RUNFILE = {{PRIME_CTAN_LOCK_RUNFILE}}
+PRIME_CTAN_PACKAGES_RAW = {{PRIME_CTAN_PACKAGES}}
+PRIME_SRCS_RAW = {{PRIME_SRCS}}
+PRIME_PKG_FILES_RAW = {{PRIME_PKG_FILES}}
 
 # serve_fast (opt-in): replay the compiled action directly instead of
 # shelling out to `bazel build` on each content edit. SERVE_FAST gates
 # the fast path; COMPILE_TOOL_RUNFILE is the runfiles-relative path to
 # tools/tectonic_compile.py. See run_fast_build / rebuild below and
 # DESIGN.md §4.7.4.
-SERVE_FAST = bool("{{SERVE_FAST}}")
-COMPILE_TOOL_RUNFILE = "{{COMPILE_TOOL_RUNFILE}}"
+SERVE_FAST = bool({{SERVE_FAST}})
+COMPILE_TOOL_RUNFILE = {{COMPILE_TOOL_RUNFILE}}
 
 # Browser-side URLs for the same files. Centralised so the HTML
 # template is just a format string.

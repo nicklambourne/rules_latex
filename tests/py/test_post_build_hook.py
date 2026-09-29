@@ -18,6 +18,8 @@ integration time.
 from __future__ import annotations
 
 import importlib.util
+import json
+from tests.py._template_loader import _PLACEHOLDERS as _DEFAULT_PLACEHOLDERS
 import sys
 import tempfile
 import time
@@ -63,8 +65,8 @@ _PLACEHOLDERS = {
 
 def _load_template_module():
     source = _TEMPLATE_PATH.read_text()
-    for placeholder, replacement in _PLACEHOLDERS.items():
-        source = source.replace(placeholder, replacement)
+    for placeholder, replacement in {**_DEFAULT_PLACEHOLDERS, **_PLACEHOLDERS}.items():
+        source = source.replace(placeholder, json.dumps(replacement))
     tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=".py", delete=False, encoding="utf-8",
     )
