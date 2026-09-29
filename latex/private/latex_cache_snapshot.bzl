@@ -36,6 +36,7 @@ destination. It's a developer command, run on demand, much like
 `cargo vendor` or `pip-compile`.
 """
 
+load("@bazel_skylib//lib:shell.bzl", "shell")
 load("//latex:providers.bzl", "LatexInfo")
 load("//latex/private:bundles.bzl", "DEFAULT_BUNDLE")
 
@@ -77,22 +78,21 @@ def _latex_cache_snapshot_impl(ctx):
     pkg_files = _resolved_pkg_files(ctx)
 
     src_args = " \\\n        ".join([
-        '--src "{}"'.format(s.short_path)
+        "--src {}".format(shell.quote(s.short_path))
         for s in all_srcs
     ])
     pkg_file_args = " \\\n        ".join([
-        '--pkg-file "{src}={rel}"'.format(
-            src = src.short_path,
-            rel = rel,
+        "--pkg-file {value}".format(
+            value = shell.quote("{}={}".format(src.short_path, rel)),
         )
         for src, rel in pkg_files.items()
     ])
     biber_arg = (
-        '--biber "{}"'.format(biber_file.short_path) if biber_file else ""
+        "--biber {}".format(shell.quote(biber_file.short_path)) if biber_file else ""
     )
 
     ctan_args = " \\\n    ".join([
-        '--ctan-package "{}"'.format(pkg)
+        "--ctan-package {}".format(shell.quote(pkg))
         for pkg in ctx.attr.ctan_packages
     ])
 
@@ -103,7 +103,7 @@ def _latex_cache_snapshot_impl(ctx):
     # ctan_packages is non-empty, so it can filter transitive refs
     # against the bundle and avoid shadowing bundle versions.
     bundle_manifest_arg = (
-        '--bundle-manifest "{}"'.format(ctx.file._bundle_manifest.short_path) if ctx.attr.ctan_packages else ""
+        "--bundle-manifest {}".format(shell.quote(ctx.file._bundle_manifest.short_path)) if ctx.attr.ctan_packages else ""
     )
 
     script = """\
@@ -112,30 +112,29 @@ set -euo pipefail
 
 if [[ -z "${{BUILD_WORKSPACE_DIRECTORY:-}}" ]]; then
     echo "ERROR: this target must be invoked with 'bazel run', not 'bazel build'." >&2
-    echo "  bazel run //{pkg}:{name}" >&2
+    echo {target} >&2
     exit 1
 fi
 
 # Bazel sets cwd to the runfiles root for `bazel run`. All file paths
 # below are short_path values, which are relative to that root, so
 # they resolve correctly without any chdir.
-exec "{tool}" \\
-    --tectonic "{tectonic}" \\
-    --main "{main}" \\
+exec {tool} \\
+    --tectonic {tectonic} \\
+    --main {main} \\
     {src_args} \\
     {pkg_file_args} \\
     {ctan_args} \\
     {bundle_manifest_arg} \\
-    --bundle-url "{bundle_url}" \\
+    --bundle-url {bundle_url} \\
     --workspace "$BUILD_WORKSPACE_DIRECTORY" \\
-    --output "{output}" \\
+    --output {output} \\
     {biber_arg}
 """.format(
-        pkg = ctx.label.package,
-        name = ctx.label.name,
-        tool = tool.short_path,
-        tectonic = tectonic.short_path,
-        main = main.short_path,
+        target = shell.quote("bazel run //{}:{}".format(ctx.label.package, ctx.label.name)),
+        tool = shell.quote(tool.short_path),
+        tectonic = shell.quote(tectonic.short_path),
+        main = shell.quote(main.short_path),
         src_args = src_args,
         pkg_file_args = pkg_file_args,
         ctan_args = ctan_args,
@@ -144,8 +143,8 @@ exec "{tool}" \\
         # the snapshot's cached format is keyed under that bundle's
         # identity -- matching the --bundle-url the consuming
         # latex_document/latex_test compile passes. See DESIGN §4.10.
-        bundle_url = DEFAULT_BUNDLE.url,
-        output = ctx.attr.output,
+        bundle_url = shell.quote(DEFAULT_BUNDLE.url),
+        output = shell.quote(ctx.attr.output),
         biber_arg = biber_arg,
     )
     ctx.actions.write(launcher, script, is_executable = True)

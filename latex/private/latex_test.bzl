@@ -20,6 +20,7 @@ and runtime errors — the things that should never silently slip into a
 build.
 """
 
+load("@bazel_skylib//lib:shell.bzl", "shell")
 load("//latex:providers.bzl", "LatexInfo")
 load("//latex/private:bundles.bzl", "DEFAULT_BUNDLE")
 
@@ -113,9 +114,9 @@ def _latex_test_impl(ctx):
         fail("ctan_lock on {} has no effect with cache; set it on the snapshot rule instead".format(ctx.label))
     cache_args = ""
     if cache_snapshot:
-        cache_args = '--cache-tarball "{}"'.format(cache_snapshot.short_path)
+        cache_args = "--cache-tarball {}".format(shell.quote(cache_snapshot.short_path))
     elif toolchain.bundle:
-        cache_args = '--bundle "{}"'.format(toolchain.bundle.short_path)
+        cache_args = "--bundle {}".format(shell.quote(toolchain.bundle.short_path))
     else:
         # No cache, no bundle: drive the populate-cache wrapper inline
         # to create a one-shot cache, then feed it to the compile tool.
@@ -124,7 +125,7 @@ def _latex_test_impl(ctx):
         cache_args = "__IMPLICIT__"
 
     biber_arg = (
-        '--biber "{}"'.format(biber_file.short_path) if biber_file else ""
+        "--biber {}".format(shell.quote(biber_file.short_path)) if biber_file else ""
     )
 
     # Cache-replay modes (user cache + inlined implicit prime) must name
@@ -133,11 +134,11 @@ def _latex_test_impl(ctx):
     # identity. The toolchain-bundle path passes `--bundle <local-path>`
     # instead, so it needs no URL. Mirrors latex_document. See DESIGN §4.10.
     bundle_url_arg = (
-        "" if toolchain.bundle else '--bundle-url "{}"'.format(DEFAULT_BUNDLE.url)
+        "" if toolchain.bundle else "--bundle-url {}".format(shell.quote(DEFAULT_BUNDLE.url))
     )
 
     ctan_args = " \\\n    ".join([
-        '--ctan-package "{}"'.format(pkg)
+        "--ctan-package {}".format(shell.quote(pkg))
         for pkg in ctx.attr.ctan_packages
     ])
 
@@ -146,19 +147,18 @@ def _latex_test_impl(ctx):
     # transitive refs that are already in the bundle (and avoid
     # shadowing them with newer CTAN versions — see DESIGN.md §4.10).
     bundle_manifest_arg = (
-        '--bundle-manifest "{}"'.format(ctx.file._bundle_manifest.short_path) if ctx.attr.ctan_packages else ""
+        "--bundle-manifest {}".format(shell.quote(ctx.file._bundle_manifest.short_path)) if ctx.attr.ctan_packages else ""
     )
     if ctx.file.ctan_lock:
         ctan_args += ' --ctan-lock "{}"'.format(ctx.file.ctan_lock.short_path)
 
     src_args = " \\\n    ".join([
-        '--src "{}"'.format(s.short_path)
+        "--src {}".format(shell.quote(s.short_path))
         for s in all_srcs.to_list()
     ])
     pkg_file_args = " \\\n    ".join([
-        '--pkg-file "{src}={rel}"'.format(
-            src = f.short_path,
-            rel = rel,
+        "--pkg-file {value}".format(
+            value = shell.quote("{}={}".format(f.short_path, rel)),
         )
         for (f, rel) in pkg_files
     ])
@@ -178,9 +178,9 @@ trap 'rm -rf "$WORK"' EXIT
 # it. Same logic as latex_document's implicit pipeline, but inlined
 # here because tests can't depend on a sibling latex_document's
 # intermediate cache output.
-"{populate_tool}" \\
-    --tectonic "{tectonic}" \\
-    --main "{main}" \\
+{populate_tool} \\
+    --tectonic {tectonic} \\
+    --main {main} \\
     --output "$WORK/cache.tar.gz" \\
     {bundle_url_arg} \\
     {biber_arg} \\
@@ -190,9 +190,9 @@ trap 'rm -rf "$WORK"' EXIT
     {pkg_file_args}
 
 """.format(
-            populate_tool = populate_tool.short_path,
-            tectonic = tectonic.short_path,
-            main = main.short_path,
+            populate_tool = shell.quote(populate_tool.short_path),
+            tectonic = shell.quote(tectonic.short_path),
+            main = shell.quote(main.short_path),
             bundle_url_arg = bundle_url_arg,
             biber_arg = biber_arg,
             ctan_args = ctan_args,
@@ -205,11 +205,11 @@ trap 'rm -rf "$WORK"' EXIT
         implicit_prime = ""
 
     script = script_prefix + implicit_prime + """\
-"{tool}" \\
-    --tectonic "{tectonic}" \\
-    --main "{main}" \\
+{tool} \\
+    --tectonic {tectonic} \\
+    --main {main} \\
     --outfmt {outfmt} \\
-    --output "$WORK/output.{outfmt}" \\
+    --output "$WORK/output.{output_fmt}" \\
     --log-output "$WORK/output.log" \\
     {compile_cache_args} \\
     {bundle_url_arg} \\
@@ -228,24 +228,25 @@ status=0
 {required_checks}
 exit $status
 """.format(
-        tool = compile_tool.short_path,
-        tectonic = tectonic.short_path,
-        main = main.short_path,
-        outfmt = ctx.attr.outfmt,
+        tool = shell.quote(compile_tool.short_path),
+        tectonic = shell.quote(tectonic.short_path),
+        main = shell.quote(main.short_path),
+        outfmt = shell.quote(ctx.attr.outfmt),
+        output_fmt = ctx.attr.outfmt,
         compile_cache_args = compile_cache_args,
         bundle_url_arg = bundle_url_arg,
         biber_arg = biber_arg,
         src_args = src_args,
         pkg_file_args = pkg_file_args,
         forbidden_checks = "\n".join([
-            'if grep -F -e {pat} "$LOG" >/dev/null; then\n'.format(pat = repr(p)) +
-            '    echo "FAIL: forbidden pattern found in log: {pat}" >&2\n'.format(pat = p) +
+            'if grep -F -e {pat} "$LOG" >/dev/null; then\n'.format(pat = shell.quote(p)) +
+            '    printf "FAIL: forbidden pattern found in log: %s\\n" {pat} >&2\n'.format(pat = shell.quote(p)) +
             "    status=1\nfi"
             for p in forbidden
         ]),
         required_checks = "\n".join([
-            'if ! grep -F -e {pat} "$LOG" >/dev/null; then\n'.format(pat = repr(p)) +
-            '    echo "FAIL: required pattern not found in log: {pat}" >&2\n'.format(pat = p) +
+            'if ! grep -F -e {pat} "$LOG" >/dev/null; then\n'.format(pat = shell.quote(p)) +
+            '    printf "FAIL: required pattern not found in log: %s\\n" {pat} >&2\n'.format(pat = shell.quote(p)) +
             "    status=1\nfi"
             for p in required
         ]),
