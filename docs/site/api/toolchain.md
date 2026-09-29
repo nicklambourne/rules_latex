@@ -49,7 +49,8 @@ Defines a tectonic-based LaTeX toolchain.
 <pre>
 load("@rules_latex//latex/toolchain:toolchain.bzl", "LatexToolchainInfo")
 
-LatexToolchainInfo(<a href="#LatexToolchainInfo-tectonic">tectonic</a>, <a href="#LatexToolchainInfo-bundle">bundle</a>, <a href="#LatexToolchainInfo-biber">biber</a>)
+LatexToolchainInfo(<a href="#LatexToolchainInfo-tectonic">tectonic</a>, <a href="#LatexToolchainInfo-tectonic_tool">tectonic_tool</a>, <a href="#LatexToolchainInfo-tectonic_runfiles">tectonic_runfiles</a>, <a href="#LatexToolchainInfo-bundle">bundle</a>, <a href="#LatexToolchainInfo-biber">biber</a>, <a href="#LatexToolchainInfo-biber_tool">biber_tool</a>,
+                   <a href="#LatexToolchainInfo-biber_runfiles">biber_runfiles</a>)
 </pre>
 
 Resolved tectonic toolchain.
@@ -59,7 +60,11 @@ Resolved tectonic toolchain.
 | Name  | Description |
 | :------------- | :------------- |
 | <a id="LatexToolchainInfo-tectonic"></a>tectonic |  File: the tectonic executable.    |
+| <a id="LatexToolchainInfo-tectonic_tool"></a>tectonic_tool |  FilesToRunProvider: executable plus its runtime files.    |
+| <a id="LatexToolchainInfo-tectonic_runfiles"></a>tectonic_runfiles |  Runfiles: runtime files for launchers.    |
 | <a id="LatexToolchainInfo-bundle"></a>bundle |  File\|None: a fully downloaded offline package bundle, or None for range-fetched/implicit-cache operation.    |
 | <a id="LatexToolchainInfo-biber"></a>biber |  File\|None: a biber executable for bibliography processing, or None if biber isn't available for this platform.    |
+| <a id="LatexToolchainInfo-biber_tool"></a>biber_tool |  FilesToRunProvider\|None: biber plus its runtime files.    |
+| <a id="LatexToolchainInfo-biber_runfiles"></a>biber_runfiles |  Runfiles\|None: runtime files for biber launchers.    |
 
 

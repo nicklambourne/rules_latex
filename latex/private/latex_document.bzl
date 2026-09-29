@@ -115,6 +115,7 @@ def _populate_cache_action(
         pkg_files,
         output_tarball,
         tool,
+        runtime_tools,
         ctan_packages,
         ctan_lock,
         bundle_manifest):
@@ -182,7 +183,7 @@ def _populate_cache_action(
             executable = tool,
             arguments = [args],
             inputs = inputs,
-            tools = [tool],
+            tools = runtime_tools,
             outputs = [output_tarball],
             mnemonic = "TectonicPopulateCache",
             progress_message = "Populating tectonic cache for %{label}",
@@ -200,7 +201,7 @@ def _populate_cache_action(
             executable = tool,
             arguments = [args],
             inputs = inputs,
-            tools = [tool],
+            tools = runtime_tools,
             outputs = [output_tarball],
             mnemonic = "TectonicPopulateCache",
             progress_message = "Populating tectonic cache for %{label}",
@@ -226,7 +227,8 @@ def _compile_action(
         output,
         synctex_output,
         outfmt,
-        tool):
+        tool,
+        runtime_tools):
     """Schedule the TectonicCompile action.
 
     Drives `//tools:tectonic_compile.py` which stages sources, runs
@@ -336,7 +338,7 @@ def _compile_action(
             executable = tool,
             arguments = [args],
             inputs = inputs,
-            tools = [tool],
+            tools = runtime_tools,
             outputs = outputs,
             mnemonic = "TectonicCompile",
             progress_message = "Compiling LaTeX %{label}",
@@ -373,7 +375,7 @@ def _compile_action(
             executable = tool,
             arguments = [args],
             inputs = inputs,
-            tools = [tool],
+            tools = runtime_tools,
             outputs = outputs,
             mnemonic = "TectonicCompile",
             progress_message = "Compiling LaTeX %{label}",
@@ -421,6 +423,9 @@ def _latex_document_impl(ctx):
     toolchain = ctx.toolchains["//latex/toolchain:toolchain_type"].latex_toolchain_info
     tectonic = toolchain.tectonic
     biber_file, use_system_biber = _resolve_biber(ctx, toolchain)
+    toolchain_tools = [toolchain.tectonic_tool]
+    if biber_file:
+        toolchain_tools.append(toolchain.biber_tool)
     user_cache = ctx.file.cache
     if ctan_lock and user_cache:
         fail("ctan_lock on {} has no effect with cache; set it on the snapshot rule instead".format(ctx.label))
@@ -491,6 +496,7 @@ def _latex_document_impl(ctx):
             pkg_files = pkg_files,
             output_tarball = offline_source,
             tool = populate_tool,
+            runtime_tools = [populate_tool] + toolchain_tools,
             ctan_packages = ctan_packages,
             ctan_lock = ctan_lock,
             bundle_manifest = bundle_manifest,
@@ -512,6 +518,7 @@ def _latex_document_impl(ctx):
         synctex_output = synctex_output,
         outfmt = outfmt,
         tool = compile_tool,
+        runtime_tools = [compile_tool] + toolchain_tools,
     )
 
     output_groups = {
@@ -543,7 +550,9 @@ def _latex_document_impl(ctx):
         LatexDocumentInfo(
             main = main,
             tectonic = tectonic,
+            tectonic_runfiles = toolchain.tectonic_runfiles,
             biber = biber_file,
+            biber_runfiles = toolchain.biber_runfiles if biber_file else None,
             use_system_biber = use_system_biber,
             pkg_files = pkg_files,
             populate_tool = populate_src,
