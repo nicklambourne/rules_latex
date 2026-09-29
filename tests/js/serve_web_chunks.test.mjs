@@ -55,31 +55,6 @@ test("chunks ending before begin are skipped", () => {
   ]);
 });
 
-test("WebSocket manifest falls back after an evicted chunk is skipped", () => {
-  const client = readFileSync(
-    new URL("../../latex/private/serve_web.js", import.meta.url), "utf8"
-  );
-  const code = client.split("let _wsPendingManifest = null;")[1]
-    .split("async function _flushWsRender()")[0];
-  const cache = new Map();
-  for (let i = 1; i <= 1000; i++) cache.set(`chunk-${i}`, new Uint8Array());
-  let fallback;
-  let renders = 0;
-  const context = {
-    chunkCache: cache,
-    clearTimeout: () => {},
-    setTimeout: (callback) => { fallback = callback; return 1; },
-    _flushWsRender: () => { renders++; },
-  };
-  runInNewContext(`let _wsPendingManifest = null;${code}`, context);
-  const ranges = Array.from({ length: 1001 }, (_, i) => ({ hash: `chunk-${i}` }));
-  context._handleWsMessage({ data: JSON.stringify({ type: "manifest", ranges }) });
-  assert.equal(renders, 0);
-  assert.equal(typeof fallback, "function");
-  fallback();
-  assert.equal(renders, 1);
-});
-
 test("indexed lookup preserves every byte across chunk and gap boundaries", () => {
   // Exhaustive small ranges exercise exact ends, empty requests, gaps,
   // first/last objects, and requests past the final object.
@@ -174,6 +149,31 @@ test("different hashes load independently and oversize bytes are not retained", 
   assert.equal(cache.size, 0);
   await fetch("a");
   assert.deepEqual(calls, ["a", "b", "a"]);
+});
+
+test("WebSocket manifest falls back after an evicted chunk is skipped", () => {
+  const client = readFileSync(
+    new URL("../../latex/private/serve_web.js", import.meta.url), "utf8"
+  );
+  const code = client.split("let _wsPendingManifest = null;")[1]
+    .split("async function _flushWsRender()")[0];
+  const cache = new Map();
+  for (let i = 1; i <= 1000; i++) cache.set(`chunk-${i}`, new Uint8Array());
+  let fallback;
+  let renders = 0;
+  const context = {
+    chunkCache: cache,
+    clearTimeout: () => {},
+    setTimeout: (callback) => { fallback = callback; return 1; },
+    _flushWsRender: () => { renders++; },
+  };
+  runInNewContext(`let _wsPendingManifest = null;${code}`, context);
+  const ranges = Array.from({ length: 1001 }, (_, i) => ({ hash: `chunk-${i}` }));
+  context._handleWsMessage({ data: JSON.stringify({ type: "manifest", ranges }) });
+  assert.equal(renders, 0);
+  assert.equal(typeof fallback, "function");
+  fallback();
+  assert.equal(renders, 1);
 });
 
 function deferred() {
