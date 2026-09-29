@@ -65,9 +65,11 @@ import errno
 import hashlib
 import io
 import os
+import select
 import socket
 import struct
 import threading
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -88,6 +90,7 @@ OP_PONG = 0xA
 # more headroom than any sane payload needs; rejecting larger ones
 # protects against an unbounded memory hold by a misbehaving peer.
 MAX_MESSAGE_SIZE = 16 * 1024 * 1024
+SEND_TIMEOUT_SECONDS = 2.0
 
 
 class WebSocketError(Exception):
@@ -521,9 +524,30 @@ class WebSocketConnection:
         frame = encode_frame(opcode, payload)
         with self._write_lock:
             try:
-                self._sock.sendall(frame)
-            except (BrokenPipeError, ConnectionResetError) as exc:
-                # Peer went away mid-write. Mark closed so future
-                # callers don't keep trying.
+                # On macOS MSG_DONTWAIT does not reliably prevent a
+                # large send() from blocking after select() says the
+                # socket is writable. SO_SNDTIMEO bounds that syscall
+                # without changing the receive thread's socket mode.
+                timeout_us = max(1, int(SEND_TIMEOUT_SECONDS * 1_000_000))
+                self._sock.setsockopt(
+                    socket.SOL_SOCKET, socket.SO_SNDTIMEO,
+                    struct.pack("ll", timeout_us // 1_000_000,
+                                timeout_us % 1_000_000),
+                )
+                remaining = memoryview(frame)
+                deadline = time.monotonic() + SEND_TIMEOUT_SECONDS
+                while remaining:
+                    wait = deadline - time.monotonic()
+                    if wait <= 0 or not select.select([], [self._sock], [], wait)[1]:
+                        raise WebSocketClosed("peer did not read frame before deadline")
+                    try:
+                        sent = self._sock.send(remaining, socket.MSG_DONTWAIT)
+                    except BlockingIOError:
+                        continue
+                    if sent == 0:
+                        raise WebSocketClosed("peer closed during frame send")
+                    remaining = remaining[sent:]
+            except (OSError, ValueError, WebSocketClosed) as exc:
                 self._closed = True
+                self._sock.close()
                 raise WebSocketClosed(f"peer gone: {exc}") from exc
