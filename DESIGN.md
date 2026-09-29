@@ -458,6 +458,12 @@ Mechanism:
   cache after the initial render so subsequent page renders are
   wire-free.
 
+* Cancelling a PDF.js loading task aborts that transport's skeleton HTTP
+  requests and prevents late bytes/errors from reaching its retired readers.
+  Shared content-addressed chunk fetches remain usable by other transports
+  and prefetch; obsolete assembly stops before fetching another segment.
+  Errors on an active transport still use the existing failure/reload path.
+
 * GC: chunks no longer in the current manifest *and* older than
   five minutes are deleted after each successful build. The
   five-minute floor preserves fast edit-undo round-trips: a
