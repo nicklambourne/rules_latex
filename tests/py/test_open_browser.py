@@ -1,9 +1,7 @@
-"""Unit tests for open_in_browser() in serve_web.py.tpl.
+"""Unit tests for open_in_browser() in serve_web_runtime.py.
 
-The helper lives inside the template (so the generated launcher stays
-single-file). We load and substitute the template the same way
-test_synctex_parser.py does, then exercise open_in_browser, mocking
-``webbrowser.open`` rather than launching a real browser — the test is
+We import the server runtime and exercise open_in_browser, mocking
+``webbrowser.open`` rather than launching a real browser. The test is
 about the routing decision, not whether a browser is installed on CI.
 
 (The previous VS Code "Simple Browser" auto-open path was removed: the
@@ -14,77 +12,13 @@ system browser; see DESIGN.md §4.8.)
 
 from __future__ import annotations
 
-import importlib.util
-import json
-from tests.py._template_loader import _PLACEHOLDERS as _DEFAULT_PLACEHOLDERS
-import sys
-import tempfile
 import unittest
-from pathlib import Path
 from unittest import mock
 
-
-_TEMPLATE_PATH = (
-    Path(__file__).resolve().parent.parent.parent
-    / "latex"
-    / "private"
-    / "serve_web.py.tpl"
-)
-_PLACEHOLDERS = {
-    "{{DOCUMENT_LABEL}}": "//test:doc",
-    "{{PDF_RELPATH}}": "test/doc.pdf",
-    "{{SYNCTEX_RELPATH}}": "test/doc.synctex.gz",
-    "{{WATCHED_PATHS}}": "test/doc.tex",
-    "{{POLL_INTERVAL}}": "250",
-    "{{DEBOUNCE_MS}}": "250",
-    "{{DEBOUNCE_MAX_MS}}": "1500",
-    "{{PORT}}": "8765",
-    "{{DOCUMENT_NAME}}": "doc",
-    "{{PDFJS_LIB_RUNFILE}}": "_pdfjs/pdf.mjs",
-    "{{PDFJS_WORKER_RUNFILE}}": "_pdfjs/pdf.worker.mjs",
-    "{{OPEN_ON_START}}": "0",
-    "{{PDF_CHUNKS_RUNFILE}}": "_tools/pdf_chunks.py",
-    "{{ENABLE_SERVE_CACHE}}": "",
-    "{{SERVE_CACHE_RUNFILE}}": "",
-    "{{PRIME_MAIN_RUNFILE}}": "",
-    "{{PRIME_TECTONIC_RUNFILE}}": "",
-    "{{PRIME_POPULATE_TOOL_RUNFILE}}": "",
-    "{{PRIME_STAGING_LIB_RUNFILE}}": "",
-    "{{PRIME_BIBER_RUNFILE}}": "",
-    "{{PRIME_USE_SYSTEM_BIBER}}": "",
-    "{{PRIME_BUNDLE_URL}}": "",
-    "{{PRIME_BUNDLE_MANIFEST_RUNFILE}}": "",
-    "{{PRIME_CTAN_LOCK_RUNFILE}}": "",
-    "{{PRIME_CTAN_PACKAGES}}": "",
-    "{{PRIME_SRCS}}": "",
-    "{{PRIME_PKG_FILES}}": "",
-}
+from tests.py._server_loader import load_server_module
 
 
-def _load_template_module():
-    """Substitute placeholders and import the resulting Python module."""
-    source = _TEMPLATE_PATH.read_text()
-    for placeholder, replacement in {**_DEFAULT_PLACEHOLDERS, **_PLACEHOLDERS}.items():
-        source = source.replace(placeholder, json.dumps(replacement))
-
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".py", delete=False, encoding="utf-8"
-    )
-    try:
-        tmp.write(source)
-        tmp.close()
-        spec = importlib.util.spec_from_file_location(
-            "serve_web_open_browser_test_module", tmp.name
-        )
-        module = importlib.util.module_from_spec(spec)
-        sys.modules["serve_web_open_browser_test_module"] = module
-        spec.loader.exec_module(module)
-        return module
-    finally:
-        Path(tmp.name).unlink()
-
-
-_M = _load_template_module()
+_M = load_server_module("serve_web_open_browser_test_module")
 
 
 class TestOpenInBrowser(unittest.TestCase):

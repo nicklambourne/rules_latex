@@ -145,10 +145,19 @@ jobs:
       - name: Build latex_live launcher and smoke-test endpoints
         working-directory: examples
         run: |
-          bazel build //hello:hello_live //hello:hello_synctex_live --config=ci
+          bazel build //hello:hello_live //hello:hello_synctex_live \
+            //cv:cv_live_fast //thesis:thesis_live --config=ci
           test -x bazel-bin/hello/hello_live.sh
           test -f bazel-bin/hello/hello_live.py
-          grep -q '^DOCUMENT_LABEL = "@@//hello:hello_offline"' bazel-bin/hello/hello_live.py
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          def config(target):
+              return json.loads(Path(f"bazel-bin/{target}.json").read_text())
+          assert config("hello/hello_live")["DOCUMENT_LABEL"] == "@@//hello:hello_offline"
+          assert config("cv/cv_live_fast")["SERVE_FAST"] is True
+          assert config("thesis/thesis_live")["ENABLE_SERVE_CACHE"] is True
+          PY
 
           # Boot the server in the background, hit each endpoint, kill
           # it. Proves the http.server wiring works end-to-end against

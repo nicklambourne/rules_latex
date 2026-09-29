@@ -1,4 +1,4 @@
-"""HTTP-level tests for the HEAD-vs-GET parity in serve_web.py.tpl.
+"""HTTP-level tests for the HEAD-vs-GET parity in serve_web_runtime.py.
 
 HTTP/1.1 (RFC 7231 §4.3.2) requires that HEAD returns the same
 status code and headers as GET would, but with an empty body. We
@@ -26,7 +26,6 @@ from __future__ import annotations
 import http.client
 import importlib.util
 import json
-from tests.py._template_loader import _PLACEHOLDERS as _DEFAULT_PLACEHOLDERS
 import socket
 import sys
 import tempfile
@@ -35,65 +34,13 @@ import time
 import unittest
 from unittest import mock
 from pathlib import Path
-from unittest import mock
+
+from tests.py._server_loader import load_server_module
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-_TEMPLATE_PATH = _REPO_ROOT / "latex" / "private" / "serve_web.py.tpl"
 _PDF_CHUNKS_PATH = _REPO_ROOT / "tools" / "pdf_chunks.py"
 _WS_SERVER_PATH = _REPO_ROOT / "tools" / "ws_server.py"
-
-
-_PLACEHOLDERS = {
-    "{{DOCUMENT_LABEL}}": "//test:doc",
-    "{{PDF_RELPATH}}": "test/doc.pdf",
-    "{{SYNCTEX_RELPATH}}": "",
-    "{{WATCHED_PATHS}}": "test/doc.tex",
-    "{{POLL_INTERVAL}}": "80",
-    "{{DEBOUNCE_MS}}": "250",
-    "{{DEBOUNCE_MAX_MS}}": "1500",
-    "{{PORT}}": "0",  # we override at construction time
-    "{{DOCUMENT_NAME}}": "doc",
-    "{{PDFJS_LIB_RUNFILE}}": "_pdfjs/pdf.mjs",
-    "{{PDFJS_WORKER_RUNFILE}}": "_pdfjs/pdf.worker.mjs",
-    "{{OPEN_ON_START}}": "0",
-    "{{PDF_CHUNKS_RUNFILE}}": "_tools/pdf_chunks.py",
-    "{{ENABLE_SERVE_CACHE}}": "",
-    "{{SERVE_CACHE_RUNFILE}}": "",
-    "{{PRIME_MAIN_RUNFILE}}": "",
-    "{{PRIME_TECTONIC_RUNFILE}}": "",
-    "{{PRIME_POPULATE_TOOL_RUNFILE}}": "",
-    "{{PRIME_STAGING_LIB_RUNFILE}}": "",
-    "{{PRIME_BIBER_RUNFILE}}": "",
-    "{{PRIME_USE_SYSTEM_BIBER}}": "",
-    "{{PRIME_BUNDLE_URL}}": "",
-    "{{PRIME_BUNDLE_MANIFEST_RUNFILE}}": "",
-    "{{PRIME_CTAN_LOCK_RUNFILE}}": "",
-    "{{PRIME_CTAN_PACKAGES}}": "",
-    "{{PRIME_SRCS}}": "",
-    "{{PRIME_PKG_FILES}}": "",
-}
-
-
-def _load_template_module():
-    source = _TEMPLATE_PATH.read_text()
-    for placeholder, replacement in {**_DEFAULT_PLACEHOLDERS, **_PLACEHOLDERS}.items():
-        source = source.replace(placeholder, json.dumps(replacement))
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".py", delete=False, encoding="utf-8",
-    )
-    try:
-        tmp.write(source)
-        tmp.close()
-        spec = importlib.util.spec_from_file_location(
-            "serve_web_test_module_head", tmp.name,
-        )
-        module = importlib.util.module_from_spec(spec)
-        sys.modules["serve_web_test_module_head"] = module
-        spec.loader.exec_module(module)
-        return module
-    finally:
-        Path(tmp.name).unlink()
 
 
 def _load_pdf_chunks():
@@ -106,7 +53,10 @@ def _load_pdf_chunks():
     return module
 
 
-_M = _load_template_module()
+_M = load_server_module(
+    "serve_web_test_module_head",
+    extra={"SYNCTEX_RELPATH": "", "PORT": 0},
+)
 _PC = _load_pdf_chunks()
 
 
@@ -172,7 +122,7 @@ def _build_minimal_pdf() -> bytes:
 
 class _ServerFixture:
     """Stand up a real ``ThreadingHTTPServer`` running the
-    template's ``Handler``, with the per-class state attributes
+    runtime's ``Handler``, with the per-class state attributes
     seeded so each endpoint has something plausible to serve.
 
     Use as a context manager. Yields a ``(host, port)`` tuple

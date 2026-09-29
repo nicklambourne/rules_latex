@@ -35,7 +35,7 @@ alias(
 # the file is NOT in Bazel's input graph. `latex_live` sets a second
 # build setting whose value is copied into the compile action's
 # explicit environment. That changes its action key after re-prime.
-# See latex/private/latex_document.bzl and serve_web.py.tpl for the
+# See latex/private/latex_document.bzl and serve_web_runtime.py for the
 # wiring.
 string_flag(
     name = "_serve_cache_override",

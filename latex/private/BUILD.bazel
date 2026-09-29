@@ -6,11 +6,11 @@ exports_files(
     glob([
         "*.bzl",
         "*.py.tpl",
-        # serve_web client assets: extracted from serve_web.py.tpl so
-        # they can be unit-tested under //tests/js with `node --test`.
+        # serve_web client assets: separate files unit-tested under
+        # //tests/js with `node --test`.
         "*.js",
         "*.css",
-    ]),
+    ]) + ["serve_web_runtime.py"],
 )
 
 # Live-preview client assets, served at /_assets/ by latex_live.
