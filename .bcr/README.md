@@ -59,6 +59,46 @@ If the fork or token changes, the publish job fails independently of the
 already-completed release. Repair the configuration and retry the publish
 workflow with `workflow_dispatch`; no replacement release is needed.
 
+## Signing-workflow version tags
+
+The two reusable signing workflows must use full version tags (`vX.Y.Z`),
+currently `release_ruleset.yaml@v7.7.0` and `publish.yaml@v1.2.0`.
+These are deliberate exceptions to commit-SHA pinning: BCR's `slsa-verifier`
+rejects SHA references in signing certificates even when signatures and artifact
+hashes are valid. Keep other action pins unchanged. See
+[the verifier's restriction](https://github.com/slsa-framework/slsa-verifier/issues/12).
+
+Version tags can move. Before releasing, check that these tags still resolve to
+reviewed commits; investigate unexpected movement rather than publishing:
+
+- `bazel-contrib/.github@v7.7.0`: `1d798ff015ed0696433e01e2c3ccbb2abefadad7`
+- `bazel-contrib/publish-to-bcr@v1.2.0`: `0a23c53c2baffdaf2ce8dd23c2c0e45eb3b79093`
+
+Update these reviewed identities when intentionally upgrading a workflow.
+
+Before dispatching BCR publication, download the release archive and its
+`.intoto.jsonl` bundle and verify them with the version of `slsa-verifier` used
+by BCR (currently 2.7.1):
+
+```sh
+slsa-verifier verify-github-attestation \
+  --attestation-path rules_latex-X.Y.Z.tar.gz.intoto.jsonl \
+  --source-uri github.com/nicklambourne/rules_latex \
+  --builder-id https://github.com/bazel-contrib/.github/.github/workflows/release_ruleset.yaml@v7.7.0 \
+  rules_latex-X.Y.Z.tar.gz
+```
+
+Repeat for the docs archive. After publication creates the BCR PR, verify its
+exact `MODULE.bazel` and `source.json` files against their uploaded bundles,
+using `https://github.com/bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@v1.2.0`
+as the builder ID. Require the BCR checks to pass before considering registry
+publication complete. `gh attestation verify` is useful additional verification,
+but does not enforce the same builder-reference policy and is not a substitute.
+
+A failed verification is not a reason to move a published release tag, replace
+its archives, or remove attestations. Normal publication retries may overwrite
+attestation assets and the BCR branch; inspect the failure before retrying.
+
 ## Stardoc on the BCR
 
 `source.template.json` includes a `docs_url` field pointing at the

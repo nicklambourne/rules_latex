@@ -54,7 +54,7 @@ architectural rationale.
 In your `MODULE.bazel`:
 
 ```python
-bazel_dep(name = "rules_latex", version = "0.8.0")
+bazel_dep(name = "rules_latex", version = "0.8.1")
 
 tectonic = use_extension("@rules_latex//latex/toolchain:extensions.bzl", "tectonic")
 tectonic.toolchain()
