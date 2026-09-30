@@ -10,8 +10,9 @@ the biblatex version pairing. See [DESIGN.md §4.9](../DESIGN.md#49-biber).
 
 Source: [the original mirrored universal archive](https://github.com/nicklambourne/rules_latex/releases/download/biber-mirror-v2.21/biber-darwin_universal.tar.gz),
 SHA-256 `8c895defed5e69b7a824cb7b7947e8bbfa3f3b17ffb8a1d493e982b679e6633c`.
-The upstream application is [Biber](https://github.com/plk/biber); its GPL-3.0
-license remains unchanged. This is a repack of that binary, not a new build.
+The upstream application is [Biber](https://github.com/plk/biber); its
+[Artistic License 2.0](https://github.com/plk/biber/blob/dev/LICENSE) remains
+unchanged. This is a repack of that binary, not a new build.
 
 | Asset | SHA-256 | Size (bytes) |
 | --- | --- | ---: |
