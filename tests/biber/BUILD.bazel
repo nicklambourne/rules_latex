@@ -22,7 +22,7 @@ py_test(
     name = "biber_test",
     srcs = ["biber_test.py"],
     args = [
-        "$(location :biber)",
+        "$(rootpath :biber)",
         BIBER_VERSION,
     ],
     config_settings = {"@rules_python//python/config_settings:bootstrap_impl": "script"},
