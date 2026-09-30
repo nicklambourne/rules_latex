@@ -62,8 +62,8 @@ codesign --verify --strict --all-architectures --verbose=2 \
 
 Validate `//tests/biber:biber_test` and the `examples` workspace's
 `//paper:paper` on native ARM64 and Intel macOS runners. Check the PDF for
-the resolved Morgenthaler citation. The test covers concurrent startup in
-a fresh PAR cache with an unusable Xcode developer directory, so a working
-host `lipo` cannot conceal a regression to the universal launcher. Consumer
+the resolved Morgenthaler citation. The test covers concurrent compile/populate
+wrapper startup in a fresh PAR cache and warm reuse with an unusable Xcode
+developer directory, so a working host `lipo` cannot conceal a regression to the universal launcher. Consumer
 validation must use the published repository downloads, not a local Biber
 repository override. Linux and Windows pins are unaffected.

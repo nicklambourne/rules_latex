@@ -5,6 +5,7 @@ load(":py_unittest.bzl", "py_unittest")
 # Sources the test modules load via __file__-relative paths.
 _TEST_DATA = [
     "//latex/private:serve_web_runtime.py",
+    "//tools:biber_cache.py",
     "//tools:pdf_chunks.py",
     "//tools:serve_cache.py",
     "//tools:staging.py",

@@ -70,6 +70,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from staging import PkgFile, stage_sources  # noqa: E402
+from biber_cache import prepare_biber_cache  # noqa: E402
 
 
 # File extensions that participate in `\RequirePackage` / `\usepackage`
@@ -281,6 +282,7 @@ def run_tectonic(
 
     biber_dir_owned: tempfile.TemporaryDirectory[str] | None = None
     if biber is not None:
+        prepare_biber_cache(biber, env)
         biber_dir_owned = tempfile.TemporaryDirectory(prefix="rules_latex_biber_")
         biber_link = Path(biber_dir_owned.name) / "biber"
         try:
