@@ -6,6 +6,8 @@ that, expect breaking changes in any v0.x release.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-30
+
 ### Added
 
 - Optional `ctan_lock` manifests pin extra CTAN archives by exact URL and

@@ -154,7 +154,7 @@
     "//latex/toolchain:extensions.bzl%tectonic": {
       "general": {
         "bzlTransitiveDigest": "HF0kEHSxYGnIHSR814D0vs5Czw/G4LPwNzJ/1jrWf00=",
-        "usagesDigest": "TJ5n1HSUCJ2d6mfdttK1PpTgOm7vvMDdBG40E1YGr5Q=",
+        "usagesDigest": "1/C7GwLgIkPFsMjcY60ovC9KrZWgno/+Bk2PEN0tHsE=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -250,7 +250,7 @@
     "//latex/web:extensions.bzl%pdfjs": {
       "general": {
         "bzlTransitiveDigest": "P5CXlz59/9Rn3hyDV/1JO+8IWmwyChkMRgHb/IIdckk=",
-        "usagesDigest": "cCAcUQAj+XedscoYKnBPdLI3baCHIcrgudnK19Nm/Eo=",
+        "usagesDigest": "wTbrWyluTJrSx3L2HCpaJKviyxbxzFKB9Piq9QXO3IA=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},

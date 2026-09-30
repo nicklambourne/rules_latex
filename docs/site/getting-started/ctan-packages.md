@@ -330,8 +330,7 @@ paper submissions, archival), choose one of these paths:
 ### Lock CTAN downloads
 
 !!! note "Availability"
-    `ctan_lock` is not available in v0.7.0 or earlier. These instructions
-    describe the subsequent development changes.
+    `ctan_lock` is available in v0.8.0 and later.
 
 This is optional: consumers without `ctan_lock` keep the existing behaviour.
 Create a checked-in JSON file with the exact archive URL and SHA-256
