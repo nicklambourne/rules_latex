@@ -56,8 +56,9 @@ permissions:
 
 jobs:
   publish:
-    # Commit pin (v1.2.0) so upstream tag movement cannot alter a release.
-    uses: bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@0a23c53c2baffdaf2ce8dd23c2c0e45eb3b79093 # v1.2.0
+    # BCR's SLSA verifier requires a full version tag for the signing workflow.
+    # Keep this exception to SHA pinning; see .bcr/README.md.
+    uses: bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@v1.2.0
     with:
       tag_name: ${{ inputs.tag_name }}
       # Fork of bazelbuild/bazel-central-registry. The PAT under

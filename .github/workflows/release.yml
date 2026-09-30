@@ -27,7 +27,9 @@ jobs:
     #
     # See https://github.com/bazel-contrib/bazel-central-registry/discussions/2721
     # for the BCR provenance design these attestations implement.
-    uses: bazel-contrib/.github/.github/workflows/release_ruleset.yaml@1d798ff015ed0696433e01e2c3ccbb2abefadad7 # v7.7.0
+    # BCR's SLSA verifier requires a full version tag for the signing workflow.
+    # Keep this exception to SHA pinning; see .bcr/README.md.
+    uses: bazel-contrib/.github/.github/workflows/release_ruleset.yaml@v7.7.0
     with:
       # //tests/ctan:* needs the CTAN fixture mirror running before
       # bazel test, the same way the main CI workflow sets it up.

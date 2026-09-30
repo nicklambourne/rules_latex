@@ -6,6 +6,16 @@ that, expect breaking changes in any v0.x release.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-30
+
+### Fixed
+
+- Restore full version-tag references for the two reusable signing workflows.
+  BCR's SLSA verifier rejects commit-SHA references in signing certificates,
+  which blocked registry publication of 0.8.0. Other workflow pins are unchanged.
+- Document the signing-workflow exception and BCR-compatible attestation checks.
+  This release contains no library functionality or dependency-version changes.
+
 ## [0.8.0] - 2026-09-30
 
 ### Added
