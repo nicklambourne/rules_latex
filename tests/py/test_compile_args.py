@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
+import fcntl
 import json
 import os
 import sys
 import tarfile
 import tempfile
+import subprocess
 import unittest
 from contextlib import redirect_stderr
 from io import StringIO
@@ -23,9 +25,47 @@ _POPULATE_TOOL = _TOOL.with_name("tectonic_populate_cache.py")
 populate_spec = importlib.util.spec_from_file_location("tectonic_populate_test", _POPULATE_TOOL)
 populate_tool = importlib.util.module_from_spec(populate_spec)
 populate_spec.loader.exec_module(populate_tool)
+import biber_cache
 
 
 class TestCompileArguments(unittest.TestCase):
+    def test_both_wrappers_prepare_only_toolchain_biber(self):
+        for tool in (compile_tool, populate_tool):
+            for use_biber in (False, True):
+                with self.subTest(tool=tool.__name__, use_biber=use_biber):
+                    with tempfile.TemporaryDirectory() as directory:
+                        root = Path(directory)
+                        main = root / "main.tex"
+                        main.touch()
+                        child_paths = []
+
+                        def prepare(binary, env):
+                            self.assertEqual(binary, main)
+                            env["PAR_GLOBAL_TEMP"] = "prepared-cache"
+
+                        def run(cmd, *, env, **kwargs):
+                            self.assertEqual(env["PAR_GLOBAL_TEMP"],
+                                             "prepared-cache" if use_biber else "system-cache")
+                            if use_biber:
+                                path = Path(env["PATH"].split(os.pathsep)[0])
+                                self.assertTrue((path / "biber").exists())
+                                child_paths.append(path)
+                            return subprocess.CompletedProcess(cmd, 0, stdout=b"")
+
+                        kwargs = dict(tectonic=main, main_in_workdir=main, cache_dir=root,
+                                      biber=main if use_biber else None)
+                        if tool is compile_tool:
+                            kwargs.update(bundle=None, outfmt="pdf", synctex=False,
+                                          reproducible=False, extra_args=[])
+                        with patch.dict(os.environ, PAR_GLOBAL_TEMP="system-cache"):
+                            with patch.object(tool, "prepare_biber_cache", side_effect=prepare) as init:
+                                with patch.object(tool.subprocess, "run", side_effect=run):
+                                    tool.run_tectonic(**kwargs)
+                            self.assertEqual(init.call_count, int(use_biber))
+                            self.assertEqual(os.environ["PAR_GLOBAL_TEMP"], "system-cache")
+                        for path in child_paths:
+                            self.assertFalse(path.exists(), "temporary PATH entry must be cleaned")
+
     def test_structured_cache_layout_for_tarball_and_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -159,6 +199,77 @@ class TestCompileArguments(unittest.TestCase):
                 populate_tool.parse_args().tectonic_args,
                 ["--keep-intermediates"],
             )
+
+
+class TestBiberCache(unittest.TestCase):
+    def test_reuse_by_content_and_initialization_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "biber"
+            binary.write_bytes(b"version one")
+            other = root / "another-path"
+            other.write_bytes(binary.read_bytes())
+
+            def initialize(cmd, *, env, pass_fds, **kwargs):
+                par = Path(env["PAR_GLOBAL_TEMP"])
+                with (par.parent / "init.lock").open("a+b") as contender:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.assertEqual(len(pass_fds), 1)
+                self.assertFalse((par.parent / "ready").exists())
+                return subprocess.CompletedProcess(cmd, 0, stdout=b"version", stderr=b"")
+
+            env = dict(PATH="/usr/bin:/bin", PAR_GLOBAL_CLEAN="1", PAR_GLOBAL_TEMP="unsafe")
+            with patch.object(biber_cache.tempfile, "gettempdir", return_value=directory):
+                with patch.object(biber_cache.subprocess, "run", side_effect=initialize) as run:
+                    biber_cache.prepare_biber_cache(binary, env)
+                    first = env["PAR_GLOBAL_TEMP"]
+                    biber_cache.prepare_biber_cache(other, env)
+                    self.assertEqual(run.call_count, 1)
+                    self.assertEqual(env, dict(PATH="/usr/bin:/bin", PAR_GLOBAL_TEMP=first))
+                    binary.write_bytes(b"version two")
+                    biber_cache.prepare_biber_cache(binary, env)
+                    self.assertEqual(run.call_count, 2)
+                    self.assertNotEqual(first, env["PAR_GLOBAL_TEMP"])
+            with (Path(first).parent / "init.lock").open("a+b") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_failed_initialization_is_not_reused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "biber"
+            binary.touch()
+            env = {}
+
+            def fail(cmd, *, env, **kwargs):
+                (Path(env["PAR_GLOBAL_TEMP"]) / "partial").touch()
+                return subprocess.CompletedProcess(cmd, 255, stdout=b"", stderr=b"broken module")
+
+            def succeed(cmd, *, env, **kwargs):
+                self.assertFalse((Path(env["PAR_GLOBAL_TEMP"]) / "partial").exists())
+                return subprocess.CompletedProcess(cmd, 0, stdout=b"version", stderr=b"")
+
+            with patch.object(biber_cache.tempfile, "gettempdir", return_value=directory):
+                with patch.object(biber_cache.subprocess, "run", side_effect=fail):
+                    with self.assertRaisesRegex(SystemExit, "broken module"):
+                        biber_cache.prepare_biber_cache(binary, env)
+                self.assertFalse((Path(env["PAR_GLOBAL_TEMP"]).parent / "ready").exists())
+                with patch.object(biber_cache.subprocess, "run", side_effect=succeed):
+                    biber_cache.prepare_biber_cache(binary, env)
+
+    def test_rejects_shared_or_symlinked_cache_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "biber"
+            binary.touch()
+            cache = root / f"rules_latex_biber_cache_v1_{os.getuid()}"
+            cache.mkdir(mode=0o755)
+            with patch.object(biber_cache.tempfile, "gettempdir", return_value=directory):
+                with self.assertRaisesRegex(SystemExit, "private directory"):
+                    biber_cache.prepare_biber_cache(binary, {})
+                cache.rmdir()
+                cache.symlink_to(root, target_is_directory=True)
+                with self.assertRaisesRegex(SystemExit, "private directory"):
+                    biber_cache.prepare_biber_cache(binary, {})
 
 
 if __name__ == "__main__":

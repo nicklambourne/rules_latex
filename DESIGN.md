@@ -681,9 +681,9 @@ verifies notarization, and writes deterministic archives and provenance.
 The new assets are additive to the existing mirror release; the universal
 asset remains available to older rules_latex pins. See
 [the mirror publication procedure](docs/biber-macos-mirror.md). Regression
-tests check the native Mach-O header and concurrent cold startup with an
-invalid Xcode developer directory. CI builds a cited PDF on both macOS
-architectures, with a dedicated Intel job alongside the ARM64 matrix.
+tests check the native Mach-O header and concurrent cold startup through the
+compile/populate wrappers with an invalid Xcode developer directory. CI builds
+a cited PDF on both macOS architectures, with a dedicated Intel job alongside the ARM64 matrix.
 
 #### Activation modes
 
@@ -691,6 +691,26 @@ architectures, with a dedicated Intel job alongside the ARM64 matrix.
 accept a boolean. When True, the action stages the toolchain biber
 binary into a `mktemp -d` scratch dir and prepends that dir to PATH so
 tectonic's biber subprocess resolves it by basename.
+
+Before starting Tectonic, both wrappers initialize the bundled Biber's PAR
+extraction cache under an exclusive file lock. PAR's own extraction lock
+does not recheck completion after waiting, so simultaneous cold starts can
+overwrite Perl modules or native libraries another process is loading.
+`tools/biber_cache.py` runs one `biber --version` to finish extraction before
+publishing a ready marker, then releases the lock: bibliography processing
+remains parallel, and warm builds reuse the extracted payload.
+
+The cache is private to the OS user, keyed by the executable's SHA-256, and
+lives in `rules_latex_biber_cache_v1_<uid>` under Python's temporary directory
+(normally selected by `TMPDIR`). It is a host cache, not part of document
+outputs or cache snapshots. Failed initialization leaves no ready marker;
+the next build removes the partial extraction before trying again. To reclaim
+space, remove this directory when no Biber builds are running. Each new Biber
+binary gets a separate cache; changed sandbox paths do not invalidate it.
+The pinned toolchain ignores inherited `PAR_*` overrides and supplies its own
+`PAR_GLOBAL_TEMP`. The `system` strategy keeps the system Biber environment
+unchanged. Cold initialization adds one startup; warm builds only hash the
+binary and check the lock/marker, avoiding a full extraction per document.
 
 #### Linux arm64 gap
 

@@ -309,6 +309,7 @@ exec "$RUNFILES/$RUNNER" "$RUNFILES/$SERVER" "$BUILD_WORKSPACE_DIRECTORY" "$RUNF
                 server_script,
                 server_config,
                 server_runtime,
+                ctx.file._biber_cache_lib,
                 pdfjs_lib,
                 pdfjs_worker,
                 pdf_chunks_lib,
@@ -329,6 +330,10 @@ latex_live = rule(
     doc = "Browser-based live-preview server for a latex_document.",
     executable = True,
     attrs = {
+        "_biber_cache_lib": attr.label(
+            default = "//tools:biber_cache.py",
+            allow_single_file = True,
+        ),
         "document": attr.label(
             doc = "The latex_document (or any rule providing LatexInfo) " +
                   "to watch and rebuild.",

@@ -17,6 +17,11 @@ that, expect breaking changes in any v0.x release.
 
 ### Fixed
 
+- macOS Biber uses native ARM64/Intel slices retaining the upstream signature
+  and notarization, avoiding the Xcode-dependent universal launcher. Bundled
+  Biber extraction is initialized once under a lock so parallel cold document
+  builds cannot read partly extracted Perl modules or libraries. Warm builds
+  retain a shared, private cache keyed by the Biber binary digest.
 - Live preview validates Host/Origin and bounds clients, sync requests, PDF
   parsing, archive extraction, and browser cache payloads.
 - Source staging makes independent copies so compiler output cannot overwrite
