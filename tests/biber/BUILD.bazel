@@ -1,0 +1,33 @@
+load("@rules_python//python:py_test.bzl", "py_test")
+
+# Test the actual private pin without duplicating its version here.
+# buildifier: disable=bzl-visibility
+load("//latex/private:biber_versions.bzl", "BIBER_VERSION")
+
+config_setting(
+    name = "arm64",
+    constraint_values = ["@platforms//cpu:aarch64"],
+)
+
+alias(
+    name = "biber",
+    actual = select({
+        ":arm64": "@rules_latex_biber_macos_aarch64//:biber_executable",
+        "//conditions:default": "@rules_latex_biber_macos_x86_64//:biber_executable",
+    }),
+    target_compatible_with = ["@platforms//os:macos"],
+)
+
+py_test(
+    name = "biber_test",
+    srcs = ["biber_test.py"],
+    args = [
+        "$(location :biber)",
+        BIBER_VERSION,
+    ],
+    config_settings = {"@rules_python//python/config_settings:bootstrap_impl": "script"},
+    data = [":biber"],
+    legacy_create_init = 0,
+    python_version = "3.13",
+    target_compatible_with = ["@platforms//os:macos"],
+)

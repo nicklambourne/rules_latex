@@ -31,8 +31,10 @@ are stable and the SHAs match indefinitely.
 BIBER_VERSION = "2.21"
 BIBER_MIRROR_TAG = "biber-mirror-v" + BIBER_VERSION
 
-# Map (os, cpu) -> (asset_name, sha256, exe). The macOS asset is a
-# universal binary that covers both Intel and Apple Silicon. The
+# Map (os, cpu) -> (asset_name, sha256, exe). The macOS assets are
+# signed slices of the original 2.21 universal binary, extracted before
+# publication so consumers do not run PAR::Packer's lipo bootstrap.
+# See tools/prepare_biber_macos.py for the reproducible packaging recipe. The
 # linux/aarch64 binary is the prebuilt biber 2.21 from CTAN's
 # `biber-linux-aarch64` package (re-gzipped to the standard layout);
 # CI-verified on the ubuntu-24.04-arm runner. SHAs are from the
@@ -49,13 +51,13 @@ BIBER_RELEASES = {
         exe = "biber",
     ),
     ("macos", "x86_64"): struct(
-        asset = "biber-darwin_universal.tar.gz",
-        sha256 = "8c895defed5e69b7a824cb7b7947e8bbfa3f3b17ffb8a1d493e982b679e6633c",
+        asset = "biber-darwin_x86_64.tar.gz",
+        sha256 = "9638e94f569ad6da8e62e9ac63c20649e9a32a9fb53089b139b236665c042e73",
         exe = "biber",
     ),
     ("macos", "aarch64"): struct(
-        asset = "biber-darwin_universal.tar.gz",
-        sha256 = "8c895defed5e69b7a824cb7b7947e8bbfa3f3b17ffb8a1d493e982b679e6633c",
+        asset = "biber-darwin_aarch64.tar.gz",
+        sha256 = "d643669ed51179fcd9791fe739029a90ac4ef3c5a97bdb8ef2cc74025b3b7baf",
         exe = "biber",
     ),
     ("windows", "x86_64"): struct(

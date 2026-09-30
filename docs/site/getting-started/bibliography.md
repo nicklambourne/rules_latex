@@ -120,9 +120,15 @@ page for the full version-coupling discussion.
 |-----------------|------------------|------|
 | Linux x86_64    | :material-check: | Upstream prebuilt |
 | Linux aarch64   | :material-check: | Prebuilt biber 2.21 (CTAN) |
-| macOS x86_64    | :material-check: | Universal binary |
-| macOS aarch64   | :material-check: | Universal binary |
+| macOS x86_64    | :material-check: | Native Intel binary |
+| macOS aarch64   | :material-check: | Native Apple Silicon binary |
 | Windows x86_64  | Binary available | Native rules_latex workflows are not yet supported or CI-tested. |
+
+On macOS, the toolchain downloads only the native slice of upstream Biber
+2.21. The original Developer ID signature and notarization are preserved.
+Biber startup does not require Xcode or `lipo`; this avoids the universal
+launcher's incompatible `lipo -extract_family` call with newer Xcode tools.
+No BUILD-file changes or system Biber installation are needed.
 
 ### Unsupported platforms
 
