@@ -45,6 +45,9 @@ that, expect breaking changes in any v0.x release.
 
 ### Changed
 
+- Update `bazel_skylib` to 1.9.2, `platforms` to 1.1.0, and the development-only
+  `rules_shell` dependency to 0.8.0. Refresh pinned checkout, setup-python, and
+  release-workflow actions; retain the existing Bazel/Python support matrix.
 - Stream PDF responses, avoid HEAD body reads, reduce PDF parsing allocations,
   index range lookups, and coalesce overlapping chunk downloads. Combined
   measurements show broadly similar total build latency, not an overall

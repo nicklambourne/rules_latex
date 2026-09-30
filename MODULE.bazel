@@ -10,8 +10,8 @@ module(
 )
 
 # Standard dependencies.
-bazel_dep(name = "platforms", version = "0.0.11")
-bazel_dep(name = "bazel_skylib", version = "1.8.2")
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "bazel_skylib", version = "1.9.2")
 bazel_dep(name = "rules_python", version = "1.9.2")
 
 # Stardoc generates the Markdown that backs the user guide at
@@ -19,7 +19,7 @@ bazel_dep(name = "rules_python", version = "1.9.2")
 # dependency because consumers of rules_latex don't need it; only
 # our own //docs:* targets do.
 bazel_dep(name = "stardoc", version = "0.8.1", dev_dependency = True)
-bazel_dep(name = "rules_shell", version = "0.5.0", dev_dependency = True)
+bazel_dep(name = "rules_shell", version = "0.8.0", dev_dependency = True)
 
 # rules_latex's private build tools run on their own Python version instead
 # of inheriting the root module's default. Do not call python.defaults() here:
