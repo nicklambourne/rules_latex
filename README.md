@@ -286,8 +286,8 @@ caches the online prime through Bazel's action cache.
 |-----------------|---------|-------------------|--------|
 | Linux x86_64    | ✅ musl  | ✅ glibc            | ✅      |
 | Linux aarch64   | ✅ musl  | ✅ prebuilt         | ✅      |
-| macOS x86_64    | ✅       | ✅ universal binary | ✅      |
-| macOS aarch64   | ✅       | ✅ universal binary | ✅      |
+| macOS x86_64    | ✅       | ✅ native binary    | ✅      |
+| macOS aarch64   | ✅       | ✅ native binary    | ✅      |
 
 Windows x86_64 binaries are published, but rules_latex does not yet
 support native Windows builds, tests, snapshots, or live preview. The

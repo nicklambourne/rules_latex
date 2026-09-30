@@ -641,6 +641,38 @@ jobs:
           pdftotext bazel-bin/paper/paper.pdf - | grep -q "Morgenthaler"
           echo "biber 2.21 on linux/aarch64: citation resolved OK"
 
+  biber-macos-intel:
+    # ARM64 is covered by the main matrix. Exercise the other native slice
+    # on a standard GitHub-hosted Intel runner, not through Rosetta.
+    name: Biber on macOS/Intel (biber 2.21)
+    runs-on: macos-15-intel
+    env:
+      USE_BAZEL_VERSION: "8.0.0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Bazelisk
+        uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-macos-15-intel
+          repository-cache: true
+
+      - name: Verify native startup without Xcode
+        run: |
+          test "$(uname -m)" = x86_64
+          bazel test //tests/biber:biber_test --config=ci --lockfile_mode=error
+
+      - name: Install poppler
+        run: brew install poppler
+
+      - name: Build and check a cited PDF
+        working-directory: examples
+        run: |
+          bazel build //paper:paper --config=ci
+          pdftotext bazel-bin/paper/paper.pdf - | grep -q "Morgenthaler"
+
   lint:
     name: buildifier
     runs-on: ubuntu-22.04

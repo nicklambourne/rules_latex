@@ -666,6 +666,25 @@ flag overlaid CTAN biblatex 3.21 + biber 2.21 via `-Z search-path`.
 The rebuilt bundle ships 3.21 natively, so that opt-in, the 2.17 pin,
 and the overlay machinery were all retired — see §4.10.)
 
+#### macOS archive preparation
+
+The macOS pins select separate ARM64 and Intel archives, extracted with
+`lipo -thin` from the original pinned Biber 2.21 universal binary. Its PAR
+launcher otherwise calls `/usr/bin/lipo -extract_family` at startup, which
+Xcode 27 no longer accepts. Selecting the architecture before publication
+avoids that host-tool dependency without changing Biber, biblatex, or the
+build rules. Each slice retains its upstream Developer ID signature and
+notarization; we neither re-sign it nor disable macOS security checks.
+
+`tools/prepare_biber_macos.py` checks the source digest and signing identity,
+verifies notarization, and writes deterministic archives and provenance.
+The new assets are additive to the existing mirror release; the universal
+asset remains available to older rules_latex pins. See
+[the mirror publication procedure](docs/biber-macos-mirror.md). Regression
+tests check the native Mach-O header and concurrent cold startup with an
+invalid Xcode developer directory. CI builds a cited PDF on both macOS
+architectures, with a dedicated Intel job alongside the ARM64 matrix.
+
 #### Activation modes
 
 `latex_document(biber = ...)` and `latex_cache_snapshot(biber = ...)`

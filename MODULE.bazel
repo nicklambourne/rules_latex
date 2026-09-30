@@ -33,6 +33,9 @@ tectonic.toolchain()
 use_repo(
     tectonic,
     "rules_latex_tectonic_toolchains",
+    # Direct access for macOS binary regression tests.
+    "rules_latex_biber_macos_aarch64",
+    "rules_latex_biber_macos_x86_64",
     # Per-platform repos that hold the downloaded tectonic binaries.
     "rules_latex_tectonic_linux_aarch64",
     "rules_latex_tectonic_linux_x86_64",
