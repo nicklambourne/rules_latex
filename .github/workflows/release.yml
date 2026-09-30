@@ -44,7 +44,7 @@ jobs:
       # directly after it; without the line continuation those flags
       # get parsed as a separate shell command and fail with
       # `--disk_cache=...: command not found` (exit 127). See
-      # https://github.com/bazel-contrib/.github/blob/v7.5.0/.github/workflows/release_ruleset.yaml
+      # https://github.com/bazel-contrib/.github/blob/v7.7.0/.github/workflows/release_ruleset.yaml
       bazel_test_command: |
         set -e
         python3 -m http.server 8765 --directory tests/ctan/fixtures \
