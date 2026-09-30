@@ -27,7 +27,7 @@ jobs:
     #
     # See https://github.com/bazel-contrib/bazel-central-registry/discussions/2721
     # for the BCR provenance design these attestations implement.
-    uses: bazel-contrib/.github/.github/workflows/release_ruleset.yaml@7e9a9d6849976a5b143c8bf10b37e419eeadf6c8 # v7.5.0
+    uses: bazel-contrib/.github/.github/workflows/release_ruleset.yaml@1d798ff015ed0696433e01e2c3ccbb2abefadad7 # v7.7.0
     with:
       # //tests/ctan:* needs the CTAN fixture mirror running before
       # bazel test, the same way the main CI workflow sets it up.
