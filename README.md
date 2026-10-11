@@ -7,6 +7,7 @@
 [![CI](https://github.com/nicklambourne/rules_latex/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/nicklambourne/rules_latex/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/badge/Docs-8A2BE2.svg)](https://nicklambourne.github.io/rules_latex/)
 [![Latest release](https://img.shields.io/github/v/release/nicklambourne/rules_latex?label=release&sort=semver&filter=v*)](https://github.com/nicklambourne/rules_latex/releases)
+[![BCR](https://img.shields.io/badge/BCR-43A047.svg)](https://registry.bazel.build/modules/rules_latex/)
 [![License](https://img.shields.io/github/license/nicklambourne/rules_latex)](./LICENSE)
 [![Bazel 8–9](https://img.shields.io/badge/bazel-8.0%20%E2%80%93%209.1-43A047)](./.bazelversion)
 
