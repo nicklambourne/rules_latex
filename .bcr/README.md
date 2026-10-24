@@ -62,7 +62,7 @@ workflow with `workflow_dispatch`; no replacement release is needed.
 ## Signing-workflow version tags
 
 The two reusable signing workflows must use full version tags (`vX.Y.Z`),
-currently `release_ruleset.yaml@v7.7.0` and `publish.yaml@v1.2.0`.
+currently `release_ruleset.yaml@v7.7.0` and `publish.yaml@v1.5.0`.
 These are deliberate exceptions to commit-SHA pinning: BCR's `slsa-verifier`
 rejects SHA references in signing certificates even when signatures and artifact
 hashes are valid. Keep other action pins unchanged. See
@@ -72,7 +72,7 @@ Version tags can move. Before releasing, check that these tags still resolve to
 reviewed commits; investigate unexpected movement rather than publishing:
 
 - `bazel-contrib/.github@v7.7.0`: `1d798ff015ed0696433e01e2c3ccbb2abefadad7`
-- `bazel-contrib/publish-to-bcr@v1.2.0`: `0a23c53c2baffdaf2ce8dd23c2c0e45eb3b79093`
+- `bazel-contrib/publish-to-bcr@v1.5.0`: `ca23149e55cd4db07a6bcce69c02dea314c5a357`
 
 Update these reviewed identities when intentionally upgrading a workflow.
 
@@ -90,7 +90,7 @@ slsa-verifier verify-github-attestation \
 
 Repeat for the docs archive. After publication creates the BCR PR, verify its
 exact `MODULE.bazel` and `source.json` files against their uploaded bundles,
-using `https://github.com/bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@v1.2.0`
+using `https://github.com/bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@v1.5.0`
 as the builder ID. Require the BCR checks to pass before considering registry
 publication complete. `gh attestation verify` is useful additional verification,
 but does not enforce the same builder-reference policy and is not a substitute.
